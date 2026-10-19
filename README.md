@@ -167,3 +167,7 @@ Observability, evaluation and documentation:
 - [Model Context Protocol](https://modelcontextprotocol.io/) and its [Python SDK](https://github.com/modelcontextprotocol/python-sdk)
 - [Ollama](https://github.com/ollama/ollama) and its [model library](https://ollama.com/library)
 - [Open Knowledge Format specification](https://github.com/GoogleCloudPlatform/knowledge-catalog/blob/main/okf/SPEC.md)
+
+## License
+
+[MIT](LICENSE).

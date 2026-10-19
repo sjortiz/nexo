@@ -3,6 +3,8 @@ name = "nexo"
 version = "0.1.0"
 description = "Graph RAG investigation stack: LangGraph orchestration, Strands micro-agent, vLLM, Neo4j"
 requires-python = ">=3.11"
+license = "MIT"
+license-files = ["LICENSE"]
 dependencies = [
     "langgraph>=1.2,<2",
     "langgraph-checkpoint-sqlite>=3.1,<4",
