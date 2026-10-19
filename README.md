@@ -15,6 +15,30 @@ ingest: document ─► heading-aware chunks ─► embeddings ─► chunk stor
                                             ─► Neo4j: Document/Chunk lexical graph + entities (chunk_id on every node/edge)
 ```
 
+The LangGraph workflow, generated from the compiled graph (`nexo graph`):
+
+```mermaid
+---
+config:
+  flowchart:
+    curve: linear
+---
+graph TD;
+	__start__([<p>__start__</p>]):::first
+	router(router)
+	investigator(investigator)
+	compliance(compliance)
+	__end__([<p>__end__</p>]):::last
+	__start__ --> router;
+	investigator --> compliance;
+	router -. &nbsp;rejected&nbsp; .-> __end__;
+	router -.-> investigator;
+	compliance --> __end__;
+	classDef default fill:#f2f0ff,line-height:1.2
+	classDef first fill-opacity:0
+	classDef last fill:#bfb6fc
+```
+
 | Module | Code |
 | --- | --- |
 | A. Storage | `storage/` — `ingest.py`, `chunking.py`, `schemas.py`, `ontology.py`, `resolution.py`, `graph_store.py`, `vector_store.py`, `sensitive_data.py` |

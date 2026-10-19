@@ -21,13 +21,33 @@ sources:
 
 # Topology
 
-```
-START -> router --(rejected)--> END
-           └--(investigator)--> investigator -> compliance -> END
-                                                 (interrupt: human approval)
+Generated from the compiled graph (`nexo graph`); a test fails if this copy drifts from the code.
+
+```mermaid
+---
+config:
+  flowchart:
+    curve: linear
+---
+graph TD;
+	__start__([<p>__start__</p>]):::first
+	router(router)
+	investigator(investigator)
+	compliance(compliance)
+	__end__([<p>__end__</p>]):::last
+	__start__ --> router;
+	investigator --> compliance;
+	router -. &nbsp;rejected&nbsp; .-> __end__;
+	router -.-> investigator;
+	compliance --> __end__;
+	classDef default fill:#f2f0ff,line-height:1.2
+	classDef first fill-opacity:0
+	classDef last fill:#bfb6fc
 ```
 
-The edges are fixed; only the router's conditional edge branches. State keys are listed in
+The edges are fixed; only the router's conditional edge (dotted) branches: `rejected` ends the run,
+anything else goes to the investigator. The compliance node pauses with `interrupt()` for human
+approval. State keys are listed in
 [Request lifecycle](../architecture/request-lifecycle.md#state).[^state]
 
 # Nodes

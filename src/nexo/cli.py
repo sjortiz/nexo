@@ -145,6 +145,19 @@ def _eval_extraction(args: argparse.Namespace) -> int:
     return 0
 
 
+def _graph(args: argparse.Namespace) -> int:
+    """Mermaid diagram of the LangGraph workflow, generated from the compiled graph."""
+    from nexo.orchestration.graph import workflow_mermaid
+
+    diagram = workflow_mermaid()
+    if args.output:
+        Path(args.output).write_text(diagram + "\n", encoding="utf-8")
+        log.info("wrote workflow diagram to %s", args.output)
+    else:
+        log.info("workflow diagram", extra={"result": {"mermaid": diagram}})
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="nexo")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -186,6 +199,10 @@ def main(argv: list[str] | None = None) -> int:
     evaluate_extraction = sub.add_parser("eval-extraction", help="score triple extraction against gold triples")
     evaluate_extraction.add_argument("dataset")
     evaluate_extraction.set_defaults(handler=_eval_extraction)
+
+    graph = sub.add_parser("graph", help="Mermaid diagram of the LangGraph workflow")
+    graph.add_argument("--output", help="write the diagram to this file (e.g. workflow.mmd)")
+    graph.set_defaults(handler=_graph)
 
     args = parser.parse_args(argv)
     configure_logging(get_settings())

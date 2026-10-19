@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 
 import httpx
 import openai
@@ -180,6 +181,30 @@ def test_trace_follows_genai_conventions_across_the_handoff(settings, spans):
         "approval_status", "investigation_scope", "request_id", "routing_reason", "routing_target")
     assert nodes["compliance"].attributes.get("langgraph.interrupted") is True
     assert any(e.name == "graph.interrupt" for e in workflow.events)
+
+
+@pytest.mark.parametrize("doc", ["README.md", "docs/components/orchestration-graph.md"])
+def test_published_workflow_diagram_matches_the_compiled_graph(doc):
+    from pathlib import Path
+
+    from nexo.orchestration.graph import workflow_mermaid
+
+    text = (Path(__file__).resolve().parent.parent / doc).read_text()
+    blocks = re.findall(r"```mermaid\n(.*?)\n```", text, re.DOTALL)
+    assert blocks == [workflow_mermaid()], f"{doc}: regenerate with `nexo graph`"
+
+
+def test_workflow_diagram_shows_every_node_and_the_rejection_branch(tmp_path):
+    from nexo.cli import main
+    from nexo.orchestration.graph import workflow_mermaid
+
+    diagram = workflow_mermaid()
+    for line in ("__start__ --> router;", "router -. &nbsp;rejected&nbsp; .-> __end__;", "router -.-> investigator;",
+                 "investigator --> compliance;", "compliance --> __end__;"):
+        assert line in diagram
+    out = tmp_path / "workflow.mmd"
+    assert main(["graph", "--output", str(out)]) == 0
+    assert out.read_text().strip() == diagram
 
 
 def test_openai_instrumentation_emits_one_chat_span_per_vllm_call(settings, spans):

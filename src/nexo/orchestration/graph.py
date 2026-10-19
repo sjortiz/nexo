@@ -35,7 +35,7 @@ from nexo.llm import invoke_structured
 from nexo.orchestration.compliance import run_compliance_checks
 from nexo.orchestration.state import GraphState, ReviewDecision, RouteDecision
 from nexo.storage.schemas import Sensitivity
-from nexo.storage.sensitive_data import SensitiveDataDetector
+from nexo.storage.sensitive_data import NoopDetector, SensitiveDataDetector
 from nexo.storage.vector_store import ChunkFilter
 from nexo.telemetry import traced_span
 
@@ -221,3 +221,16 @@ def build_graph(deps: GraphDependencies, checkpointer: BaseCheckpointSaver) -> C
     builder.add_edge("investigator", "compliance")
     builder.add_edge("compliance", END)
     return builder.compile(checkpointer=checkpointer, name="nexo-investigation")
+
+
+class _DiagramOnly:
+    def investigate(self, *args: Any, **kwargs: Any) -> AgentOutput:
+        raise RuntimeError("diagram-only graph: not runnable")
+
+
+def workflow_mermaid() -> str:
+    """Mermaid diagram of the compiled workflow; needs no models or databases."""
+    from langgraph.checkpoint.memory import InMemorySaver
+
+    deps = GraphDependencies(settings=Settings(_env_file=None), investigator=_DiagramOnly(), detector=NoopDetector())
+    return build_graph(deps, InMemorySaver()).get_graph().draw_mermaid().strip()
