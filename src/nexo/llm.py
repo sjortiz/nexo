@@ -42,8 +42,8 @@ def build_chat_model(settings: Settings, *, role: ModelRole, temperature: float 
     """LangChain client for a JSON-producing role (router, extraction, judge)."""
     endpoint = settings.endpoint(role)
     extra: dict[str, str] = {}
-    if settings.structured_reasoning_effort and role != "agent":
-        extra["reasoning_effort"] = settings.structured_reasoning_effort
+    if endpoint.reasoning_effort:
+        extra["reasoning_effort"] = endpoint.reasoning_effort
     return ChatOpenAI(
         **extra,
         base_url=endpoint.base_url,

@@ -1,0 +1,171 @@
+"""Hardware profiles for running Nexo's models locally with Ollama.
+
+A profile names a Mac by chip and unified memory, e.g. `m1-max-64`, `m5-pro-24`
+or `m1-pro-16`. Memory picks the model tier (the largest tier that fits); the
+chip is informational. One catalog serves both Nexo (settings) and
+`deploy/local/ollama-setup.sh`, so the models Nexo asks for are the models the
+script pulls.
+
+Role sets:
+  single - one Mac runs every role
+  heavy  - the agent and extraction/resolution models (the large Mac)
+  light  - router, judge and embeddings (the Mac that also runs Neo4j and Nexo)
+
+Standard library only: the setup script runs this file directly with python3.
+
+    python3 src/nexo/local_profiles.py plan m1-max-64 heavy
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import re
+import sys
+from dataclasses import asdict, dataclass
+
+PROFILE_RE = re.compile(r"^m(?P<generation>[1-9])(?:-(?P<variant>pro|max|ultra))?-(?P<memory>\d{1,3})$")
+
+AGENT_ROLES = ("agent", "extraction")
+LIGHT_ROLES = ("router", "judge", "embedding")
+ROLE_SETS = {"single": AGENT_ROLES + LIGHT_ROLES, "heavy": AGENT_ROLES, "light": LIGHT_ROLES}
+
+# Models that reason before answering; their JSON roles get reasoning_effort=none
+# because the schema is only enforced after the reasoning section.
+THINKING_MODELS = frozenset({"qwen3.5:9b", "qwen3.6:35b-a3b-q4_K_M"})
+
+# Approximate download sizes (GB) from the Ollama library, for memory planning.
+MODEL_SIZES_GB = {
+    "qwen3.5:9b": 6.6,
+    "qwen3:4b-instruct-2507": 2.5,
+    "qwen3:30b-a3b-instruct-2507-q4_K_M": 19.0,
+    "qwen3.6:35b-a3b-q4_K_M": 24.0,
+    "llama3.1:8b": 4.9,
+    "bge-m3": 1.2,
+}
+
+SMALL, MID, LARGE, ROUTER, JUDGE, EMBED = (
+    "qwen3.5:9b",
+    "qwen3:30b-a3b-instruct-2507-q4_K_M",
+    "qwen3.6:35b-a3b-q4_K_M",
+    "qwen3:4b-instruct-2507",
+    "llama3.1:8b",
+    "bge-m3",
+)
+
+# Per tier: models for each role set (None = role disabled), Ollama context length
+# and parallel requests. A single Mac reuses its chat model for routing and skips
+# the judge where memory is tight; enable one explicitly with JUDGE_MODEL.
+TIERS: dict[int, dict] = {
+    16: {"context_length": 8192, "num_parallel": 1,
+         "single": {"agent": SMALL, "extraction": SMALL, "router": SMALL, "judge": None, "embedding": EMBED},
+         "heavy": {"agent": SMALL, "extraction": SMALL},
+         "light": {"router": ROUTER, "judge": None, "embedding": EMBED}},
+    24: {"context_length": 16384, "num_parallel": 1,
+         "single": {"agent": SMALL, "extraction": SMALL, "router": SMALL, "judge": None, "embedding": EMBED},
+         "heavy": {"agent": SMALL, "extraction": SMALL},
+         "light": {"router": ROUTER, "judge": JUDGE, "embedding": EMBED}},
+    32: {"context_length": 16384, "num_parallel": 1,
+         "single": {"agent": MID, "extraction": MID, "router": MID, "judge": None, "embedding": EMBED},
+         "heavy": {"agent": MID, "extraction": MID},
+         "light": {"router": ROUTER, "judge": JUDGE, "embedding": EMBED}},
+    48: {"context_length": 32768, "num_parallel": 1,
+         "single": {"agent": MID, "extraction": MID, "router": ROUTER, "judge": JUDGE, "embedding": EMBED},
+         "heavy": {"agent": MID, "extraction": MID},
+         "light": {"router": ROUTER, "judge": JUDGE, "embedding": EMBED}},
+    64: {"context_length": 32768, "num_parallel": 2,
+         "single": {"agent": LARGE, "extraction": LARGE, "router": ROUTER, "judge": JUDGE, "embedding": EMBED},
+         "heavy": {"agent": LARGE, "extraction": LARGE},
+         "light": {"router": ROUTER, "judge": JUDGE, "embedding": EMBED}},
+}
+
+
+class ProfileError(ValueError):
+    pass
+
+
+@dataclass(frozen=True)
+class HostProfile:
+    name: str
+    chip: str
+    memory_gb: int
+    tier_gb: int
+
+
+@dataclass(frozen=True)
+class Plan:
+    """What one Mac serves: role -> model, plus Ollama server settings."""
+
+    profile: HostProfile
+    role_set: str
+    roles: dict[str, str | None]
+    context_length: int
+    num_parallel: int
+
+    @property
+    def models(self) -> list[str]:
+        return sorted({m for m in self.roles.values() if m})
+
+    @property
+    def weights_gb(self) -> float:
+        return round(sum(MODEL_SIZES_GB[m] for m in self.models), 1)
+
+
+def parse_profile(name: str) -> HostProfile:
+    match = PROFILE_RE.fullmatch(name.strip().lower())
+    if not match:
+        raise ProfileError(f"invalid profile {name!r}: expected e.g. m1-max-64, m5-pro-24, m2-16")
+    memory = int(match["memory"])
+    eligible = [tier for tier in TIERS if tier <= memory]
+    if not eligible:
+        raise ProfileError(f"{name}: at least {min(TIERS)} GB of unified memory is required")
+    chip = f"M{match['generation']}" + (f" {match['variant'].capitalize()}" if match["variant"] else "")
+    return HostProfile(name=name.strip().lower(), chip=chip, memory_gb=memory, tier_gb=max(eligible))
+
+
+def plan(profile: str, role_set: str = "single") -> Plan:
+    if role_set not in ROLE_SETS:
+        raise ProfileError(f"role set must be one of {sorted(ROLE_SETS)}")
+    host = parse_profile(profile)
+    tier = TIERS[host.tier_gb]
+    return Plan(profile=host, role_set=role_set, roles=dict(tier[role_set]),
+                context_length=tier["context_length"], num_parallel=tier["num_parallel"])
+
+
+def needs_reasoning_off(model: str | None) -> bool:
+    return model in THINKING_MODELS
+
+
+def _main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description="Nexo local model profiles")
+    sub = parser.add_subparsers(dest="command", required=True)
+    show = sub.add_parser("plan", help="models and Ollama settings for one Mac")
+    show.add_argument("profile")
+    show.add_argument("role_set", nargs="?", default="single", choices=sorted(ROLE_SETS))
+    show.add_argument("--format", choices=["json", "shell"], default="json")
+    sub.add_parser("tiers", help="the whole catalog as JSON")
+    args = parser.parse_args(argv)
+
+    if args.command == "tiers":
+        sys.stdout.write(json.dumps(TIERS, indent=2) + "\n")
+        return 0
+    try:
+        result = plan(args.profile, args.role_set)
+    except ProfileError as exc:
+        sys.stderr.write(f"{exc}\n")
+        return 2
+    if args.format == "shell":  # consumed by deploy/local/ollama-setup.sh
+        sys.stdout.write(f"MODELS='{' '.join(result.models)}'\n"
+                         f"EMBEDDING_MODELS='{result.roles.get('embedding') or ''}'\n"
+                         f"CONTEXT_LENGTH={result.context_length}\n"
+                         f"NUM_PARALLEL={result.num_parallel}\n"
+                         f"MAX_LOADED_MODELS={max(1, len(result.models))}\n"
+                         f"WEIGHTS_GB={result.weights_gb}\n")
+    else:
+        sys.stdout.write(json.dumps({**asdict(result), "models": result.models,
+                                     "weights_gb": result.weights_gb}, indent=2) + "\n")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(_main())

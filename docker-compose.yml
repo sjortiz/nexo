@@ -2,7 +2,11 @@
 # config.py, so the same .env works here and in Kubernetes.
 #   docker compose up -d neo4j otel-collector jaeger         # CPU-only pieces
 #   docker compose --profile gpu up -d                        # + vLLM (4x80GB GPUs for 70B)
-#   docker compose run --rm nexo ingest /docs/memo.md --doc-type memo
+#   docker compose --profile app run --rm nexo ingest /corpus/memo.md --doc-type memo
+#
+# On a Mac the models run natively (Ollama, Metal GPU); set LOCAL_PROFILE (and
+# REMOTE_PROFILE for two Macs) in .env and the nexo container reaches them on
+# the host through host.containers.internal. See docs/operations/local-apple-silicon.md.
 
 services:
   vllm-inference-service:
@@ -73,7 +77,10 @@ services:
     environment:
       OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4318
       NEO4J_URI: neo4j://neo4j:7687
-    volumes: ["nexo-data:/app/.data", "./docs:/docs:ro"]
+      # Host services from inside the container: Ollama and the SSH tunnel to a second Mac.
+      LOCAL_BASE_URL: http://host.containers.internal:11434/v1
+      REMOTE_BASE_URL: http://host.containers.internal:11435/v1
+    volumes: ["nexo-data:/app/.data", "./corpus:/corpus:ro"]  # documents to ingest
     depends_on:
       neo4j: { condition: service_healthy }
 

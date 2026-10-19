@@ -40,7 +40,17 @@ hosts ([Local on Apple Silicon](local-apple-silicon.md)).
 | `AGENT_BASE_URL` / `AGENT_API_KEY` / `AGENT_MODEL` | unset | Strands investigator (multi-turn tool calls). |
 | `EXTRACTION_BASE_URL` / `EXTRACTION_API_KEY` / `EXTRACTION_MODEL` | unset | Triple extraction and entity resolution. |
 | `ROUTER_BASE_URL` / `ROUTER_API_KEY` / `ROUTER_MODEL` | unset | Intake validation. |
-| `STRUCTURED_REASONING_EFFORT` | unset | Sent as `reasoning_effort` to router, extraction and judge (not the agent); `none` for thinking models. |
+| `EXTRACTION_REASONING_EFFORT` / `ROUTER_REASONING_EFFORT` / `JUDGE_REASONING_EFFORT` | unset | Sent as `reasoning_effort` to that JSON role only; `none` for thinking models. Unset = not sent. The agent has no such setting. |
+
+**Local hardware profiles** — pick models by Mac instead of setting them one by one
+([Local on Apple Silicon](local-apple-silicon.md)). Explicit role settings above win.
+
+| Variable | Default | Effect |
+|---|---|---|
+| `LOCAL_PROFILE` | unset | `<chip>-<memory GB>` of the Mac running Nexo, e.g. `m1-max-64`, `m5-pro-24`. Alone: this Mac serves every role. |
+| `LOCAL_BASE_URL` | `http://localhost:11434/v1` | This Mac's Ollama (`host.containers.internal` from a container). |
+| `REMOTE_PROFILE` | unset | Profile of a second Mac that serves the agent and extraction models. Requires `LOCAL_PROFILE`. |
+| `REMOTE_BASE_URL` | `http://localhost:11435/v1` | The second Mac's Ollama, usually through an SSH tunnel. |
 
 **Embeddings**
 

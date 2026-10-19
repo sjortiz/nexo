@@ -22,6 +22,7 @@ sources:
 | `tests/test_logging.py` | nothing | Trace-correlated log records, JSON and text formats, handler setup. |
 | `tests/test_agent.py` | nothing | Both tools, the real Strands event loop against a scripted OpenAI-compatible client, Strands span attributes, and that message content reaches traces only when capture is on. |
 | `tests/test_graph.py` | nothing | Routing, interrupt/resume, review validation, blocking findings, failures, retries, clearance, SQLite durability, GenAI span shape, and the official instrumentation's single `chat {model}` span per vLLM call. |
+| `tests/test_local_profiles.py` | nothing | Profile parsing and tiers (each fits its memory), settings resolution and precedence, the setup script resolving the same models, the playbook listing every model. |
 | `tests/test_model_roles.py` | nothing | Per-role endpoints and fallbacks, reasoning effort only for JSON roles, env templates use only real settings. |
 | `tests/test_live_models.py` | model servers, `NEXO_LIVE=1` | Real models: schema-valid extraction and routing, embeddings ranking (English and Spanish), agent tool calls, GenAI spans. |
 | `tests/test_docs_okf.py` | nothing | This bundle conforms to OKF v0.2; links, sources and footnotes resolve; every setting is documented. |

@@ -32,7 +32,7 @@ cp .env.example .env                                   # fill in secrets
 docker compose up -d neo4j otel-collector jaeger
 docker compose --profile gpu up -d                     # vLLM: needs 4x80GB GPUs
 pip install -e ".[dev]"
-nexo ingest docs/memo.md --doc-type memo --effective-date 2025-06-30
+nexo ingest corpus/memo.md --doc-type memo --effective-date 2025-06-30
 nexo ask "How is Acme Holdings connected to Gamma Clinics?"   # prints thread_id + review packet
 nexo review <thread_id> --approve --reviewer you@corp
 ```
@@ -45,19 +45,25 @@ pipelines). Relation ontology example: `deploy/ontology.example.json`. Neo4j Ent
 
 ## Run locally on Apple Silicon
 
-Every model runs natively through Ollama; each role (agent, extraction, router, judge, embeddings) can
-point at its own Mac. With two Macs, the large agent/extraction model goes on the M1 Max and the router,
-embeddings, judge, Neo4j and Nexo on the M5 Pro, joined by an SSH tunnel:
+Models run natively through Ollama, chosen by a hardware profile `<chip>-<memory GB>`. Services run in
+Podman or natively (Homebrew Neo4j); either way on one Mac or two:
 
 ```bash
-deploy/local/ollama-setup.sh m1-max-32        # on the M1 Max (m1-max-64 for 64 GB)
-deploy/local/ollama-setup.sh m5-pro-24        # on the M5 Pro
+cp deploy/local/local.env.example .env       # set LOCAL_PROFILE (and REMOTE_PROFILE for two Macs)
+
+# One Mac
+deploy/local/ollama-setup.sh m1-max-64       # pulls and preloads that profile's models
+
+# Two Macs: the remote Mac serves agent + extraction, this one router/embeddings/judge + Nexo
+deploy/local/ollama-setup.sh m1-max-64 heavy  # on the M1 Max
+deploy/local/ollama-setup.sh                  # on the M5 Pro (reads LOCAL_PROFILE/REMOTE_PROFILE)
 ssh -N -L 11435:127.0.0.1:11434 you@m1-max.local
-cp deploy/local/nexo-two-macs.env.example .env
-NEXO_LIVE=1 pytest -m live -v                 # verify the models before use
+
+podman compose up -d neo4j otel-collector jaeger   # Podman path (or: brew install neo4j)
+NEXO_LIVE=1 pytest -m live -v                      # verify the models before use
 ```
 
-Details: [Local on Apple Silicon](docs/operations/local-apple-silicon.md).
+Details, profile tiers and the native path: [Local on Apple Silicon](docs/operations/local-apple-silicon.md).
 
 ## Test
 

@@ -37,12 +37,13 @@ Compose refuses to start without `VLLM_IMAGE_TAG`, `VLLM_API_KEY`, `HF_TOKEN`, `
 3. `docker compose --profile gpu up -d` (first start downloads ~140 GB of weights; the health check
    allows 15 minutes).
 4. `pip install -e ".[dev]"` and run the CLI locally, or use the container:
-   `docker compose --profile app run --rm nexo ingest /docs/memo.md --doc-type memo`
-   (`./docs` is mounted read-only at `/docs`).
+   `docker compose --profile app run --rm nexo ingest /corpus/memo.md --doc-type memo`
+   (`./corpus` is mounted read-only at `/corpus`).
 5. `nexo ask "..."`, then `nexo review <thread_id> --approve --reviewer <you>`.
 
 Without GPUs, point `VLLM_BASE_URL` at any OpenAI-compatible server with tool calling, and set
-`EMBEDDING_PROVIDER=fake` for a dry run.
+`EMBEDDING_PROVIDER=fake` for a dry run. On a Mac, use a hardware profile with Ollama instead:
+[Local on Apple Silicon](local-apple-silicon.md).
 
 # Tracing
 

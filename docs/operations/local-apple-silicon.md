@@ -1,19 +1,25 @@
 ---
 type: Playbook
 title: Local on Apple Silicon
-description: Run Nexo fully locally on one or two Apple Silicon Macs with Ollama, sharing unified memory and splitting model roles across machines.
-resource: ../../deploy/local/ollama-setup.sh
-tags: [operations, local, apple-silicon, ollama]
+description: Run Nexo on one or two Apple Silicon Macs, with services in Podman or fully native, choosing models with a hardware profile such as m1-max-64.
+resource: ../../src/nexo/local_profiles.py
+tags: [operations, local, apple-silicon, ollama, podman]
 status: draft
 generated: { by: claude-code/claude-opus-5-5, at: 2026-10-19T20:14:37Z }
 stale_after: 2027-01-19T00:00:00Z
 sources:
+  - id: profiles
+    resource: ../../src/nexo/local_profiles.py
+    title: Hardware profile catalog
   - id: setup
     resource: ../../deploy/local/ollama-setup.sh
     title: Ollama setup script
   - id: env
-    resource: ../../deploy/local/nexo-two-macs.env.example
-    title: Two-Mac Nexo environment
+    resource: ../../deploy/local/local.env.example
+    title: Local Nexo environment
+  - id: compose
+    resource: ../../docker-compose.yml
+    title: Docker Compose stack
   - id: ollama
     resource: ../references/ollama.md
     title: Ollama
@@ -22,74 +28,117 @@ sources:
     title: Live model checks
 ---
 
-# Topology
+# Choose
 
-Models run natively on each Mac's GPU (Metal) through Ollama; containers on macOS cannot use the GPU, so
-only Neo4j, the collector and Jaeger run in Podman. Each Nexo role points at its own endpoint
-(see [configuration](configuration.md): `AGENT_*`, `EXTRACTION_*`, `ROUTER_*`, `JUDGE_*`,
-`EMBEDDING_*`).[^env]
+Two independent choices:
+
+| | **Podman path** | **Native path** |
+|---|---|---|
+| Models | Ollama, native (Metal GPU) | Ollama, native (Metal GPU) |
+| Neo4j | container (`neo4j:5.26-community`) | Homebrew (`neo4j` 2026.09) |
+| Telemetry | collector (strips content) + Jaeger containers | optional Jaeger binary, or none |
+| Nexo | container (`--profile app`) or `pip install` | `pip install` |
+| Good for | matching the server setup; clean teardown | fewest moving parts; no VM |
+
+| | **One Mac** | **Two Macs** |
+|---|---|---|
+| `.env` | `LOCAL_PROFILE=m1-max-64` | `LOCAL_PROFILE=m5-pro-24` + `REMOTE_PROFILE=m1-max-64` |
+| Serves | every role on this Mac | remote Mac: agent + extraction; this Mac: router, embeddings, judge, Nexo |
+
+Containers on macOS cannot use the GPU, so the models are native in both paths; containers reach the
+host's Ollama and SSH tunnel through `host.containers.internal`, which reaches services bound to the
+host's `127.0.0.1` (verified with Podman 6.1 on macOS).[^compose]
+
+# Hardware profiles
+
+A profile is `<chip>-<memory GB>`: `m1-pro-16`, `m5-pro-24`, `m1-max-32`, `m1-max-64`, `m2-ultra-192`.
+Memory picks the largest tier that fits; the chip is informational. Nexo (settings) and the setup
+script read the same catalog, so the models pulled are the models Nexo asks for. Any role setting set
+explicitly (`AGENT_MODEL`, `EMBEDDING_MODEL`, ...) wins over the profile.[^profiles]
+
+| Tier | One Mac (`single`) | Agent Mac (`heavy`) | Nexo Mac (`light`) | Context |
+|---|---|---|---|---|
+| 16 GB | `qwen3.5:9b` for all chat roles, `bge-m3`, no judge (≈7.8 GB) | `qwen3.5:9b` | `qwen3:4b-instruct-2507`, `bge-m3`, no judge | 8K |
+| 24 GB | `qwen3.5:9b` for all chat roles, `bge-m3`, no judge (≈7.8 GB) | `qwen3.5:9b` | `qwen3:4b-instruct-2507`, `bge-m3`, `llama3.1:8b` judge (≈8.6 GB) | 16K |
+| 32 GB | `qwen3:30b-a3b-instruct-2507-q4_K_M` for all chat roles, `bge-m3`, no judge (≈20 GB) | `qwen3:30b-a3b-instruct-2507-q4_K_M` | as 24 GB | 16K |
+| 48 GB | `qwen3:30b-a3b-instruct-2507-q4_K_M`, router `qwen3:4b-instruct-2507`, `llama3.1:8b`, `bge-m3` (≈28 GB) | `qwen3:30b-a3b-instruct-2507-q4_K_M` | as 24 GB | 32K |
+| 64 GB | `qwen3.6:35b-a3b-q4_K_M`, router `qwen3:4b-instruct-2507`, `llama3.1:8b`, `bge-m3` (≈33 GB) | `qwen3.6:35b-a3b-q4_K_M` | as 24 GB | 32K |
+
+Sizes are Ollama library download sizes; KV cache and the OS need the rest. `qwen3.5:9b` and
+`qwen3.6:35b-a3b-q4_K_M` are thinking models: the profile sets reasoning off for their JSON roles
+(`EXTRACTION_REASONING_EFFORT=none`, ...) and leaves the agent's reasoning on. Inspect any profile with
+`python3 src/nexo/local_profiles.py plan m1-max-64 heavy`.
+
+# Podman path
+
+1. `brew install ollama podman` and `podman machine init` (first time only), `podman machine start`.
+2. Models, per Mac (see "Two Macs" below for the second Mac):
+   `deploy/local/ollama-setup.sh m1-max-64` - pulls and preloads the profile's models and starts
+   Ollama with the right context length, keep-alive and KV-cache settings, bound to `127.0.0.1`.[^setup]
+3. `cp deploy/local/local.env.example .env`, set the profile(s) and `NEO4J_PASSWORD`.[^env]
+4. `podman compose up -d neo4j otel-collector jaeger` - Neo4j on `127.0.0.1:7687`, traces at
+   http://localhost:16686, metrics at http://localhost:8889/metrics.
+5. Run Nexo either natively (`pip install -e .`, then `nexo ...`) or in a container:
+   `podman compose --profile app run --rm nexo ingest /corpus/memo.md` with documents in `./corpus`.
+   The container's `LOCAL_BASE_URL`/`REMOTE_BASE_URL` already point at `host.containers.internal`.
+
+# Native path
+
+1. `brew install ollama neo4j` (Neo4j 2026.09 Community, Java 21; Nexo's Neo4j tests pass on it).
+2. `neo4j-admin dbms set-initial-password <password>` then `brew services start neo4j`.
+3. Models: `deploy/local/ollama-setup.sh m1-max-64`.
+4. `cp deploy/local/local.env.example .env`, set the profile(s) and `NEO4J_PASSWORD`.
+5. Telemetry (optional): download the Jaeger v2 `darwin-arm64` release binary and run `./jaeger`; it
+   accepts OTLP on `localhost:4318` and serves the UI on http://localhost:16686. Without the collector
+   there is no second content filter, so keep
+   `OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT=no_content`. Or unset
+   `OTEL_EXPORTER_OTLP_ENDPOINT` to rely on logs only.
+6. `python3 -m venv .venv && .venv/bin/pip install -e ".[dev]"`, then `nexo ...`.
+
+# Two Macs
+
+Applies to either path. Example: M1 Max 64 GB as the agent Mac, M5 Pro 24 GB running Nexo.
 
 ```
- M1 Max (32/64 GB)                         M5 Pro (24 GB)
+ M1 Max (REMOTE_PROFILE=m1-max-64)         M5 Pro (LOCAL_PROFILE=m5-pro-24)
  ┌───────────────────────────┐   SSH       ┌──────────────────────────────────────────┐
  │ Ollama 127.0.0.1:11434    │◄─tunnel─────┤ localhost:11435 ─► agent, extraction    │
  │  agent + extraction model │             │ Ollama 127.0.0.1:11434                   │
- └───────────────────────────┘             │  router, embeddings (bge-m3), judge      │
-                                           │ Podman: Neo4j, OTEL collector, Jaeger    │
-                                           │ Nexo (pip install, runs natively)        │
+ └───────────────────────────┘             │  router, embeddings, judge               │
+                                           │ Neo4j, telemetry, Nexo (Podman or native)│
                                            └──────────────────────────────────────────┘
 ```
 
-# Model sets
+1. M1 Max: `deploy/local/ollama-setup.sh m1-max-64 heavy`; enable Remote Login.
+2. M5 Pro: `deploy/local/ollama-setup.sh` (reads `LOCAL_PROFILE` and `REMOTE_PROFILE` from `.env` and
+   serves the `light` set).
+3. M5 Pro: `ssh -N -L 11435:127.0.0.1:11434 you@m1-max.local` and keep it running.
 
-| Profile | Mac | Models (Ollama tags) | Approx. weights |
-|---|---|---|---|
-| `m1-max-32` | M1 Max 32 GB | `qwen3:30b-a3b-instruct-2507-q4_K_M` (agent + extraction) | 19 GB |
-| `m1-max-64` | M1 Max 64 GB | `qwen3.6:35b-a3b-q4_K_M` (agent + extraction; set `STRUCTURED_REASONING_EFFORT=none`) | 24 GB |
-| `m5-pro-24` | M5 Pro 24 GB | `qwen3:4b-instruct-2507` (router), `bge-m3` (embeddings), `llama3.1:8b` (judge) | 8.6 GB |
-| `single-64` | one 64 GB Mac | `qwen3:30b-a3b-instruct-2507-q4_K_M`, `bge-m3`, `llama3.1:8b` | 25 GB |
+Never bind Ollama to `0.0.0.0` on a shared network: it has no authentication.
 
-The judge comes from a different model family than the generator to limit self-preference. Sizes are
-download sizes from the Ollama library; the KV cache adds to them.[^ollama]
+# Verify
 
-# Steps
-
-1. **Both Macs:** `brew install ollama`.
-2. **M1 Max:** `deploy/local/ollama-setup.sh m1-max-32` (or `m1-max-64`). It pulls and preloads the
-   model, binds Ollama to `127.0.0.1` and sets context length, keep-alive and KV-cache quantization.[^setup]
-3. **M5 Pro:** `deploy/local/ollama-setup.sh m5-pro-24`.
-4. **M5 Pro, tunnel to the M1 Max:** `ssh -N -L 11435:127.0.0.1:11434 you@m1-max.local` (keep it
-   running; enable Remote Login on the M1 Max).
-5. **M5 Pro:** `cp deploy/local/nexo-two-macs.env.example .env`, set `NEO4J_PASSWORD`, then
-   `podman machine start` and `podman compose up -d neo4j otel-collector jaeger`.
-6. **Verify the models:** `NEXO_LIVE=1 pytest -m live -v`. It checks schema-valid JSON from the
-   extraction and router models, embeddings that rank related text (English and Spanish) above
-   unrelated text, and an agent model that calls its tools over the OpenAI protocol.[^live]
-7. **Use it:** `nexo ingest ...`, `nexo ask ...`, `nexo review ...` as in the
-   [request lifecycle](../architecture/request-lifecycle.md).
-
-On a single Mac, skip the tunnel and point every role at `http://localhost:11434/v1`.
+`NEXO_LIVE=1 pytest -m live -v` checks the real models: schema-valid JSON from the extraction and router
+models, embeddings that rank related text (English and Spanish) above unrelated text, and an agent model
+that calls its tools over the OpenAI protocol.[^live] `ollama ps` on each Mac should list the profile's
+models at 100% GPU.
 
 # Gotchas
 
-- **Context length.** Below about 23 GiB of GPU memory, Ollama defaults to a 4096-token context and
-  truncates longer prompts silently. The setup script sets `OLLAMA_CONTEXT_LENGTH`; the OpenAI API
-  cannot change it per request.
-- **Keep-alive.** The default unloads a model after 5 minutes; the script sets `OLLAMA_KEEP_ALIVE=-1`.
-  `ollama ps` should show every model at 100% GPU.
-- **Thinking models** (Qwen3.5/3.6) enforce the JSON schema only after their reasoning; set
-  `STRUCTURED_REASONING_EFFORT=none` for the JSON roles. The agent keeps its reasoning.
-- **No authentication.** Never bind Ollama to `0.0.0.0` on a shared network; use the SSH tunnel.
-- **GPU memory limit.** If a model does not fit, macOS's GPU wired-memory limit can be raised until
-  reboot with `sudo sysctl iogpu.wired_limit_mb=<MB>`.
-- **Speed.** Expect tens of tokens per second, not a GPU server's hundreds: the env template raises
-  `LLM_TIMEOUT_S` and `AGENT_TIMEOUT_S` and lowers `EXTRACTION_CONCURRENCY`.
-- **Switching embedding models** (e.g. to `qwen3-embedding:0.6b`, also 1024 dimensions) requires
-  re-ingesting everything.
+- **Context length.** Below about 23 GiB of GPU memory Ollama defaults to a 4096-token context and
+  truncates longer prompts silently; the setup script sets `OLLAMA_CONTEXT_LENGTH` from the profile.
+  If Ollama is already running (e.g. the menu-bar app), the script stops: quit it first.
+- **GPU memory limit.** If a model does not fit, raise macOS's GPU wired-memory limit until reboot with
+  `sudo sysctl iogpu.wired_limit_mb=<MB>`, or pick a smaller profile.
+- **Speed.** Expect tens of tokens per second; profiles raise `LLM_TIMEOUT_S` (300) and
+  `AGENT_TIMEOUT_S` (900) and lower `EXTRACTION_CONCURRENCY` to the tier's parallelism.
+- **Changing embedding models** requires re-ingesting everything.[^ollama]
 
-See [ADR-0012](../decisions/adr-0012-local-apple-silicon.md) for the choice of Ollama.
+See [ADR-0012](../decisions/adr-0012-local-apple-silicon.md).
 
+[^profiles]: Hardware profile catalog
 [^setup]: Ollama setup script
-[^env]: Two-Mac Nexo environment
+[^env]: Local Nexo environment
+[^compose]: Docker Compose stack
 [^ollama]: Ollama
 [^live]: Live model checks

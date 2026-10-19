@@ -11,10 +11,13 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Literal
 
-from pydantic import Field, SecretStr
+from pydantic import Field, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from nexo.local_profiles import needs_reasoning_off, plan
+
 ModelRole = Literal["agent", "extraction", "router", "judge"]
+ReasoningEffort = Literal["none", "minimal", "low", "medium", "high"]
 
 
 @dataclass(frozen=True)
@@ -22,6 +25,7 @@ class ModelEndpoint:
     base_url: str
     api_key: SecretStr
     model: str
+    reasoning_effort: ReasoningEffort | None = None  # JSON roles only
 
 
 class Settings(BaseSettings):
@@ -46,9 +50,12 @@ class Settings(BaseSettings):
     router_api_key: SecretStr | None = None
     router_model: str | None = None
     # Thinking models (e.g. Qwen3.5/3.6) apply JSON-schema constraints only after
-    # their reasoning; "none" turns reasoning off for the JSON roles (router,
-    # extraction, judge). Unset = parameter not sent. The agent is unaffected.
-    structured_reasoning_effort: Literal["none", "minimal", "low", "medium", "high"] | None = None
+    # their reasoning; set "none" on a JSON role served by one. Unset = the
+    # parameter is not sent (non-thinking models may reject it). There is no
+    # agent setting: the agent keeps its reasoning.
+    extraction_reasoning_effort: ReasoningEffort | None = None
+    router_reasoning_effort: ReasoningEffort | None = None
+    judge_reasoning_effort: ReasoningEffort | None = None
     llm_timeout_s: float = 120.0
     llm_max_retries: int = Field(default=3, ge=0)
     agent_temperature: float = 0.1
@@ -149,12 +156,65 @@ class Settings(BaseSettings):
     log_level: str = "INFO"
     log_format: Literal["text", "json"] = "text"
 
+    # --- Local hardware profiles (Ollama on Apple Silicon) -----------------------
+    # LOCAL_PROFILE alone: this Mac serves every role. With REMOTE_PROFILE, the
+    # remote Mac serves the agent and extraction models (through REMOTE_BASE_URL,
+    # usually an SSH tunnel) and this Mac serves router, judge and embeddings.
+    # Any role setting given explicitly wins over the profile. See local_profiles.py.
+    local_profile: str | None = None
+    local_base_url: str = "http://localhost:11434/v1"
+    remote_profile: str | None = None
+    remote_base_url: str = "http://localhost:11435/v1"
+
+    @model_validator(mode="after")
+    def _apply_local_profiles(self) -> Settings:
+        if not self.local_profile:
+            if self.remote_profile:
+                raise ValueError("REMOTE_PROFILE needs LOCAL_PROFILE (the Mac that runs Nexo)")
+            return self
+        explicit = set(self.model_fields_set)
+        if self.remote_profile:
+            heavy, light = plan(self.remote_profile, "heavy"), plan(self.local_profile, "light")
+            placement = {role: (heavy.roles[role], self.remote_base_url) for role in ("agent", "extraction")}
+            placement |= {role: (light.roles[role], self.local_base_url) for role in ("router", "judge", "embedding")}
+            parallel = heavy.num_parallel
+        else:
+            single = plan(self.local_profile, "single")
+            placement = {role: (model, self.local_base_url) for role, model in single.roles.items()}
+            parallel = single.num_parallel
+
+        def default(field: str, value: object) -> None:
+            if field not in explicit:
+                setattr(self, field, value)
+
+        for role in ("agent", "extraction", "router", "judge"):
+            model, base_url = placement[role]
+            if model is None:  # role disabled by the profile (e.g. no judge on a small Mac)
+                continue
+            default(f"{role}_model", model)
+            default(f"{role}_base_url", base_url)
+            default(f"{role}_api_key", SecretStr("ollama"))  # Ollama ignores it; clients need one
+            if role != "agent" and needs_reasoning_off(model):
+                default(f"{role}_reasoning_effort", "none")
+        embedding_model, embedding_url = placement["embedding"]
+        default("embedding_provider", "openai_compatible")
+        default("embedding_model", embedding_model)
+        default("embedding_base_url", embedding_url)
+        default("embedding_api_key", SecretStr("ollama"))
+        default("embedding_dimensions", 1024)
+        # Local models are slower than a GPU server.
+        default("llm_timeout_s", 300.0)
+        default("agent_timeout_s", 900.0)
+        default("extraction_concurrency", parallel)
+        return self
+
     def endpoint(self, role: ModelRole) -> ModelEndpoint:
         """Model endpoint for a role, falling back to the VLLM_* defaults field by field."""
         return ModelEndpoint(
             base_url=getattr(self, f"{role}_base_url") or self.vllm_base_url,
             api_key=getattr(self, f"{role}_api_key") or self.vllm_api_key,
             model=getattr(self, f"{role}_model") or self.vllm_model,
+            reasoning_effort=getattr(self, f"{role}_reasoning_effort", None),
         )
 
     @property

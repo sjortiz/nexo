@@ -48,31 +48,22 @@ def _env_keys(path: Path) -> set[str]:
     return keys
 
 
-@pytest.mark.parametrize("template", [".env.example", "deploy/local/nexo-two-macs.env.example"])
+@pytest.mark.parametrize("template", [".env.example", "deploy/local/local.env.example"])
 def test_env_templates_only_use_real_settings(template):
     known = {name.upper() for name in Settings.model_fields}
     unknown = _env_keys(ROOT / template) - known - PASSTHROUGH
     assert not unknown, f"{template} sets keys Nexo never reads: {sorted(unknown)}"
 
 
-def test_two_mac_template_routes_roles_to_the_right_host():
-    settings = Settings(_env_file=ROOT / "deploy" / "local" / "nexo-two-macs.env.example")
-    agent, extraction, router, judge = (settings.endpoint(r) for r in ("agent", "extraction", "router", "judge"))
-    assert agent.base_url == extraction.base_url == "http://localhost:11435/v1"  # M1 Max via SSH tunnel
-    assert agent.model == extraction.model == "qwen3:30b-a3b-instruct-2507-q4_K_M"
-    assert router.base_url == judge.base_url == settings.embedding_base_url == "http://localhost:11434/v1"
-    assert (router.model, judge.model, settings.embedding_model) == ("qwen3:4b-instruct-2507", "llama3.1:8b", "bge-m3")
-    assert judge.model.split(":")[0] != agent.model.split(":")[0]  # judge from a different family
-
-
 def test_reasoning_effort_is_sent_only_when_set_and_never_to_the_agent():
     plain = build_chat_model(Settings(_env_file=None), role="extraction")
     assert plain.reasoning_effort is None
     assert "reasoning_effort" not in plain._default_params
-    settings = Settings(_env_file=None, structured_reasoning_effort="none")
-    for role in ("router", "extraction", "judge"):
-        assert build_chat_model(settings, role=role)._default_params["reasoning_effort"] == "none"
-    assert build_chat_model(settings, role="agent").reasoning_effort is None
+    settings = Settings(_env_file=None, extraction_reasoning_effort="none", judge_reasoning_effort="low")
+    assert build_chat_model(settings, role="extraction")._default_params["reasoning_effort"] == "none"
+    assert build_chat_model(settings, role="judge")._default_params["reasoning_effort"] == "low"
+    assert "reasoning_effort" not in build_chat_model(settings, role="router")._default_params  # per role
+    assert settings.endpoint("agent").reasoning_effort is None
     assert "reasoning_effort" not in (build_strands_model(settings).config.get("params") or {})
 
 
