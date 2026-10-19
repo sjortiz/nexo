@@ -1,0 +1,297 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Nexo · Graph RAG that shows its work</title>
+<meta name="description" content="Nexo turns documents into a knowledge graph, lets an agent trace how people, organizations and facts connect, and answers with a citation for every claim, reviewed by a person before release.">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ccircle cx='8' cy='8' r='5' fill='%235b4bdb'/%3E%3Ccircle cx='24' cy='12' r='5' fill='%235b4bdb'/%3E%3Ccircle cx='14' cy='25' r='5' fill='%235b4bdb'/%3E%3Cpath d='M8 8 24 12 14 25Z' fill='none' stroke='%235b4bdb' stroke-width='2'/%3E%3C/svg%3E">
+<style>
+  :root {
+    --bg: #fbfbfd; --surface: #ffffff; --surface-2: #f3f2fa; --text: #1b1a24; --muted: #5a586b;
+    --border: #e3e1ef; --accent: #5b4bdb; --accent-ink: #ffffff; --accent-soft: #ece9ff; --code-bg: #f3f2fa;
+    --ok: #1f7a4d; --warn: #9a5b00;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #111018; --surface: #191823; --surface-2: #221f30; --text: #ecebf5; --muted: #a9a6bd;
+      --border: #2e2b40; --accent: #9d92ff; --accent-ink: #14121f; --accent-soft: #2a2545; --code-bg: #1f1d2b;
+      --ok: #6fd3a0; --warn: #f0b860;
+    }
+  }
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body { margin: 0; background: var(--bg); color: var(--text); line-height: 1.6;
+         font: 16px/1.6 system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; }
+  a { color: var(--accent); }
+  a:focus-visible, .btn:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
+  .wrap { max-width: 1080px; margin: 0 auto; padding: 0 20px; }
+  header.top { position: sticky; top: 0; z-index: 10; background: color-mix(in srgb, var(--bg) 88%, transparent);
+               backdrop-filter: blur(8px); border-bottom: 1px solid var(--border); }
+  header.top .wrap { display: flex; align-items: center; justify-content: space-between; gap: 16px; height: 60px; }
+  .brand { display: flex; align-items: center; gap: 10px; font-weight: 700; font-size: 1.15rem; color: var(--text);
+           text-decoration: none; }
+  nav ul { display: flex; gap: 22px; list-style: none; margin: 0; padding: 0; }
+  nav a { color: var(--muted); text-decoration: none; font-size: .95rem; }
+  nav a:hover { color: var(--text); }
+  @media (max-width: 720px) { nav ul li.optional { display: none; } nav ul { gap: 14px; } }
+  .hero { padding-top: 72px; padding-bottom: 56px; }
+  .eyebrow { display: inline-block; font-size: .8rem; font-weight: 600; letter-spacing: .06em; text-transform: uppercase;
+             color: var(--accent); background: var(--accent-soft); padding: 4px 10px; border-radius: 999px; }
+  h1 { font-size: clamp(2.2rem, 5vw, 3.6rem); line-height: 1.1; margin: 18px 0 16px; letter-spacing: -.02em; }
+  .lede { font-size: 1.2rem; color: var(--muted); max-width: 720px; margin: 0 0 28px; }
+  .actions { display: flex; flex-wrap: wrap; gap: 12px; }
+  .btn { display: inline-block; padding: 11px 18px; border-radius: 10px; font-weight: 600; text-decoration: none;
+         border: 1px solid var(--border); color: var(--text); background: var(--surface); }
+  .btn.primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+  section { padding: 56px 0; border-top: 1px solid var(--border); }
+  h2 { font-size: 1.9rem; margin: 0 0 8px; letter-spacing: -.01em; }
+  .section-lede { color: var(--muted); margin: 0 0 32px; max-width: 760px; }
+  .steps { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; counter-reset: step; }
+  @media (max-width: 900px) { .steps { grid-template-columns: repeat(2, 1fr); } }
+  @media (max-width: 560px) { .steps { grid-template-columns: 1fr; } }
+  .card { background: var(--surface); border: 1px solid var(--border); border-radius: 14px; padding: 20px; }
+  .step::before { counter-increment: step; content: counter(step); display: grid; place-items: center; width: 30px;
+                  height: 30px; border-radius: 50%; background: var(--accent-soft); color: var(--accent); font-weight: 700;
+                  margin-bottom: 12px; }
+  .card h3 { margin: 0 0 6px; font-size: 1.05rem; }
+  .card p { margin: 0; color: var(--muted); font-size: .95rem; }
+  .diagram { margin-top: 28px; padding: 24px; overflow-x: auto; }
+  .diagram svg { display: block; width: 100%; min-width: 620px; height: auto; }
+  .diagram figcaption { color: var(--muted); font-size: .9rem; margin-top: 12px; }
+  .features { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 16px; }
+  .stack { display: flex; flex-wrap: wrap; gap: 10px; list-style: none; padding: 0; margin: 0; }
+  .stack li { background: var(--surface); border: 1px solid var(--border); border-radius: 999px; padding: 6px 14px;
+              font-size: .92rem; }
+  .stack li b { font-weight: 600; }
+  pre { background: var(--code-bg); border: 1px solid var(--border); border-radius: 12px; padding: 16px 18px;
+        overflow-x: auto; font-size: .88rem; line-height: 1.55; margin: 0 0 18px; }
+  code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+  p code, li code { background: var(--code-bg); padding: 1px 6px; border-radius: 6px; font-size: .9em; }
+  .two { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 24px; }
+  @media (max-width: 820px) { .two { grid-template-columns: minmax(0, 1fr); } }
+  h3.sub { margin: 0 0 10px; font-size: 1.05rem; }
+  ul.checks { list-style: none; padding: 0; margin: 0; }
+  ul.checks li { padding: 6px 0 6px 28px; position: relative; color: var(--muted); }
+  ul.checks li::before { position: absolute; left: 0; top: 6px; font-weight: 700; }
+  ul.checks.ok li::before { content: "✓"; color: var(--ok); }
+  ul.checks.todo li::before { content: "○"; color: var(--warn); }
+  ul.checks li strong { color: var(--text); font-weight: 600; }
+  footer { border-top: 1px solid var(--border); padding: 32px 0 48px; color: var(--muted); font-size: .92rem; }
+  footer .wrap { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 12px; }
+  .svg-node { fill: var(--surface); stroke: var(--accent); stroke-width: 2; }
+  .svg-terminal { fill: var(--accent-soft); stroke: var(--border); stroke-width: 1.5; }
+  .svg-label { fill: var(--text); font: 600 15px system-ui, sans-serif; }
+  .svg-note { fill: var(--muted); font: 13px system-ui, sans-serif; }
+  .svg-edge { stroke: var(--muted); stroke-width: 2; fill: none; }
+  .svg-edge.dashed { stroke-dasharray: 6 5; }
+  .svg-arrow { fill: var(--muted); }
+</style>
+</head>
+<body>
+<header class="top">
+  <div class="wrap">
+    <a class="brand" href="#top" aria-label="Nexo home">
+      <svg width="26" height="26" viewBox="0 0 32 32" aria-hidden="true"><circle cx="8" cy="8" r="5" fill="currentColor" opacity=".9"/><circle cx="24" cy="12" r="5" fill="currentColor" opacity=".9"/><circle cx="14" cy="25" r="5" fill="currentColor" opacity=".9"/><path d="M8 8 24 12 14 25Z" fill="none" stroke="currentColor" stroke-width="2"/></svg>
+      Nexo
+    </a>
+    <nav aria-label="Sections">
+      <ul>
+        <li class="optional"><a href="#how">How it works</a></li>
+        <li class="optional"><a href="#features">Features</a></li>
+        <li><a href="#quickstart">Quickstart</a></li>
+        <li><a href="https://github.com/sjortiz/nexo/blob/main/docs/index.md">Docs</a></li>
+        <li><a href="https://github.com/sjortiz/nexo">GitHub</a></li>
+      </ul>
+    </nav>
+  </div>
+</header>
+
+<main id="top">
+  <div class="wrap hero">
+    <span class="eyebrow">Graph RAG · Agents · Human review</span>
+    <h1>Graph RAG that shows its work.</h1>
+    <p class="lede">Nexo turns documents into a knowledge graph, lets an agent trace how people, organizations and
+      facts connect across them, and answers with a citation for every claim. A person approves each answer before
+      it is released.</p>
+    <div class="actions">
+      <a class="btn primary" href="#quickstart">Get started</a>
+      <a class="btn" href="https://github.com/sjortiz/nexo/blob/main/docs/index.md">Read the docs</a>
+      <a class="btn" href="https://github.com/sjortiz/nexo">View the source</a>
+    </div>
+  </div>
+
+  <section id="how" aria-labelledby="how-title">
+    <div class="wrap">
+      <h2 id="how-title">How it works</h2>
+      <p class="section-lede">Four stages, from raw documents to an answer someone has checked. Every node and edge in
+        the graph points back to the passage it came from, so nothing is trusted without its source.</p>
+      <div class="steps">
+        <article class="card step">
+          <h3>Ingest</h3>
+          <p>Documents are split along their headings, classified for sensitivity, and read by an LLM that extracts
+            entity-relation-entity facts, each with a verbatim quote that must appear in the passage.</p>
+        </article>
+        <article class="card step">
+          <h3>Connect</h3>
+          <p>Entity resolution merges "Acme Holdings Inc.", "Acme" and "AHI" into one node. A relation vocabulary
+            maps "bought" and "acquired by" onto one canonical edge. Everything lands in Neo4j.</p>
+        </article>
+        <article class="card step">
+          <h3>Investigate</h3>
+          <p>A Strands agent writes read-only Cypher to trace multi-hop paths, then reads the exact passages behind
+            each edge. It decides what to follow; LangGraph fixes the workflow around it.</p>
+        </article>
+        <article class="card step">
+          <h3>Review</h3>
+          <p>Compliance checks flag uncited claims, citations to text the agent never read, and sensitive data.
+            The run pauses until a reviewer approves or rejects, even days later.</p>
+        </article>
+      </div>
+
+      <figure class="card diagram">
+        <svg viewBox="0 0 860 230" role="img" aria-labelledby="wf-title wf-desc">
+          <title id="wf-title">The LangGraph workflow</title>
+          <desc id="wf-desc">Start, then router. The router either rejects the request and ends, or passes it to the
+            investigator. The investigator hands its answer to compliance, which pauses for human approval and
+            then ends.</desc>
+          <defs>
+            <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+              <path d="M0 0 10 5 0 10Z" class="svg-arrow"/>
+            </marker>
+          </defs>
+          <rect x="10" y="70" width="90" height="46" rx="23" class="svg-terminal"/>
+          <text x="55" y="99" text-anchor="middle" class="svg-label">start</text>
+          <rect x="150" y="62" width="140" height="62" rx="12" class="svg-node"/>
+          <text x="220" y="91" text-anchor="middle" class="svg-label">router</text>
+          <text x="220" y="111" text-anchor="middle" class="svg-note">validate · route</text>
+          <rect x="350" y="62" width="160" height="62" rx="12" class="svg-node"/>
+          <text x="430" y="91" text-anchor="middle" class="svg-label">investigator</text>
+          <text x="430" y="111" text-anchor="middle" class="svg-note">Strands agent</text>
+          <rect x="570" y="62" width="150" height="62" rx="12" class="svg-node"/>
+          <text x="645" y="91" text-anchor="middle" class="svg-label">compliance</text>
+          <text x="645" y="111" text-anchor="middle" class="svg-note">checks · interrupt</text>
+          <rect x="760" y="70" width="90" height="46" rx="23" class="svg-terminal"/>
+          <text x="805" y="99" text-anchor="middle" class="svg-label">end</text>
+          <path d="M100 93 H146" class="svg-edge" marker-end="url(#arrow)"/>
+          <path d="M290 93 H346" class="svg-edge dashed" marker-end="url(#arrow)"/>
+          <path d="M510 93 H566" class="svg-edge" marker-end="url(#arrow)"/>
+          <path d="M720 93 H756" class="svg-edge" marker-end="url(#arrow)"/>
+          <path d="M220 124 V190 H805 V120" class="svg-edge dashed" marker-end="url(#arrow)"/>
+          <text x="512" y="182" text-anchor="middle" class="svg-note">rejected: out of scope, empty, or router unavailable</text>
+          <text x="645" y="44" text-anchor="middle" class="svg-note">pauses for a person's decision</text>
+        </svg>
+        <figcaption>The fixed workflow. Dashed edges are the router's branch. The full, generated diagram is in the
+          <a href="https://github.com/sjortiz/nexo/blob/main/docs/components/orchestration-graph.md">orchestration docs</a>.</figcaption>
+      </figure>
+    </div>
+  </section>
+
+  <section id="features" aria-labelledby="features-title">
+    <div class="wrap">
+      <h2 id="features-title">What makes it different</h2>
+      <p class="section-lede">Built for answers you can audit, on infrastructure you control.</p>
+      <div class="features">
+        <article class="card"><h3>Grounded by construction</h3><p>Extracted facts need a quote found in the passage;
+          answers need a citation per claim; citations must point at text the agent actually read.</p></article>
+        <article class="card"><h3>One node per entity</h3><p>Normalization, aliases and a cautious model arbiter merge
+          names across documents. Every merge is recorded and undone when its document is withdrawn.</p></article>
+        <article class="card"><h3>Hybrid retrieval</h3><p>BM25 keyword search catches exact names and codes; vectors
+          catch paraphrases. Reciprocal Rank Fusion combines both, accent-insensitive.</p></article>
+        <article class="card"><h3>Human in the loop</h3><p>LangGraph checkpoints the run at the review step. Approve or
+          reject from the CLI, from another process, or after a restart.</p></article>
+        <article class="card"><h3>Sensitivity-aware</h3><p>Chunks are classified public, internal, PII or PHI. Callers
+          only see what a source within their clearance supports; PHI reliance blocks release until acknowledged.</p></article>
+        <article class="card"><h3>Use it from Claude</h3><p>An MCP server exposes read-only tools, and a Claude Code skill
+          walks the model through orient, locate, trace, read and answer, with citations.</p></article>
+        <article class="card"><h3>Observable</h3><p>OpenTelemetry GenAI conventions end to end: workflow, nodes, agent,
+          tools, model and database spans. Message content stays out of traces by default.</p></article>
+        <article class="card"><h3>Runs where you are</h3><p>vLLM on GPU servers, or Ollama on a Mac or Linux box chosen by
+          a hardware profile such as <code>m1-max-64</code> or <code>gpu-24</code>. Split roles across two machines.</p></article>
+      </div>
+    </div>
+  </section>
+
+  <section id="stack" aria-labelledby="stack-title">
+    <div class="wrap">
+      <h2 id="stack-title">Built on</h2>
+      <p class="section-lede">Open components throughout, each documented with the features Nexo uses.</p>
+      <ul class="stack">
+        <li><b>LangGraph</b> · orchestration</li>
+        <li><b>Strands Agents</b> · the investigator</li>
+        <li><b>LangChain</b> · clients, splitters</li>
+        <li><b>vLLM</b> / <b>Ollama</b> · inference</li>
+        <li><b>Neo4j</b> · knowledge graph</li>
+        <li><b>Model Context Protocol</b> · tools</li>
+        <li><b>OpenTelemetry</b> · tracing</li>
+        <li><b>Python 3.12</b></li>
+      </ul>
+    </div>
+  </section>
+
+  <section id="quickstart" aria-labelledby="quickstart-title">
+    <div class="wrap">
+      <h2 id="quickstart-title">Quickstart</h2>
+      <p class="section-lede">Local models on one machine with Ollama. For GPU servers, two machines, or Linux, see the
+        <a href="https://github.com/sjortiz/nexo/blob/main/docs/operations/local-apple-silicon.md">Apple Silicon</a> and
+        <a href="https://github.com/sjortiz/nexo/blob/main/docs/operations/local-linux.md">Linux</a> playbooks.</p>
+      <div class="two">
+        <div>
+          <h3 class="sub">Set up</h3>
+<pre><code>git clone https://github.com/sjortiz/nexo.git && cd nexo
+python3 -m venv .venv && .venv/bin/pip install -e ".[dev]"
+cp deploy/local/local.env.example .env   # set LOCAL_PROFILE, NEO4J_PASSWORD
+deploy/local/ollama-setup.sh m1-max-64   # pulls and preloads the models
+podman compose up -d neo4j otel-collector jaeger</code></pre>
+        </div>
+        <div>
+          <h3 class="sub">Ask</h3>
+<pre><code>nexo ingest corpus/memo.md --doc-type memo
+nexo ask "How is Acme Holdings connected to Gamma Clinics?"
+nexo review &lt;thread_id&gt; --approve --reviewer you@example.com
+
+# or from Claude Code: the repo ships .mcp.json and a skill
+nexo mcp</code></pre>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section id="status" aria-labelledby="status-title">
+    <div class="wrap">
+      <h2 id="status-title">Where it stands</h2>
+      <p class="section-lede">An honest account, kept short.</p>
+      <div class="two">
+        <div class="card">
+          <h3 class="sub">Verified</h3>
+          <ul class="checks ok">
+            <li><strong>CI on Ubuntu and macOS</strong>, including Neo4j integration tests on a real database.</li>
+            <li><strong>The agent loop, workflow and MCP protocol</strong> run for real in tests; only the model server is scripted.</li>
+            <li><strong>Safeguards are mutation-tested</strong>: removing one makes a test fail.</li>
+            <li><strong>Docs stay in sync</strong> with the code: diagram, settings and tool lists are checked.</li>
+          </ul>
+        </div>
+        <div class="card">
+          <h3 class="sub">Not yet</h3>
+          <ul class="checks todo">
+            <li><strong>Live model runs</strong> are opt-in (<code>NEXO_LIVE=1</code>), not in CI.</li>
+            <li><strong>GPU passthrough</strong> for the vLLM containers is untested here.</li>
+            <li><strong>Open design questions</strong>: updates, contradictions and error propagation, in the
+              <a href="https://github.com/sjortiz/nexo/blob/main/REVISION.md">design review</a>.</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+  </section>
+</main>
+
+<footer>
+  <div class="wrap">
+    <span>Nexo · a personal project · <a href="https://github.com/sjortiz/nexo/blob/main/LICENSE">MIT License</a></span>
+    <span><a href="https://github.com/sjortiz/nexo">Source</a> ·
+      <a href="https://github.com/sjortiz/nexo/blob/main/docs/index.md">Documentation</a> ·
+      <a href="https://github.com/sjortiz/nexo/blob/main/docs/decisions/index.md">Design decisions</a></span>
+  </div>
+</footer>
+</body>
+</html>
