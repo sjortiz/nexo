@@ -84,6 +84,8 @@ class Settings(BaseSettings):
 
     # --- Vector store (local index, persisted between processes) -------------
     vector_store_path: Path = Path(".data/vector_store.json")
+    # Seed search: BM25 + vector fused with RRF (hybrid), or either alone.
+    retrieval_mode: Literal["hybrid", "vector", "keyword"] = "hybrid"
 
     # --- Ingestion ------------------------------------------------------------
     chunk_size: int = 1200

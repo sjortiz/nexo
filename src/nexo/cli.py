@@ -90,7 +90,7 @@ def _eval(args: argparse.Namespace) -> int:
     if settings.judge_model:
         judge = build_chat_model(settings, role="judge")
     graph = GraphStore.from_settings(settings, read_only=True)
-    chunks = LocalChunkStore(build_embeddings(settings), settings.vector_store_path)
+    chunks = LocalChunkStore(build_embeddings(settings), settings.vector_store_path, mode=settings.retrieval_mode)
     investigator = Investigator(model=build_strands_model(settings), graph=graph, chunks=chunks,
                                 settings=settings, schema_text=graph.describe_schema())
     try:

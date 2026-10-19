@@ -29,7 +29,8 @@ def role_settings(tmp_path, monkeypatch):
     return Settings(_env_file=None, embedding_provider="fake", checkpoint_backend="memory",
                     vector_store_path=tmp_path / "v.json", vllm_model="default-model",
                     agent_base_url="http://agent-host:11434/v1", agent_model="agent-model",
-                    extraction_model="extraction-model", router_model="router-model")
+                    extraction_model="extraction-model", router_model="router-model",
+                    retrieval_mode="keyword")
 
 
 def test_runtime_uses_router_and_agent_roles(role_settings, monkeypatch):
@@ -47,6 +48,7 @@ def test_runtime_uses_router_and_agent_roles(role_settings, monkeypatch):
     agent_model = built["investigator"]._model
     assert agent_model.config["model_id"] == "agent-model"
     assert agent_model.client_args["base_url"] == "http://agent-host:11434/v1"
+    assert built["investigator"]._chunks._mode == "keyword"
 
 
 def test_ingestor_and_resolver_use_the_extraction_role(role_settings):

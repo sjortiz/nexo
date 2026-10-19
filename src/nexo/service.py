@@ -138,7 +138,8 @@ def open_runtime(settings: Settings) -> Iterator[Runtime]:
         checkpointer = stack.enter_context(open_checkpointer(settings))
         graph_store = GraphStore.from_settings(settings, read_only=True)
         stack.callback(graph_store.close)
-        chunk_store = LocalChunkStore(build_embeddings(settings), settings.vector_store_path)
+        chunk_store = LocalChunkStore(build_embeddings(settings), settings.vector_store_path,
+                                      mode=settings.retrieval_mode)
         investigator = Investigator(
             model=build_strands_model(settings),
             graph=graph_store,

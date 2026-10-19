@@ -78,6 +78,7 @@ hosts ([Local on Apple Silicon](local-apple-silicon.md)).
 | Variable | Default | Effect |
 |---|---|---|
 | `VECTOR_STORE_PATH` | `.data/vector_store.json` | Local chunk store file. |
+| `RETRIEVAL_MODE` | `hybrid` | Seed search: `hybrid` (BM25 + vector, Reciprocal Rank Fusion), `vector` or `keyword` (BM25 only). |
 | `CHUNK_SIZE` / `CHUNK_OVERLAP` | `1200` / `150` | Characters per chunk and overlap inside a section. |
 | `EXTRACTION_ATTEMPTS` | `3` | Validation retries per chunk. |
 | `EXTRACTION_CONCURRENCY` | `8` | Parallel extraction calls. |
