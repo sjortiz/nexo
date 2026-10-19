@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import json
 import os
 import re
 import shutil
 import subprocess
 import sys
+import threading
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 import pytest
@@ -173,6 +176,54 @@ def test_setup_script_fails_clearly_without_a_profile_or_with_a_bad_one():
     assert missing.returncode == 2 and "usage:" in missing.stderr
     bad = _run_script("m1-max-8")
     assert bad.returncode != 0 and "at least 16 GB" in bad.stderr
+
+
+class _FakeOllamaAPI(BaseHTTPRequestHandler):
+    calls: list[tuple[str, str, str]] = []
+
+    def _reply(self) -> None:
+        body = self.rfile.read(int(self.headers.get("Content-Length") or 0)).decode()
+        model = json.loads(body).get("model", "") if body else ""
+        self.calls.append((self.command, self.path, model))
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.end_headers()
+        self.wfile.write(b"{}")
+
+    do_GET = do_POST = _reply
+
+    def log_message(self, *args) -> None:  # keep test output clean
+        pass
+
+
+def test_setup_script_pulls_and_preloads_through_an_already_running_server(tmp_path):
+    if not shutil.which("curl"):
+        pytest.skip("curl not installed")
+    server = ThreadingHTTPServer(("127.0.0.1", 0), _FakeOllamaAPI)
+    _FakeOllamaAPI.calls = []
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    log = tmp_path / "ollama.log"
+    (fake_bin / "ollama").write_text(f'#!/bin/sh\necho "$@" >> "{log}"\n')
+    (fake_bin / "ollama").chmod(0o755)
+    path = os.pathsep.join([str(fake_bin), str(Path(sys.executable).parent), os.path.dirname(shutil.which("curl")),
+                            "/usr/bin", "/bin"])
+    try:
+        result = subprocess.run(
+            ["bash", str(SCRIPT), "m5-pro-24", "light"], capture_output=True, text=True, cwd=ROOT, timeout=60,
+            env={"PATH": path, "HOME": str(tmp_path), "OLLAMA_HOST": f"127.0.0.1:{server.server_port}"})
+    finally:
+        server.shutdown()
+    assert result.returncode == 0, result.stderr
+    assert "started ollama serve" not in result.stdout  # the running service is left alone
+    assert "already running" in result.stderr and "OLLAMA_CONTEXT_LENGTH=16384" in result.stderr
+    assert "systemctl edit ollama" in result.stderr
+    expected = lp.plan("m5-pro-24", "light").models
+    assert log.read_text().splitlines() == [f"pull {m}" for m in expected] + ["ps"]
+    preloads = {(path, model) for method, path, model in _FakeOllamaAPI.calls if method == "POST"}
+    assert preloads == {("/api/embed", "bge-m3"), ("/api/generate", "llama3.1:8b"),
+                        ("/api/generate", "qwen3:4b-instruct-2507")}
 
 
 def test_docs_list_every_catalog_model_and_tier():
