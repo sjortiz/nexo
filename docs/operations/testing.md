@@ -26,6 +26,8 @@ sources:
 | `tests/test_local_profiles.py` | nothing | Profile parsing and tiers (each fits its memory), settings resolution and precedence, the setup script resolving the same models, the playbook listing every model. |
 | `tests/test_model_roles.py` | nothing | Per-role endpoints and fallbacks, reasoning effort only for JSON roles, env templates use only real settings. |
 | `tests/test_live_models.py` | model servers, `NEXO_LIVE=1` | Real models: schema-valid extraction and routing, embeddings ranking (English and Spanish), agent tool calls, GenAI spans. |
+| `tests/test_mcp_server.py` | nothing | Every MCP tool over the real protocol (in-process and `nexo mcp` over stdio), clearance, parameterized lookups, rejected writes, JSON-only stdout. |
+| `tests/test_claude_skill.py` | nothing | The skill's frontmatter, tool list and phases, and `.mcp.json`, in sync with the MCP server. |
 | `tests/test_docs_okf.py` | nothing | This bundle conforms to OKF v0.2; links, sources and footnotes resolve; every setting is documented. |
 | `tests/test_neo4j_integration.py` | Neo4j | Real Cypher: merging, labels, lexical graph order, alias withdrawal, RELATED_TO per predicate, cross-document resolution through the real candidate query, server-side write refusal, row cap, database span, end-to-end ingest → investigate → approve. |
 

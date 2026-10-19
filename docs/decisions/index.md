@@ -12,3 +12,4 @@
 * [ADR-0010: Deferred graph enrichment](adr-0010-deferred-graph-enrichment.md) - Techniques from the guides postponed, with the trigger for each.
 * [ADR-0011: Where LangSmith fits](adr-0011-langsmith-adoption.md) - Proposed: trace backend and evaluation platform; workflow, review gate and prompts stay in Nexo.
 * [ADR-0012: Ollama for local runs, with model roles split across Macs](adr-0012-local-apple-silicon.md) - Native models on Apple Silicon; each role can point at its own host and model.
+* [ADR-0013: Read-only MCP tools plus a phased Claude skill](adr-0013-read-only-mcp-and-skill.md) - Retrieval over MCP, one clearance per server, a checked skill for Claude.

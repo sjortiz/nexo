@@ -24,6 +24,7 @@
 
 * [OpenTelemetry GenAI semantic conventions](opentelemetry-genai-conventions.md) - Span names, attributes and content capture for GenAI telemetry.
 * [LangSmith](langsmith.md) - Observability, evaluation and deployment platform, and its overlap with Nexo.
+* [Model Context Protocol](model-context-protocol.md) - The open protocol and Python SDK behind `nexo mcp`.
 * [Ollama](ollama.md) - Local model server for Apple Silicon and the capabilities Nexo relies on.
 
 # Documentation

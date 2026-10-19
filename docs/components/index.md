@@ -19,4 +19,5 @@
 
 * [Orchestration graph](orchestration-graph.md) - The 3-node LangGraph state machine: router, investigator, compliance.
 * [Compliance checks](compliance-checks.md) - Deterministic findings shown to the human reviewer.
+* [MCP server](mcp-server.md) - `nexo mcp`: the knowledge graph as six read-only MCP tools.
 * [Evaluation](evaluation.md) - Extraction, retrieval and LLM-as-a-judge metrics.

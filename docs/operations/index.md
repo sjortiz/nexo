@@ -4,6 +4,7 @@
 * [Local stack](local-stack.md) - Bring up Neo4j, vLLM, tracing and the CLI with Docker Compose.
 * [Local on Apple Silicon](local-apple-silicon.md) - Ollama on one or two Macs, model roles split across machines.
 * [Local on Linux](local-linux.md) - Ollama on a GPU or CPU, Podman with host networking or native; Linux as the model machine for a Mac.
+* [Use from Claude Code](claude-code.md) - The nexo MCP server and the nexo-knowledge skill.
 * [Human review](human-review.md) - How a reviewer reads the packet and approves or rejects.
 
 # Observe and verify

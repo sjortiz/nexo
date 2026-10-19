@@ -67,6 +67,13 @@ Traces: http://localhost:16686 (Jaeger); metrics: http://localhost:8889/metrics.
 pipelines). Relation ontology example: `deploy/ontology.example.json`. Neo4j Enterprise least-privilege reader:
 `deploy/neo4j-rbac.cypher`.
 
+## Use from Claude Code (MCP)
+
+`nexo mcp` serves the knowledge graph as read-only MCP tools (index, hybrid search, chunks, entities,
+neighbors, read-only Cypher) with the same clearance and Cypher safeguards as the agent. The repository
+ships `.mcp.json` and a `nexo-knowledge` skill, so Claude Code in this directory can answer questions from
+your documents with a citation per claim: [Use from Claude Code](docs/operations/claude-code.md).
+
 ## Run locally (macOS and Linux)
 
 Models run natively through Ollama, chosen by a hardware profile: `m1-max-64` / `m5-pro-24` on Apple
@@ -157,5 +164,6 @@ Observability, evaluation and documentation:
 - [OpenTelemetry GenAI semantic conventions](https://github.com/open-telemetry/semantic-conventions-genai) and
   [OpenTelemetry Python GenAI instrumentations](https://github.com/open-telemetry/opentelemetry-python-genai)
 - [LangSmith documentation](https://docs.langchain.com/langsmith)
+- [Model Context Protocol](https://modelcontextprotocol.io/) and its [Python SDK](https://github.com/modelcontextprotocol/python-sdk)
 - [Ollama](https://github.com/ollama/ollama) and its [model library](https://ollama.com/library)
 - [Open Knowledge Format specification](https://github.com/GoogleCloudPlatform/knowledge-catalog/blob/main/okf/SPEC.md)
