@@ -134,6 +134,7 @@ models at 100% GPU.
   `AGENT_TIMEOUT_S` (900) and lower `EXTRACTION_CONCURRENCY` to the tier's parallelism.
 - **Changing embedding models** requires re-ingesting everything.[^ollama]
 
+On Linux, or to use a Linux GPU machine as the remote, see [Local on Linux](local-linux.md).
 See [ADR-0012](../decisions/adr-0012-local-apple-silicon.md).
 
 [^profiles]: Hardware profile catalog

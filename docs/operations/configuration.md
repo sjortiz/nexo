@@ -47,9 +47,9 @@ hosts ([Local on Apple Silicon](local-apple-silicon.md)).
 
 | Variable | Default | Effect |
 |---|---|---|
-| `LOCAL_PROFILE` | unset | `<chip>-<memory GB>` of the Mac running Nexo, e.g. `m1-max-64`, `m5-pro-24`. Alone: this Mac serves every role. |
-| `LOCAL_BASE_URL` | `http://localhost:11434/v1` | This Mac's Ollama (`host.containers.internal` from a container). |
-| `REMOTE_PROFILE` | unset | Profile of a second Mac that serves the agent and extraction models. Requires `LOCAL_PROFILE`. |
+| `LOCAL_PROFILE` | unset | Profile of the machine running Nexo: `m1-max-64`, `m5-pro-24` (Apple), `gpu-24` (Linux GPU VRAM), `cpu-64` (RAM). Alone: this machine serves every role. |
+| `LOCAL_BASE_URL` | `http://localhost:11434/v1` | This machine's Ollama (from a container: `host.containers.internal` on macOS, `127.0.0.1` with host networking on Linux). |
+| `REMOTE_PROFILE` | unset | Profile of a second machine (Mac or Linux GPU box) that serves the agent and extraction models. Requires `LOCAL_PROFILE`. |
 | `REMOTE_BASE_URL` | `http://localhost:11435/v1` | The second Mac's Ollama, usually through an SSH tunnel. |
 
 **Embeddings**

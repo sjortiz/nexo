@@ -43,10 +43,11 @@ Traces: http://localhost:16686 (Jaeger); metrics: http://localhost:8889/metrics.
 pipelines). Relation ontology example: `deploy/ontology.example.json`. Neo4j Enterprise least-privilege reader:
 `deploy/neo4j-rbac.cypher`.
 
-## Run locally on Apple Silicon
+## Run locally (macOS and Linux)
 
-Models run natively through Ollama, chosen by a hardware profile `<chip>-<memory GB>`. Services run in
-Podman or natively (Homebrew Neo4j); either way on one Mac or two:
+Models run natively through Ollama, chosen by a hardware profile: `m1-max-64` / `m5-pro-24` on Apple
+Silicon, `gpu-24` (VRAM) or `cpu-64` on Linux. Services run in Podman or natively; either way on one
+machine or two (e.g. a Linux GPU box serving the agent for a Mac):
 
 ```bash
 cp deploy/local/local.env.example .env       # set LOCAL_PROFILE (and REMOTE_PROFILE for two Macs)
@@ -63,7 +64,15 @@ podman compose up -d neo4j otel-collector jaeger   # Podman path (or: brew insta
 NEXO_LIVE=1 pytest -m live -v                      # verify the models before use
 ```
 
-Details, profile tiers and the native path: [Local on Apple Silicon](docs/operations/local-apple-silicon.md).
+Details: [Local on Apple Silicon](docs/operations/local-apple-silicon.md) and
+[Local on Linux](docs/operations/local-linux.md) (Podman needs `-f docker-compose.linux.yml` for the Nexo
+container there).
+
+| Platform | Status |
+| --- | --- |
+| macOS (Apple Silicon) | Test suite passes; Podman and native paths verified up to the model server. |
+| Linux | Test suite passes (verified on aarch64); Podman path uses host networking; vLLM GPU passthrough untested here. |
+| Windows | Not tested; WSL2 with the Linux instructions is the likely path. |
 
 ## Test
 

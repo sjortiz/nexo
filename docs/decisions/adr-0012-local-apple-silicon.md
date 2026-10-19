@@ -33,7 +33,10 @@ capabilities from its model server: JSON-schema structured output, streamed tool
   serves the agent and extraction models.
 - Two ways to run the services: Podman (Neo4j, collector, Jaeger, optionally Nexo in containers that reach
   host Ollama via `host.containers.internal`) or native (Homebrew Neo4j, optional Jaeger binary).
-- Connect the Macs with an SSH tunnel; Ollama stays bound to localhost.
+- Connect the machines with an SSH tunnel; Ollama stays bound to localhost.
+- Linux uses the same catalog with `gpu-<VRAM>` / `cpu-<RAM>` profiles and a compose override that puts
+  the Nexo container on the host network, because rootless Podman on Linux cannot reach the host's
+  loopback through `host.containers.internal` ([Local on Linux](../operations/local-linux.md)).
 - `NEXO_LIVE=1 pytest -m live` verifies a model set before use.[^playbook]
 
 # Options considered

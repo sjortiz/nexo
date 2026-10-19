@@ -28,6 +28,7 @@ sources:
 | `tests/test_docs_okf.py` | nothing | This bundle conforms to OKF v0.2; links, sources and footnotes resolve; every setting is documented. |
 | `tests/test_neo4j_integration.py` | Neo4j | Real Cypher: merging, labels, lexical graph order, alias withdrawal, RELATED_TO per predicate, cross-document resolution through the real candidate query, server-side write refusal, row cap, database span, end-to-end ingest → investigate → approve. |
 
+The suite runs on macOS and Linux (verified in `python:3.12-slim` on Linux aarch64 with Neo4j 5.26).
 vLLM is never required: the agent tests drive the real Strands loop with scripted chat completions, so
 tool wiring, message formatting and stop reasons are exercised without a GPU.[^tests]
 
