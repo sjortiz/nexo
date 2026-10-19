@@ -1,0 +1,43 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: test (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install
+        run: pip install -e ".[dev]"
+      - name: Lint
+        run: ruff check src tests
+      # Service containers only exist on Linux runners; the Neo4j tests skip elsewhere.
+      - name: Start Neo4j
+        if: runner.os == 'Linux'
+        run: |
+          docker run -d --name neo4j -p 127.0.0.1:7688:7687 -e NEO4J_AUTH=neo4j/nexo-test-pass neo4j:5.26-community
+          for i in $(seq 1 60); do
+            python -c "from neo4j import GraphDatabase; GraphDatabase.driver('bolt://127.0.0.1:7688', auth=('neo4j', 'nexo-test-pass')).verify_connectivity()" && exit 0
+            sleep 2
+          done
+          docker logs neo4j; exit 1
+      - name: Test
+        env:
+          NEO4J_TEST_URI: ${{ runner.os == 'Linux' && 'bolt://127.0.0.1:7688' || '' }}
+          NEO4J_TEST_PASSWORD: nexo-test-pass
+        run: pytest -o addopts="" -q -rs
