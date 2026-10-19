@@ -1,6 +1,7 @@
 # Bundle Update Log
 
 ## 2026-10-19
+* **Creation**: Core-stack references ([LangGraph](references/langgraph.md), [Strands Agents](references/strands-agents.md), [LangChain](references/langchain.md), [vLLM](references/vllm.md), [Neo4j](references/neo4j.md)) and the generated workflow diagram in the [orchestration graph](components/orchestration-graph.md).
 * **Update**: Hybrid BM25 + vector seed search in the [chunk store](components/chunk-store.md) (`RETRIEVAL_MODE`); backend recommendations reworded open-source first.
 * **Creation**: [Local on Linux](operations/local-linux.md): `gpu-`/`cpu-` profiles, Linux compose override, systemd-managed Ollama; suite verified on Linux.
 * **Update**: Hardware profiles (`LOCAL_PROFILE`, `REMOTE_PROFILE`) and both run paths, Podman and native, in [Local on Apple Silicon](operations/local-apple-silicon.md); reasoning effort is now per role.

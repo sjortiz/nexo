@@ -134,6 +134,13 @@ avoid duplicate traces.
 The design follows these sources; each has a reference page in [`docs/references/`](docs/references/index.md) saying
 what was adopted, deferred or changed.
 
+Core stack:
+- [LangGraph](https://docs.langchain.com/oss/python/langgraph/overview) - orchestration
+- [Strands Agents](https://strandsagents.com/docs/) - the investigator agent
+- [LangChain](https://docs.langchain.com/oss/python/langchain/overview) - model clients, splitters, vector index
+- [vLLM](https://docs.vllm.ai/en/latest/) - GPU inference
+- [Neo4j](https://neo4j.com/docs/python-manual/current/) - graph database and driver
+
 Knowledge graph construction:
 - [Claude Cookbook: knowledge graph guide](https://platform.claude.com/cookbook/capabilities-knowledge-graph-guide)
 - [Memgraph: knowledge graph creation](https://memgraph.com/docs/ai-ecosystem/graph-rag/knowledge-graph-creation)

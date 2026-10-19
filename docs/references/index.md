@@ -1,3 +1,11 @@
+# Core stack
+
+* [LangGraph](langgraph.md) - Orchestration: the 3-node state machine, checkpointed tasks, interrupts and checkpointers.
+* [Strands Agents SDK](strands-agents.md) - The relationship investigator: model-driven tool loop, budgets, native tracing.
+* [LangChain](langchain.md) - Model and embedding clients, Markdown-aware splitters, the in-process vector index.
+* [vLLM](vllm.md) - GPU inference server: OpenAI-compatible API, guided JSON, tool-call parsing, embeddings.
+* [Neo4j](neo4j.md) - The lexical and domain graph, read-only agent queries, atomic document replacement.
+
 # Knowledge graph construction
 
 * [Claude Cookbook: knowledge graph guide](anthropic-claude-cookbook.md) - Typed extraction, LLM entity resolution with descriptions, profiles and evaluation.
