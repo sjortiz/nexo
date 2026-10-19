@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "nexo": {
+      "command": "nexo",
+      "args": ["mcp"]
+    }
+  }
+}

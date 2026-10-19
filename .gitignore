@@ -4,5 +4,6 @@ __pycache__/
 *.pyc
 .env
 .pytest_cache/
-.claude/
+.claude/worktrees/
+.claude/settings.local.json
 corpus/
