@@ -6,6 +6,7 @@ in-cluster services (`vllm-inference-service`, `neo4j`) and local fakes.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
 from typing import Literal
@@ -13,14 +14,41 @@ from typing import Literal
 from pydantic import Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+ModelRole = Literal["agent", "extraction", "router", "judge"]
+
+
+@dataclass(frozen=True)
+class ModelEndpoint:
+    base_url: str
+    api_key: SecretStr
+    model: str
+
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
-    # --- vLLM (OpenAI-compatible chat completions) ---------------------------
+    # --- Default chat model (any OpenAI-compatible server: vLLM, Ollama, ...) --
     vllm_base_url: str = "http://vllm-inference-service:8000/v1"
     vllm_api_key: SecretStr = SecretStr("EMPTY")
     vllm_model: str = "meta-llama/Llama-3.3-70B-Instruct"
+
+    # --- Per-role overrides ---------------------------------------------------
+    # Each role falls back to the default above. Point roles at different
+    # models or hosts, e.g. the agent on a large model on one machine and
+    # extraction/routing on a smaller one elsewhere.
+    agent_base_url: str | None = None  # Strands investigator (multi-turn tool calls)
+    agent_api_key: SecretStr | None = None
+    agent_model: str | None = None
+    extraction_base_url: str | None = None  # triple extraction + entity resolution
+    extraction_api_key: SecretStr | None = None
+    extraction_model: str | None = None
+    router_base_url: str | None = None  # intake validation
+    router_api_key: SecretStr | None = None
+    router_model: str | None = None
+    # Thinking models (e.g. Qwen3.5/3.6) apply JSON-schema constraints only after
+    # their reasoning; "none" turns reasoning off for the JSON roles (router,
+    # extraction, judge). Unset = parameter not sent. The agent is unaffected.
+    structured_reasoning_effort: Literal["none", "minimal", "low", "medium", "high"] | None = None
     llm_timeout_s: float = 120.0
     llm_max_retries: int = Field(default=3, ge=0)
     agent_temperature: float = 0.1
@@ -94,7 +122,9 @@ class Settings(BaseSettings):
 
     # --- Evaluation (LLM-as-a-judge) ------------------------------------------
     # Prefer a different model from the generator to reduce self-preference bias.
+    # Judging is off unless JUDGE_MODEL is set.
     judge_base_url: str | None = None
+    judge_api_key: SecretStr | None = None
     judge_model: str | None = None
 
     # --- Observability ---------------------------------------------------------
@@ -118,6 +148,14 @@ class Settings(BaseSettings):
     # --- Logging -----------------------------------------------------------------
     log_level: str = "INFO"
     log_format: Literal["text", "json"] = "text"
+
+    def endpoint(self, role: ModelRole) -> ModelEndpoint:
+        """Model endpoint for a role, falling back to the VLLM_* defaults field by field."""
+        return ModelEndpoint(
+            base_url=getattr(self, f"{role}_base_url") or self.vllm_base_url,
+            api_key=getattr(self, f"{role}_api_key") or self.vllm_api_key,
+            model=getattr(self, f"{role}_model") or self.vllm_model,
+        )
 
     @property
     def capture_content(self) -> bool:

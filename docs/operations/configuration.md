@@ -20,17 +20,27 @@ is missing from this page.[^config] Template: `.env.example`.[^env]
 
 # Schema
 
-**vLLM**
+**Default chat model** (any OpenAI-compatible server: vLLM, Ollama, ...)
 
 | Variable | Default | Effect |
 |---|---|---|
-| `VLLM_BASE_URL` | `http://vllm-inference-service:8000/v1` | OpenAI-compatible endpoint for extraction, routing and the agent. |
+| `VLLM_BASE_URL` | `http://vllm-inference-service:8000/v1` | Endpoint for every role that is not overridden below. |
 | `VLLM_API_KEY` | `EMPTY` | Must match vLLM's `--api-key`. Secret. |
 | `VLLM_MODEL` | `meta-llama/Llama-3.3-70B-Instruct` | Served model name. |
 | `LLM_TIMEOUT_S` | `120` | Per-request timeout. |
 | `LLM_MAX_RETRIES` | `3` | Client retries on connection errors, 408/409/429 and 5xx. |
 | `AGENT_TEMPERATURE` | `0.1` | Agent sampling temperature. |
 | `AGENT_MAX_TOKENS` | `2048` | Max output tokens per agent model call. |
+
+**Per-role models** — each falls back to the `VLLM_*` value; use them to put roles on different models or
+hosts ([Local on Apple Silicon](local-apple-silicon.md)).
+
+| Variable | Default | Effect |
+|---|---|---|
+| `AGENT_BASE_URL` / `AGENT_API_KEY` / `AGENT_MODEL` | unset | Strands investigator (multi-turn tool calls). |
+| `EXTRACTION_BASE_URL` / `EXTRACTION_API_KEY` / `EXTRACTION_MODEL` | unset | Triple extraction and entity resolution. |
+| `ROUTER_BASE_URL` / `ROUTER_API_KEY` / `ROUTER_MODEL` | unset | Intake validation. |
+| `STRUCTURED_REASONING_EFFORT` | unset | Sent as `reasoning_effort` to router, extraction and judge (not the agent); `none` for thinking models. |
 
 **Embeddings**
 
@@ -108,7 +118,7 @@ is missing from this page.[^config] Template: `.env.example`.[^env]
 
 | Variable | Default | Effect |
 |---|---|---|
-| `JUDGE_BASE_URL` | unset (falls back to `VLLM_BASE_URL`) | Judge endpoint. |
+| `JUDGE_BASE_URL` / `JUDGE_API_KEY` | unset (fall back to `VLLM_*`) | Judge endpoint. |
 | `JUDGE_MODEL` | unset | Enables LLM-as-a-judge in `nexo eval`. |
 
 **Observability**

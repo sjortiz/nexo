@@ -24,7 +24,7 @@ from langchain_core.runnables import RunnableConfig
 from langchain_openai import ChatOpenAI, OpenAIEmbeddings
 from pydantic import BaseModel, ValidationError
 
-from nexo.config import Settings
+from nexo.config import ModelRole, Settings
 
 if TYPE_CHECKING:
     from strands.models.openai import OpenAIModel
@@ -38,11 +38,17 @@ class StructuredOutputError(RuntimeError):
     """The model did not produce schema-valid JSON within the retry budget."""
 
 
-def build_chat_model(settings: Settings, *, temperature: float = 0.0) -> ChatOpenAI:
+def build_chat_model(settings: Settings, *, role: ModelRole, temperature: float = 0.0) -> ChatOpenAI:
+    """LangChain client for a JSON-producing role (router, extraction, judge)."""
+    endpoint = settings.endpoint(role)
+    extra: dict[str, str] = {}
+    if settings.structured_reasoning_effort and role != "agent":
+        extra["reasoning_effort"] = settings.structured_reasoning_effort
     return ChatOpenAI(
-        base_url=settings.vllm_base_url,
-        api_key=settings.vllm_api_key,
-        model=settings.vllm_model,
+        **extra,
+        base_url=endpoint.base_url,
+        api_key=endpoint.api_key,
+        model=endpoint.model,
         temperature=temperature,
         timeout=settings.llm_timeout_s,
         # The openai client retries connection errors, 408/409/429 and 5xx
@@ -75,14 +81,15 @@ def build_strands_model(settings: Settings) -> OpenAIModel:
     """
     from strands.models.openai import OpenAIModel
 
+    endpoint = settings.endpoint("agent")
     return OpenAIModel(
         client_args={
-            "base_url": settings.vllm_base_url,
-            "api_key": settings.vllm_api_key.get_secret_value(),
+            "base_url": endpoint.base_url,
+            "api_key": endpoint.api_key.get_secret_value(),
             "timeout": settings.llm_timeout_s,
             "max_retries": settings.llm_max_retries,
         },
-        model_id=settings.vllm_model,
+        model_id=endpoint.model,
         params={"temperature": settings.agent_temperature, "max_tokens": settings.agent_max_tokens},
     )
 

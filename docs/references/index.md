@@ -16,6 +16,7 @@
 
 * [OpenTelemetry GenAI semantic conventions](opentelemetry-genai-conventions.md) - Span names, attributes and content capture for GenAI telemetry.
 * [LangSmith](langsmith.md) - Observability, evaluation and deployment platform, and its overlap with Nexo.
+* [Ollama](ollama.md) - Local model server for Apple Silicon and the capabilities Nexo relies on.
 
 # Documentation
 

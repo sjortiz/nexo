@@ -11,3 +11,4 @@
 * [ADR-0009: OpenTelemetry GenAI conventions, official instrumentation, content off](adr-0009-opentelemetry-genai-conventions.md) - Standard spans and metrics; no message content in telemetry by default.
 * [ADR-0010: Deferred graph enrichment](adr-0010-deferred-graph-enrichment.md) - Techniques from the guides postponed, with the trigger for each.
 * [ADR-0011: Where LangSmith fits](adr-0011-langsmith-adoption.md) - Proposed: trace backend and evaluation platform; workflow, review gate and prompts stay in Nexo.
+* [ADR-0012: Ollama for local runs, with model roles split across Macs](adr-0012-local-apple-silicon.md) - Native models on Apple Silicon; each role can point at its own host and model.

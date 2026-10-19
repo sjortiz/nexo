@@ -43,6 +43,22 @@ Traces: http://localhost:16686 (Jaeger); metrics: http://localhost:8889/metrics.
 pipelines). Relation ontology example: `deploy/ontology.example.json`. Neo4j Enterprise least-privilege reader:
 `deploy/neo4j-rbac.cypher`.
 
+## Run locally on Apple Silicon
+
+Every model runs natively through Ollama; each role (agent, extraction, router, judge, embeddings) can
+point at its own Mac. With two Macs, the large agent/extraction model goes on the M1 Max and the router,
+embeddings, judge, Neo4j and Nexo on the M5 Pro, joined by an SSH tunnel:
+
+```bash
+deploy/local/ollama-setup.sh m1-max-32        # on the M1 Max (m1-max-64 for 64 GB)
+deploy/local/ollama-setup.sh m5-pro-24        # on the M5 Pro
+ssh -N -L 11435:127.0.0.1:11434 you@m1-max.local
+cp deploy/local/nexo-two-macs.env.example .env
+NEXO_LIVE=1 pytest -m live -v                 # verify the models before use
+```
+
+Details: [Local on Apple Silicon](docs/operations/local-apple-silicon.md).
+
 ## Test
 
 ```bash
@@ -95,4 +111,5 @@ Observability, evaluation and documentation:
 - [OpenTelemetry GenAI semantic conventions](https://github.com/open-telemetry/semantic-conventions-genai) and
   [OpenTelemetry Python GenAI instrumentations](https://github.com/open-telemetry/opentelemetry-python-genai)
 - [LangSmith documentation](https://docs.langchain.com/langsmith)
+- [Ollama](https://github.com/ollama/ollama) and its [model library](https://ollama.com/library)
 - [Open Knowledge Format specification](https://github.com/GoogleCloudPlatform/knowledge-catalog/blob/main/okf/SPEC.md)

@@ -42,6 +42,7 @@ packages = ["src/nexo"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-q"
+markers = ["live: needs real model servers (NEXO_LIVE=1)"]
 
 [tool.ruff]
 line-length = 120

@@ -77,11 +77,9 @@ def _status(args: argparse.Namespace) -> int:
 
 def _eval(args: argparse.Namespace) -> int:
     """Each JSONL line: {"question", "relevant_chunk_ids": [...], "reference_answer"?}."""
-    from langchain_openai import ChatOpenAI
-
     from nexo.agents.investigator import Investigator
     from nexo.evaluation import judge_faithfulness, judge_relevancy, record_metrics, retrieval_scores
-    from nexo.llm import build_embeddings, build_strands_model
+    from nexo.llm import build_chat_model, build_embeddings, build_strands_model
     from nexo.storage.graph_store import GraphStore
     from nexo.storage.vector_store import LocalChunkStore
     from nexo.telemetry import setup_telemetry, traced_span
@@ -90,8 +88,7 @@ def _eval(args: argparse.Namespace) -> int:
     setup_telemetry(settings)
     judge = None
     if settings.judge_model:
-        judge = ChatOpenAI(base_url=settings.judge_base_url or settings.vllm_base_url, model=settings.judge_model,
-                           api_key=settings.vllm_api_key, temperature=0)
+        judge = build_chat_model(settings, role="judge")
     graph = GraphStore.from_settings(settings, read_only=True)
     chunks = LocalChunkStore(build_embeddings(settings), settings.vector_store_path)
     investigator = Investigator(model=build_strands_model(settings), graph=graph, chunks=chunks,
@@ -130,7 +127,7 @@ def _eval_extraction(args: argparse.Namespace) -> int:
     setup_telemetry(settings)
     ontology = Ontology.load(settings.ontology_path) if settings.ontology_path else None
     ingestor = KnowledgeGraphIngestor(
-        llm=build_chat_model(settings), chunk_store=LocalChunkStore(build_embeddings(settings)),
+        llm=build_chat_model(settings, role="extraction"), chunk_store=LocalChunkStore(build_embeddings(settings)),
         graph_writer=None, detector=NoopDetector(), settings=settings, ontology=ontology,
     )
     totals: dict[str, list] = {"predicted": [], "gold": []}

@@ -150,7 +150,7 @@ def open_runtime(settings: Settings) -> Iterator[Runtime]:
             settings=settings,
             investigator=investigator,
             detector=build_detector(settings.sensitive_data_provider, aws_region=settings.aws_region),
-            router_llm=build_chat_model(settings, temperature=0.0),
+            router_llm=build_chat_model(settings, role="router"),
         )
         yield Runtime(graph=build_graph(deps, checkpointer), settings=settings)
 
@@ -164,7 +164,7 @@ def open_ingestor(settings: Settings, *, writes: bool = True) -> Iterator[Knowle
         if writes:
             graph_store.ensure_schema()
         glossary = json.loads(settings.glossary_path.read_text()) if settings.glossary_path else {}
-        llm = build_chat_model(settings, temperature=0.0)
+        llm = build_chat_model(settings, role="extraction")
         yield KnowledgeGraphIngestor(
             llm=llm,
             chunk_store=LocalChunkStore(build_embeddings(settings), settings.vector_store_path),
