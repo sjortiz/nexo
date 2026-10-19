@@ -32,7 +32,7 @@ invoke_workflow nexo-investigation           INTERNAL  gen_ai.operation.name=inv
 ├─ langgraph.node router                     INTERNAL  langgraph.state_update.keys=[...]
 │  └─ chat {model}                           CLIENT    router call to vLLM (GenAI instrumentation)
 ├─ langgraph.node investigator               INTERNAL
-│  ├─ retrieval nexo-chunks                  INTERNAL  vector seeds (vector/hybrid strategies)
+│  ├─ retrieval nexo-chunks                  INTERNAL  seed search (nexo.retrieval.mode=hybrid|vector|keyword)
 │  └─ invoke_agent relationship-investigator INTERNAL  Strands
 │     └─ execute_event_loop_cycle            INTERNAL  Strands, one per turn
 │        ├─ chat                             INTERNAL  Strands model wrapper

@@ -27,7 +27,8 @@ sources:
   `InvestigationContext` (budget, clearance, evidence ledger).
 - **Fresh agent per request.** Strands agents hold conversation state; one is built per investigation,
   while the vLLM model client is shared.
-- **Seeds for vector/hybrid.** The top `SEED_CHUNKS` (5) semantic hits under the request's filter are
+- **Seeds for vector/hybrid.** The top `SEED_CHUNKS` (5) hits from the chunk store's search (hybrid BM25 +
+  vector by default) under the request's filter are
   placed in the prompt inside `<passage>` tags. Seeds count as fetched evidence.
 - **Untrusted content.** Tool output and seed passages are declared as data, never instructions.[^investigator]
 

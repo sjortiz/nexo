@@ -23,7 +23,7 @@ metadata filters and read-after-write consistency. Similarity search is secondar
 # Decision
 
 Depend on the `ChunkStore` protocol.[^vector-store] Ship `LocalChunkStore` for single-node use and tests.
-For production, implement it on Aurora/RDS PostgreSQL with pgvector; use OpenSearch Service if hybrid
+For production, implement it on PostgreSQL with pgvector (self-hosted or any managed Postgres); use OpenSearch if hybrid
 lexical + vector search or very high query rates become requirements.
 
 # Options considered
@@ -32,8 +32,8 @@ Per the AWS vector database guidance:[^aws-vdb]
 
 | Option | Fit |
 |---|---|
-| Aurora/RDS + pgvector | Best: primary-key lookup, SQL filters, ACID. |
-| OpenSearch Service | Good for hybrid search and high QPS; eventual consistency after writes. |
+| PostgreSQL + pgvector (incl. managed, e.g. Aurora/RDS) | Best: primary-key lookup, SQL filters, ACID. |
+| OpenSearch (incl. managed) | Good for hybrid search and high QPS; eventual consistency after writes. |
 | Neptune Analytics | Only if Neo4j were replaced with one combined graph + vector store. |
 | Bedrock Knowledge Bases | Managed pipeline; poor fit when the pipeline and LLM are self-hosted. |
 | Neo4j vector index | Fewer systems; couples chunk storage to the graph's scaling and backup. |

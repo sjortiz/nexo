@@ -84,8 +84,8 @@ NEO4J_TEST_URI=bolt://127.0.0.1:7688 NEO4J_TEST_PASSWORD=nexo-test-pass pytest t
 
 ## Production notes
 
-- `LocalChunkStore` is single-node. Implement `ChunkStore` on Aurora/RDS PostgreSQL + pgvector (exact id lookup, SQL
-  metadata filters, ACID) or OpenSearch Service (hybrid lexical + vector at high QPS).
+- `LocalChunkStore` is single-node (hybrid BM25 + vector search in-process). Implement `ChunkStore` on PostgreSQL +
+  pgvector (exact id lookup, SQL metadata filters, ACID) or OpenSearch (high QPS); both open source.
 - Human review pauses must survive restarts: use `CHECKPOINT_BACKEND=postgres` with more than one replica.
 - `SENSITIVE_DATA_PROVIDER=comprehend_medical` sends chunk text to Amazon Comprehend Medical; enable only where that
   flow is approved. Entity `proposed_codes` are LLM output until verified against a terminology service.

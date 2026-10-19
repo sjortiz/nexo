@@ -9,11 +9,10 @@ Search is hybrid by default: BM25 keyword ranking (exact names, codes, IDs
 that embeddings blur) and vector similarity (paraphrases), fused with
 Reciprocal Rank Fusion. Both run in-process with no extra dependency.
 
-For production, the AWS vector-database guidance points to Aurora/RDS
-PostgreSQL + pgvector for this access pattern (primary-key lookup, SQL
-metadata filters, ACID writes so a chunk is readable as soon as Neo4j
-references it), or OpenSearch Service when hybrid lexical+vector search or
-very high query rates matter. Implement `ChunkStore` against either.
+For production, PostgreSQL + pgvector fits this access pattern (primary-key
+lookup, SQL metadata filters, ACID writes so a chunk is readable as soon as
+Neo4j references it); OpenSearch fits very high query rates. Both are open
+source and run self-hosted or managed. Implement `ChunkStore` against either.
 """
 
 from __future__ import annotations

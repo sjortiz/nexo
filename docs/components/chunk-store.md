@@ -1,7 +1,7 @@
 ---
 type: Interface
 title: Chunk store
-description: Get-by-id, filtered similarity search and delete-by-document for chunk text and vectors.
+description: Get-by-id, filtered hybrid search (BM25 + vector) and delete-by-document for chunk text and vectors.
 resource: ../../src/nexo/storage/vector_store.py
 tags: [module-a, vector-store, embeddings]
 status: draft
@@ -21,7 +21,7 @@ sources:
 class ChunkStore(Protocol):
     def upsert(self, chunks, embedding_texts) -> None: ...
     def get_by_ids(self, chunk_ids) -> list[ChunkRecord]: ...       # graph -> text hop
-    def search(self, query, k, chunk_filter) -> list[ChunkRecord]: ...  # vector seeding
+    def search(self, query, k, chunk_filter) -> list[ChunkRecord]: ...  # seeding (hybrid by default)
     def delete_source(self, source_id, keep=frozenset()) -> int: ...  # re-ingestion
 ```
 
@@ -45,13 +45,27 @@ class ChunkStore(Protocol):
 applied before ranking in `search` and again when the agent fetches chunks. Undated chunks fail any
 date-bounded filter.
 
+# Search
+
+`RETRIEVAL_MODE` selects the ranking (see [configuration](../operations/configuration.md)):
+
+| Mode | Ranking | Good at |
+|---|---|---|
+| `hybrid` (default) | BM25 and vector rankings fused with Reciprocal Rank Fusion (k = 60) | Both: exact terms first, paraphrases still found |
+| `keyword` | BM25 only; chunks with no query term are never returned | Names, product codes, IDs, rare terms |
+| `vector` | Embedding similarity only | Paraphrases and cross-language matches |
+
+BM25 runs in-process over the embedded text (title, section path, chunk, glossary notes), with
+case- and accent-folded tokens so "compró" matches "compro". The index rebuilds lazily after any
+write. Each search is a `retrieval nexo-chunks` span with `nexo.retrieval.mode`.
+
 # Implementations
 
 | Backend | Status | Use |
 |---|---|---|
 | `LocalChunkStore` | implemented | Wraps LangChain `InMemoryVectorStore`; persisted to `VECTOR_STORE_PATH` with an atomic file replace. Single node only. |
-| Aurora/RDS PostgreSQL + pgvector | recommended next | Primary-key lookup, SQL metadata filters, ACID writes, so a chunk is readable as soon as Neo4j references it. |
-| Amazon OpenSearch Service | alternative | When hybrid lexical + vector search or very high query rates matter; eventual consistency after writes. |
+| PostgreSQL + pgvector (self-hosted or managed) | recommended next | Primary-key lookup, SQL metadata filters, ACID writes, so a chunk is readable as soon as Neo4j references it; full-text search for the BM25 side. |
+| OpenSearch (self-hosted or managed) | alternative | Very high query rates; native BM25 + vector; eventual consistency after writes. |
 
 The recommendation follows the AWS vector database guidance's decision criteria.[^aws-vdb] See
 [ADR-0004](../decisions/adr-0004-chunk-store-interface-and-pgvector.md).
