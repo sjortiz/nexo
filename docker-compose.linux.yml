@@ -1,0 +1,16 @@
+# Linux override for the nexo container.
+#
+#   podman compose -f docker-compose.yml -f docker-compose.linux.yml --profile app run --rm nexo ...
+#
+# On macOS, containers reach host services bound to 127.0.0.1 through
+# host.containers.internal. With rootless Podman on Linux (pasta) they cannot,
+# so the nexo container shares the host network instead and reaches host
+# Ollama, the SSH tunnel and the published Neo4j/collector ports on 127.0.0.1.
+services:
+  nexo:
+    network_mode: host
+    environment:
+      LOCAL_BASE_URL: http://127.0.0.1:11434/v1
+      REMOTE_BASE_URL: http://127.0.0.1:11435/v1
+      NEO4J_URI: neo4j://127.0.0.1:7687
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://127.0.0.1:4318
