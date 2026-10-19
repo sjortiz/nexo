@@ -31,7 +31,7 @@ def _tools(settings, graph, chunk_store, *, clearance=Sensitivity.INTERNAL, budg
 def test_query_tool_collects_chunk_ids_and_redacts_above_clearance(settings, chunk_store):
     graph = FakeGraph(rows=[
         {"a": {"name": "Acme", "chunk_ids": ["chk_" + "1" * 16]}, "hop": {"chunk_id": "chk_" + "2" * 16}},
-        {"a": {"name": "Patient X", "max_sensitivity_rank": 3, "chunk_id": "chk_" + "3" * 16}},
+        {"a": {"name": "Patient X", "sensitivity_rank": 3, "chunk_id": "chk_" + "3" * 16}},
     ])
     ctx, query, _ = _tools(settings, graph, chunk_store)
     out = json.loads(query("MATCH (a)-[r]-(b) RETURN a, r AS hop LIMIT 5"))

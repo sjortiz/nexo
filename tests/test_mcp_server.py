@@ -116,8 +116,8 @@ def test_get_chunks_withholds_and_reports_missing_and_invalid(settings, chunk_st
 
 def test_find_entities_is_parameterized_and_redacts(settings, chunk_store):
     graph = RoutedGraph({"MATCH (e:Entity)": [
-        {"entity": {"key": "Organization:acme", "name": "Acme", "max_sensitivity_rank": 1}},
-        {"entity": {"key": "Person:jane roe", "name": "Jane Roe", "max_sensitivity_rank": 3}},
+        {"entity": {"key": "Organization:acme", "name": "Acme", "sensitivity_rank": 1}},
+        {"entity": {"key": "Person:jane roe", "name": "Jane Roe", "sensitivity_rank": 3}},
     ]})
     server = build_mcp_server(graph=graph, chunks=chunk_store, settings=settings)
     out = data(call(server, "nexo_find_entities", {"name": "x' OR 1=1 //", "entity_type": "Organization"}))
@@ -128,28 +128,32 @@ def test_find_entities_is_parameterized_and_redacts(settings, chunk_store):
     assert bad.is_error and "unknown entity type" in bad.content[0].text
 
 
-def test_neighbors_hide_restricted_entities(settings, chunk_store):
-    rows = [
-        {"entity": {"key": "Organization:acme", "name": "Acme", "max_sensitivity_rank": 1}, "relation": "ACQUIRED",
-         "outgoing": True, "predicate": None, "certainty": "asserted", "valid_at": None, "chunk_ids": ["chk_a"],
-         "neighbor": {"key": "Organization:beta", "name": "Beta", "type": "Organization", "max_sensitivity_rank": 1}},
-        {"entity": {"key": "Organization:acme", "name": "Acme", "max_sensitivity_rank": 1}, "relation": "TREATS",
-         "outgoing": False, "predicate": None, "certainty": "asserted", "valid_at": None, "chunk_ids": ["chk_b"],
-         "neighbor": {"key": "Person:jane", "name": "Jane", "type": "Person", "max_sensitivity_rank": 3}},
-    ]
+def edge(relation: str, neighbor: str, neighbor_rank: int, edge_rank: int | None) -> dict[str, Any]:
+    return {"entity": {"key": "Organization:acme", "name": "Acme", "sensitivity_rank": 1}, "relation": relation,
+            "edge_rank": edge_rank, "outgoing": True, "predicate": None, "certainty": "asserted", "valid_at": None,
+            "chunk_ids": ["chk_a"], "neighbor": {"key": f"X:{neighbor}", "name": neighbor, "type": "Organization",
+                                                 "sensitivity_rank": neighbor_rank}}
+
+
+def test_neighbors_hide_restricted_entities_and_edges(settings, chunk_store):
+    rows = [edge("ACQUIRED", "Beta", 1, 1),
+            edge("TREATS", "Jane", 3, 3),        # neighbor above clearance
+            edge("PAID", "Gamma", 1, 3),         # visible neighbor, but only a PHI source states this edge
+            edge("OWNS", "Delta", 1, None)]      # edge without a rank: treated as most sensitive
     graph = RoutedGraph({"MATCH (e:Entity {key: $key})": rows})
     server = build_mcp_server(graph=graph, chunks=chunk_store, settings=settings)
     out = data(call(server, "nexo_neighbors", {"entity_key": "Organization:acme"}))
-    assert [e["neighbor"]["name"] for e in out["edges"]] == ["Beta"] and out["withheld"] == 1
+    assert [e["neighbor"]["name"] for e in out["edges"]] == ["Beta"] and out["withheld"] == 3
+    assert "edge_rank" not in out["edges"][0]
     restricted = RoutedGraph({"MATCH (e:Entity {key: $key})": [
-        {**rows[0], "entity": {"key": "Person:jane", "name": "Jane", "max_sensitivity_rank": 3}}]})
+        {**rows[0], "entity": {"key": "Person:jane", "name": "Jane", "sensitivity_rank": 3}}]})
     result = call(build_mcp_server(graph=restricted, chunks=chunk_store, settings=settings), "nexo_neighbors",
                   {"entity_key": "Person:jane"})
     assert result.is_error and "clearance" in result.content[0].text
 
 
 def test_graph_query_rejects_writes_and_redacts_rows(settings, chunk_store):
-    graph = RoutedGraph({"RETURN": [{"e": {"name": "Jane", "max_sensitivity_rank": 3, "chunk_id": "chk_" + "1" * 16},
+    graph = RoutedGraph({"RETURN": [{"e": {"name": "Jane", "sensitivity_rank": 3, "chunk_id": "chk_" + "1" * 16},
                                      "c": "chk_" + "2" * 16}]})
     server = build_mcp_server(graph=graph, chunks=chunk_store, settings=settings)
     rejected = call(server, "nexo_graph_query", {"cypher": "MATCH (n) DETACH DELETE n"})

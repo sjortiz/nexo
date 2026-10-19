@@ -164,7 +164,6 @@ def test_plan_writes_dedupes_mentions_and_keeps_surface_forms():
     assert relations["ACQUIRED"][0]["head_key"] == "Organization:acme holdings"  # resolved key, not extracted
     assert relations["ACQUIRED"][0]["predicate"] == "BOUGHT"
     assert {e["key"] for e in entities["Organization"]} == {"Organization:acme holdings", "Organization:beta"}
-    assert entities["Organization"][0]["sensitivity_rank"] == Sensitivity.PII.rank
     assert {(m["surface"], m["method"]) for m in mentions} == {
         ("Acme", "alias"), ("AHI", "stated_alias"), ("Beta", "new")}
 

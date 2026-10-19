@@ -21,8 +21,10 @@ sources:
 # Sensitivity levels
 
 Ordered `public` < `internal` < `pii` < `phi`. A chunk's level is the higher of the document's declared
-level and anything detected. Entities inherit the highest level of their supporting chunks
-(`max_sensitivity_rank`) and get `:PII` / `:PHI` labels.
+level and anything detected. Entities and relationships take the level of their **least** sensitive
+supporting chunk (`sensitivity_rank`): a caller sees them if any source they are cleared for supports
+them, while a fact stated only in a PHI document stays PHI. Entities carry matching `:PII` / `:PHI`
+labels; both are recomputed whenever a document is added, replaced or withdrawn.
 
 # Providers (`SENSITIVE_DATA_PROVIDER`)
 

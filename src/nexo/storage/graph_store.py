@@ -9,9 +9,12 @@ Neo4j's LLM Graph Builder):
     (:Entity)-[:<RELATION> {chunk_id, chunk_ids, evidence, certainty, valid_at, extracted_as}]->(:Entity)
 
 `chunk_id` is the chunk where an entity/edge was first extracted;
-`chunk_ids` accumulates every supporting chunk across documents. Entity
-`aliases` are derived from the surfaces on MENTIONED_IN, so withdrawing a
-document also withdraws the aliases (and merges) it contributed.
+`chunk_ids` accumulates every supporting chunk across documents. Derived
+properties are recomputed for every touched entity and edge on each replace:
+entity `aliases` from the surfaces on MENTIONED_IN (withdrawing a document
+withdraws the aliases and merges it contributed), and `sensitivity_rank` as
+the *least* sensitive supporting chunk - something is visible to a caller if
+any source they are cleared for supports it. The :PII/:PHI labels follow.
 """
 
 from __future__ import annotations
@@ -40,12 +43,12 @@ DATA_MODEL = """\
 (:Document)-[:FIRST_CHUNK]->(:Chunk {chunk_id, source_id, ordinal, section_path, sensitivity})
 (:Chunk)-[:NEXT_CHUNK]->(:Chunk), (:Chunk)-[:PART_OF]->(:Document)
 (:Entity:<EntityType>[:PII][:PHI] {key, name, aliases, type, description, chunk_id, chunk_ids, source_ids,
-                                  max_sensitivity_rank, proposed_codes_json})
+                                  sensitivity_rank, proposed_codes_json})
 (:Entity)-[:MENTIONED_IN {surface, resolution}]->(:Chunk)
-(:Entity)-[:<RELATION> {chunk_id, chunk_ids, evidence, certainty, valid_at, extracted_as}]->(:Entity)
+(:Entity)-[:<RELATION> {chunk_id, chunk_ids, evidence, certainty, valid_at, extracted_as, sensitivity_rank}]->(:Entity)
 (:Entity)-[:RELATED_TO {predicate, ...same properties}]->(:Entity)   # predicate outside the ontology
 EntityType is one of: """ + ", ".join(t.value for t in EntityType) + """
-max_sensitivity_rank: 0=public 1=internal 2=pii 3=phi"""
+sensitivity_rank (least sensitive supporting source): 0=public 1=internal 2=pii 3=phi"""
 
 # Connection drops surface as ServiceUnavailable/SessionExpired. Transient
 # server errors inside managed transactions are already retried by the driver.
@@ -143,7 +146,7 @@ class GraphStore:
                 _write_lexical(tx, document, chunks)
             if triples:
                 _write_domain(tx, *plan)
-            _refresh_aliases(tx, sorted(affected | {row["key"] for row in plan[1]}))
+            _refresh_derived(tx, sorted(affected | {row["key"] for row in plan[1]}))
 
         with self._span("replace_source"), \
                 self._driver.session(database=self._database, default_access_mode=WRITE_ACCESS) as session:
@@ -224,7 +227,6 @@ def _plan_writes(triples: Sequence[GroundedTriple]):
                     "description": ref.description,
                     "chunk_id": grounded.chunk_id,
                     "source_id": grounded.source_id,
-                    "sensitivity_rank": grounded.sensitivity.rank,
                     "codes": json.dumps({k.value: v for k, v in ref.proposed_codes.items()}, sort_keys=True),
                 },
             )
@@ -296,18 +298,11 @@ def _write_domain(tx: ManagedTransaction, entities, mentions, relations) -> None
                 MERGE (e:Entity {{key: row.key}})
                   ON CREATE SET e.name = row.name, e.type = row.type, e.chunk_id = row.chunk_id,
                                 e.chunk_ids = [], e.source_ids = [], e.aliases = [], e.description = row.description,
-                                e.max_sensitivity_rank = row.sensitivity_rank, e.proposed_codes_json = row.codes,
-                                e.created_at = datetime()
+                                e.proposed_codes_json = row.codes, e.created_at = datetime()
                 SET e:`{label}`,
                     e.chunk_ids = CASE WHEN row.chunk_id IN e.chunk_ids THEN e.chunk_ids ELSE e.chunk_ids + row.chunk_id END,
                     e.source_ids = CASE WHEN row.source_id IN e.source_ids THEN e.source_ids ELSE e.source_ids + row.source_id END,
-                    e.description = CASE WHEN coalesce(e.description, '') = '' THEN row.description ELSE e.description END,
-                    e.max_sensitivity_rank = CASE WHEN row.sensitivity_rank > e.max_sensitivity_rank
-                                                  THEN row.sensitivity_rank ELSE e.max_sensitivity_rank END
-                // Sensitivity labels let Enterprise RBAC hide nodes per role,
-                // e.g. DENY TRAVERSE ON GRAPH neo4j NODES PHI TO internal_reader.
-                FOREACH (_ IN CASE WHEN e.max_sensitivity_rank >= 2 THEN [1] ELSE [] END | SET e:PII)
-                FOREACH (_ IN CASE WHEN e.max_sensitivity_rank >= 3 THEN [1] ELSE [] END | SET e:PHI)
+                    e.description = CASE WHEN coalesce(e.description, '') = '' THEN row.description ELSE e.description END
                 """,
             ),
             rows=rows,
@@ -375,16 +370,38 @@ def _delete_source(tx: ManagedTransaction, source_id: str) -> set[str]:
     return affected
 
 
-def _refresh_aliases(tx: ManagedTransaction, keys: Sequence[str]) -> None:
+_RANK = "CASE c.sensitivity WHEN 'public' THEN 0 WHEN 'internal' THEN 1 WHEN 'pii' THEN 2 ELSE 3 END"
+
+
+def _refresh_derived(tx: ManagedTransaction, keys: Sequence[str]) -> None:
+    """Recompute aliases, sensitivity and labels of the given entities and their edges."""
     tx.run(
-        """
+        cast(LiteralString, f"""
         UNWIND $keys AS key
-        MATCH (e:Entity {key: key})
-        SET e.aliases = COLLECT {
-            MATCH (e)-[m:MENTIONED_IN]->(:Chunk) WHERE m.surface <> e.name
-            RETURN DISTINCT m.surface AS surface ORDER BY surface
-        }
-        """,
+        MATCH (e:Entity {{key: key}})
+        WITH e, COLLECT {{ MATCH (e)-[:MENTIONED_IN]->(c:Chunk) RETURN DISTINCT {_RANK} }} AS ranks
+        SET e.aliases = COLLECT {{
+                MATCH (e)-[m:MENTIONED_IN]->(:Chunk) WHERE m.surface <> e.name
+                RETURN DISTINCT m.surface AS surface ORDER BY surface
+            }},
+            e.sensitivity_rank = reduce(least = 3, r IN ranks | CASE WHEN r < least THEN r ELSE least END)
+        // Sensitivity labels let Enterprise RBAC hide nodes per role,
+        // e.g. DENY TRAVERSE ON GRAPH neo4j NODES PHI TO internal_reader.
+        REMOVE e:PII:PHI
+        WITH e
+        FOREACH (_ IN CASE WHEN e.sensitivity_rank >= 2 THEN [1] ELSE [] END | SET e:PII)
+        FOREACH (_ IN CASE WHEN e.sensitivity_rank >= 3 THEN [1] ELSE [] END | SET e:PHI)
+        """),
+        keys=list(keys),
+    ).consume()
+    tx.run(
+        cast(LiteralString, f"""
+        UNWIND $keys AS key
+        MATCH (:Entity {{key: key}})-[r]-(:Entity)
+        WITH DISTINCT r
+        WITH r, COLLECT {{ MATCH (c:Chunk) WHERE c.chunk_id IN r.chunk_ids RETURN {_RANK} }} AS ranks
+        SET r.sensitivity_rank = reduce(least = 3, x IN ranks | CASE WHEN x < least THEN x ELSE least END)
+        """),
         keys=list(keys),
     ).consume()
 

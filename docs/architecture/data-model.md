@@ -44,7 +44,7 @@ of a document is written, including chunks with no extracted facts.
 | `chunk_id` | string | Chunk where the entity was first extracted. |
 | `chunk_ids` | list | Every chunk that mentions it, across documents. |
 | `source_ids` | list | Every document that mentions it. |
-| `max_sensitivity_rank` | int | Highest sensitivity of any supporting chunk: 0 public, 1 internal, 2 pii, 3 phi. |
+| `sensitivity_rank` | int | Least sensitive chunk that mentions it (0 public, 1 internal, 2 pii, 3 phi): visible to a caller cleared for any one of its sources. `:PII`/`:PHI` labels follow it. |
 | `proposed_codes_json` | string | Terminology codes printed in the source (ICD10CM, RXNORM, SNOMEDCT, MESH, UMLS); unverified. |
 
 **`-[:MENTIONED_IN]->`** — `surface` (the name as written) and `resolution` (`exact`, `alias`,
@@ -63,6 +63,7 @@ or the normalized predicate when no ontology is configured. Out-of-ontology pred
 | `valid_at` | ISO date the fact holds, when stated. |
 | `extracted_as` | Every extracted predicate that produced this edge (e.g. `BOUGHT`, `ACQUIRED_BY`). |
 | `predicate` | `RELATED_TO` only: the original predicate. |
+| `sensitivity_rank` | Least sensitive chunk in `chunk_ids`: a fact stated only in a PHI document stays PHI even between visible entities. |
 
 # Entity types
 
@@ -85,8 +86,9 @@ chunks, then swap the document's subgraph in one transaction, then delete supers
 2. Deletes edges, chunks, the document node and entities that only this document supported.
 3. Re-points `chunk_id` to a surviving chunk where the first-seen chunk is gone.
 4. Writes the document, its chunks and their order, then upserts the new triples and mentions.
-5. Recomputes `aliases` for every entity it touched, so a withdrawn document takes its aliases
-   (and merges) with it.
+5. Recomputes `aliases`, `sensitivity_rank` and the `:PII`/`:PHI` labels for every entity it touched
+   and their edges, so a withdrawn document takes its aliases, merges and sensitivity with it (ranks go
+   down as well as up).
 
 Cross-document merging, label assignment, chunk ordering, alias withdrawal and withdrawal
 cleanup are verified against Neo4j 5.26.[^it]

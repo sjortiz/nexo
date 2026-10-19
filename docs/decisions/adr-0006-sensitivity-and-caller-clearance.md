@@ -23,8 +23,11 @@ access.
 
 # Decision
 
-- Classify each chunk at ingestion (declared level, raised by detection); propagate the highest level
-  to entities as `max_sensitivity_rank` and `:PII` / `:PHI` labels.
+- Classify each chunk at ingestion (declared level, raised by detection). Entities and relationships
+  take the level of their least sensitive supporting chunk (`sensitivity_rank`, recomputed on every
+  change), and entities carry matching `:PII` / `:PHI` labels. Taking the most sensitive source instead
+  hid an organization from internal callers as soon as one PHI note mentioned it, and never let a level
+  go back down.
 - Take `caller_clearance` from the authenticated caller and copy it into the investigation scope after
   routing.
 - Enforce it where data leaves a store: chunk text is withheld above clearance, node maps are redacted,

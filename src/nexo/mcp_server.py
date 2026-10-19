@@ -150,7 +150,7 @@ def build_mcp_server(*, graph: GraphReader, chunks: ChunkStore, settings: Settin
                 "MATCH (e:Entity) WHERE ($type IS NULL OR e.type = $type) AND "
                 "(toLower(e.name) CONTAINS toLower($name) "
                 " OR any(a IN coalesce(e.aliases, []) WHERE toLower(a) CONTAINS toLower($name))) "
-                "RETURN e {.key, .name, .type, .aliases, .description, .chunk_ids, .max_sensitivity_rank} AS entity "
+                "RETURN e {.key, .name, .type, .aliases, .description, .chunk_ids, .sensitivity_rank} AS entity "
                 "ORDER BY size(e.chunk_ids) DESC LIMIT $limit",
                 {"name": name, "type": entity_type, "limit": limit})
             return {"entities": [row["entity"] for row in redact_above_clearance(result.rows, clearance.rank)]}
@@ -166,16 +166,19 @@ def build_mcp_server(*, graph: GraphReader, chunks: ChunkStore, settings: Settin
             # Entity-to-Entity only: lexical edges (MENTIONED_IN, PART_OF, NEXT_CHUNK) never match.
             result = read(
                 "MATCH (e:Entity {key: $key})-[r]-(n:Entity) "
-                "RETURN e {.key, .name, .max_sensitivity_rank} AS entity, type(r) AS relation, "
+                "RETURN e {.key, .name, .sensitivity_rank} AS entity, type(r) AS relation, "
+                "r.sensitivity_rank AS edge_rank, "
                 "startNode(r) = e AS outgoing, r.predicate AS predicate, r.certainty AS certainty, "
                 "r.valid_at AS valid_at, r.chunk_ids AS chunk_ids, "
-                "n {.key, .name, .type, .max_sensitivity_rank} AS neighbor LIMIT $limit",
+                "n {.key, .name, .type, .sensitivity_rank} AS neighbor LIMIT $limit",
                 {"key": entity_key, "limit": limit})
             rows = redact_above_clearance(result.rows, clearance.rank)
             if rows and "redacted" in rows[0]["entity"]:
                 raise ToolError("entity is above this server's clearance")
-            edges = [{k: v for k, v in row.items() if k != "entity"} for row in rows
-                     if "redacted" not in row["neighbor"]]
+            # An edge is visible only if a source within clearance supports it (and its neighbor is visible).
+            edges = [{k: v for k, v in row.items() if k not in ("entity", "edge_rank")} for row in rows
+                     if "redacted" not in row["neighbor"] and (row["edge_rank"] if row["edge_rank"] is not None
+                                                               else 3) <= clearance.rank]
             return {"entity_key": entity_key, "edges": edges, "truncated": result.truncated,
                     "withheld": len(rows) - len(edges)}
 

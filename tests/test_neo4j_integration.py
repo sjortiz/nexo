@@ -69,7 +69,9 @@ def test_replace_source_merges_provenance_and_cleans_up(store):
     doc_a = [_row(C1, "a", acme, "ACQUIRED", beta),
              _row(C2, "a", beta, "TREATS", _resolved("Jane Roe", "Person"), Sensitivity.PHI)]
     doc_b = [_row(C3, "b", _resolved("acme"), "ACQUIRED", _resolved("beta labs"))]
-    assert store.replace_source(DocumentMetadata(source_id="a"), _chunks("a", C1, C2), doc_a) == 2
+    chunks_a = _chunks("a", C1, C2)
+    chunks_a[1] = chunks_a[1].model_copy(update={"sensitivity": Sensitivity.PHI})  # the chunk about Jane Roe
+    assert store.replace_source(DocumentMetadata(source_id="a"), chunks_a, doc_a) == 2
     store.replace_source(DocumentMetadata(source_id="b"), _chunks("b", C3), doc_b)
 
     acme_row = store.run_read_query(
@@ -182,6 +184,58 @@ def test_ingestion_resolves_across_documents_through_the_graph(store, settings, 
     assert acme == [{"aliases": ["Acme Hldgs"], "targets": ["Beta Labs", "Gamma Corp"]}]
     assert store.run_read_query("MATCH (e:Entity) WHERE e.name STARTS WITH 'Acme' RETURN count(e) AS n").rows == [
         {"n": 1}]
+
+
+def test_sensitivity_is_the_least_sensitive_source_and_follows_withdrawals(store):
+    acme, beta = _resolved("Acme"), _resolved("Beta")
+
+    def state():
+        entity = store.run_read_query(
+            "MATCH (e:Entity {name: 'Acme'}) RETURN e.sensitivity_rank AS rank, labels(e) AS labels").rows[0]
+        edge = store.run_read_query("MATCH (:Entity)-[r:ACQUIRED]->(:Entity) RETURN r.sensitivity_rank AS rank").rows
+        return entity["rank"], {"PII", "PHI"} & set(entity["labels"]), [e["rank"] for e in edge]
+
+    phi = Sensitivity.PHI
+    store.replace_source(DocumentMetadata(source_id="clinic", sensitivity=phi), _chunks("clinic", C1, sensitivity=phi),
+                         [_row(C1, "clinic", acme, "ACQUIRED", beta, phi)])
+    assert state() == (3, {"PII", "PHI"}, [3])  # only a PHI source: PHI
+
+    store.replace_source(DocumentMetadata(source_id="memo"), _chunks("memo", C2),
+                         [_row(C2, "memo", acme, "ACQUIRED", beta)])
+    assert state() == (1, set(), [1])  # an internal source states it too: visible to internal callers
+
+    store.replace_source(DocumentMetadata(source_id="memo"), [], [])  # memo withdrawn
+    assert state() == (3, {"PII", "PHI"}, [3])  # back to PHI; labels return
+
+
+def test_mcp_tools_against_a_real_graph(store, settings, chunk_store):
+    from nexo.mcp_server import build_mcp_server
+    from tests.test_mcp_server import call, data
+
+    acme, beta, jane = _resolved("Acme Holdings"), _resolved("Beta Labs"), _resolved("Jane Roe", "Person")
+    store.replace_source(DocumentMetadata(source_id="deals", title="Deals", doc_type="memo"), _chunks("deals", C1),
+                         [_row(C1, "deals", acme, "ACQUIRED", beta)])
+    store.replace_source(DocumentMetadata(source_id="clinic", sensitivity=Sensitivity.PHI),
+                         _chunks("clinic", C2, sensitivity=Sensitivity.PHI),
+                         [_row(C2, "clinic", beta, "TREATS", jane, Sensitivity.PHI)])
+    server = build_mcp_server(graph=store, chunks=chunk_store, settings=settings)
+
+    index = data(call(server, "nexo_index"))
+    assert [d["source_id"] for d in index["documents"]] == ["deals"] and index["documents_withheld"] == 1
+    assert "ACQUIRED" in index["schema"]
+
+    entities = data(call(server, "nexo_find_entities", {"name": "acme"}))["entities"]
+    assert [e["key"] for e in entities] == ["Organization:acme holdings"]
+    neighbors = data(call(server, "nexo_neighbors", {"entity_key": "Organization:beta labs"}))
+    assert [(e["relation"], e["outgoing"], e["neighbor"]["name"]) for e in neighbors["edges"]] == [
+        ("ACQUIRED", False, "Acme Holdings")]
+    assert neighbors["withheld"] == 1  # Jane Roe is PHI
+    hidden = call(server, "nexo_neighbors", {"entity_key": "Person:jane roe"})
+    assert hidden.is_error and "clearance" in hidden.content[0].text
+
+    rows = data(call(server, "nexo_graph_query", {
+        "cypher": "MATCH (a:Entity)-[r:ACQUIRED]->(b:Entity) RETURN a.name AS a, b.name AS b, r.chunk_id AS c"}))
+    assert rows["rows"] == [{"a": "Acme Holdings", "b": "Beta Labs", "c": C1}] and rows["chunk_ids_found"] == [C1]
 
 
 def test_read_transaction_rejects_writes_server_side(store):

@@ -26,7 +26,7 @@ query_knowledge_graph(cypher_query: str) -> str  # JSON
 1. Reserves one call from the investigation's tool budget.
 2. Validates the query with the [read-only guard](graph-store.md#read-only-enforcement).
 3. Runs it through `GraphStore.run_read_query` (READ transaction, timeout, row cap).
-4. Redacts any node or relationship map whose `max_sensitivity_rank` is above the caller's clearance.
+4. Redacts any node or relationship map whose `sensitivity_rank` is above the caller's clearance.
 5. Collects every value matching `chk_[0-9a-f]{16}` anywhere in the rows into `chunk_ids_found`.
 6. Serializes within `TOOL_RESULT_MAX_CHARS` (12000), dropping trailing rows (counted in
    `omitted_for_size`) rather than cutting JSON.[^tools]

@@ -76,13 +76,13 @@ def collect_chunk_ids(value: Any, found: set[str]) -> None:
 
 
 def redact_above_clearance(value: Any, clearance_rank: int) -> Any:
-    """Redact node/relationship maps whose sensitivity exceeds the caller's clearance.
+    """Redact node/relationship maps whose sensitivity_rank exceeds the caller's clearance.
 
     Only catches values projected as whole nodes; scalar projections
     (RETURN e.name) need database-side RBAC on the :PII/:PHI labels.
     """
     if isinstance(value, dict):
-        if int(value.get("max_sensitivity_rank", 0) or 0) > clearance_rank:
+        if int(value.get("sensitivity_rank", 0) or 0) > clearance_rank:
             return {"redacted": "above caller clearance"}
         return {k: redact_above_clearance(v, clearance_rank) for k, v in value.items()}
     if isinstance(value, list):
