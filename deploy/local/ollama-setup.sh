@@ -33,7 +33,7 @@ if [[ -z "$profile" ]]; then
   exit 2
 fi
 
-command -v python3 >/dev/null || { echo "python3 is required (xcode-select --install)" >&2; exit 1; }
+command -v python3 >/dev/null || { echo "python3 is required (macOS: xcode-select --install; Linux: your package manager)" >&2; exit 1; }
 plan="$(python3 "$repo/src/nexo/local_profiles.py" plan "$profile" "$roles" --format shell)"
 eval "$plan"
 echo "profile $profile, role set $roles: ${MODELS} (~${WEIGHTS_GB} GB of weights, context ${CONTEXT_LENGTH})"

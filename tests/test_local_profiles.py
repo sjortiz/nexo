@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import os
 import re
+import shutil
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -125,8 +127,12 @@ def test_local_env_template_resolves_to_a_single_mac():
 
 
 def _run_script(*args: str, **env: str) -> subprocess.CompletedProcess[str]:
-    # A PATH without Homebrew: the script must resolve the plan, then stop before touching Ollama.
-    clean = {"PATH": "/usr/bin:/bin", "HOME": os.environ.get("HOME", "/tmp"), **env}
+    # PATH with this interpreter's python3 but without Ollama: the script must resolve the
+    # plan, then stop before touching Ollama (macOS: Homebrew; Linux: /usr/local/bin).
+    path = os.pathsep.join([str(Path(sys.executable).parent), "/usr/bin", "/bin"])
+    if shutil.which("ollama", path=path):
+        pytest.skip("ollama is on the test PATH; cannot check the not-installed path")
+    clean = {"PATH": path, "HOME": os.environ.get("HOME", "/tmp"), **env}
     return subprocess.run(["bash", str(SCRIPT), *args], capture_output=True, text=True, env=clean, cwd=ROOT,
                           timeout=60)
 

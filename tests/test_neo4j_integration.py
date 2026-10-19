@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import os
 from datetime import UTC, datetime
+from urllib.parse import urlparse
 
 import pytest
 from neo4j import GraphDatabase
@@ -202,7 +203,7 @@ def test_row_cap_tool_redaction_and_db_span(store, settings, spans):
     [db_span] = [s for s in spans.get_finished_spans() if s.name == "agent_query"]
     assert db_span.kind is SpanKind.CLIENT
     assert db_span.attributes["db.system.name"] == "neo4j" and db_span.attributes["db.namespace"] == "neo4j"
-    assert db_span.attributes["server.address"] == "127.0.0.1"
+    assert db_span.attributes["server.address"] == urlparse(URI).hostname
     assert "db.query.text" not in db_span.attributes  # content capture is off by default
     assert "(:Organization)-[:PARTNERS_WITH]->(:Organization)  x60" in store.describe_schema()
 
