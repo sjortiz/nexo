@@ -31,10 +31,34 @@ def test_profile_names_pick_the_largest_tier_that_fits(name, chip, tier):
     assert (host.chip, host.tier_gb) == (chip, tier)
 
 
-@pytest.mark.parametrize("name", ["m1-max", "x1-max-64", "m1-mega-64", "m1-max-64gb", "", "m1-max-8"])
+@pytest.mark.parametrize(
+    ("name", "kind", "tier"),
+    [("gpu-24", "gpu", 24), ("GPU-80", "gpu", 64), ("gpu-16", "gpu", 16), ("cpu-64", "cpu", 64), ("cpu-20", "cpu", 16)],
+)
+def test_linux_gpu_and_cpu_profiles_pick_tiers_by_vram_or_ram(name, kind, tier):
+    host = lp.parse_profile(name)
+    assert (host.kind, host.tier_gb, host.chip) == (kind, tier, kind.upper())
+
+
+@pytest.mark.parametrize("name", ["m1-max", "x1-max-64", "m1-mega-64", "m1-max-64gb", "", "m1-max-8",
+                                  "gpu", "gpu-8", "tpu-64", "gpu-24-max", "cpu--64"])
 def test_invalid_or_too_small_profiles_are_rejected(name):
     with pytest.raises(lp.ProfileError):
         lp.parse_profile(name)
+
+
+def test_too_small_errors_name_the_right_kind_of_memory():
+    for name, unit in (("m1-8", "unified memory"), ("gpu-8", "VRAM"), ("cpu-8", "RAM")):
+        with pytest.raises(lp.ProfileError, match=unit):
+            lp.parse_profile(name)
+
+
+def test_a_mac_can_use_a_linux_gpu_box_for_the_agent():
+    settings = Settings(_env_file=None, local_profile="m5-pro-24", remote_profile="gpu-48",
+                        remote_base_url="http://localhost:11436/v1")
+    assert settings.endpoint("agent").model == lp.plan("gpu-48", "heavy").roles["agent"]
+    assert settings.endpoint("agent").base_url == "http://localhost:11436/v1"
+    assert settings.endpoint("router").base_url == "http://localhost:11434/v1"
 
 
 @pytest.mark.parametrize("tier", sorted(lp.TIERS))

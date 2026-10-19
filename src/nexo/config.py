@@ -156,7 +156,7 @@ class Settings(BaseSettings):
     log_level: str = "INFO"
     log_format: Literal["text", "json"] = "text"
 
-    # --- Local hardware profiles (Ollama on Apple Silicon) -----------------------
+    # --- Local hardware profiles (Ollama: Apple Silicon, Linux GPU or CPU) -------
     # LOCAL_PROFILE alone: this Mac serves every role. With REMOTE_PROFILE, the
     # remote Mac serves the agent and extraction models (through REMOTE_BASE_URL,
     # usually an SSH tunnel) and this Mac serves router, judge and embeddings.

@@ -1,15 +1,20 @@
 """Hardware profiles for running Nexo's models locally with Ollama.
 
-A profile names a Mac by chip and unified memory, e.g. `m1-max-64`, `m5-pro-24`
-or `m1-pro-16`. Memory picks the model tier (the largest tier that fits); the
-chip is informational. One catalog serves both Nexo (settings) and
+A profile names a machine and the memory its models can use:
+
+  m1-max-64, m5-pro-24, m1-pro-16   Apple Silicon: chip and unified memory
+  gpu-24, gpu-48                    Linux/Windows with an NVIDIA or AMD GPU: VRAM
+  cpu-64                            CPU only: system RAM (works, but slowly)
+
+Memory picks the model tier (the largest tier that fits); the chip is
+informational. One catalog serves both Nexo (settings) and
 `deploy/local/ollama-setup.sh`, so the models Nexo asks for are the models the
 script pulls.
 
 Role sets:
-  single - one Mac runs every role
-  heavy  - the agent and extraction/resolution models (the large Mac)
-  light  - router, judge and embeddings (the Mac that also runs Neo4j and Nexo)
+  single - one machine runs every role
+  heavy  - the agent and extraction/resolution models (the large machine)
+  light  - router, judge and embeddings (the machine that also runs Neo4j and Nexo)
 
 Standard library only: the setup script runs this file directly with python3.
 
@@ -24,7 +29,8 @@ import re
 import sys
 from dataclasses import asdict, dataclass
 
-PROFILE_RE = re.compile(r"^m(?P<generation>[1-9])(?:-(?P<variant>pro|max|ultra))?-(?P<memory>\d{1,3})$")
+APPLE_RE = re.compile(r"^m(?P<generation>[1-9])(?:-(?P<variant>pro|max|ultra))?-(?P<memory>\d{1,3})$")
+ACCELERATOR_RE = re.compile(r"^(?P<kind>gpu|cpu)-(?P<memory>\d{1,4})$")
 
 AGENT_ROLES = ("agent", "extraction")
 LIGHT_ROLES = ("router", "judge", "embedding")
@@ -87,7 +93,8 @@ class ProfileError(ValueError):
 @dataclass(frozen=True)
 class HostProfile:
     name: str
-    chip: str
+    chip: str  # "M1 Max", "GPU", "CPU"
+    kind: str  # apple | gpu | cpu
     memory_gb: int
     tier_gb: int
 
@@ -112,15 +119,21 @@ class Plan:
 
 
 def parse_profile(name: str) -> HostProfile:
-    match = PROFILE_RE.fullmatch(name.strip().lower())
-    if not match:
-        raise ProfileError(f"invalid profile {name!r}: expected e.g. m1-max-64, m5-pro-24, m2-16")
+    normalized = name.strip().lower()
+    if match := APPLE_RE.fullmatch(normalized):
+        kind = "apple"
+        chip = f"M{match['generation']}" + (f" {match['variant'].capitalize()}" if match["variant"] else "")
+    elif match := ACCELERATOR_RE.fullmatch(normalized):
+        kind = match["kind"]
+        chip = kind.upper()
+    else:
+        raise ProfileError(f"invalid profile {name!r}: expected e.g. m1-max-64, m5-pro-24, gpu-24, cpu-64")
     memory = int(match["memory"])
     eligible = [tier for tier in TIERS if tier <= memory]
     if not eligible:
-        raise ProfileError(f"{name}: at least {min(TIERS)} GB of unified memory is required")
-    chip = f"M{match['generation']}" + (f" {match['variant'].capitalize()}" if match["variant"] else "")
-    return HostProfile(name=name.strip().lower(), chip=chip, memory_gb=memory, tier_gb=max(eligible))
+        unit = {"apple": "unified memory", "gpu": "VRAM", "cpu": "RAM"}[kind]
+        raise ProfileError(f"{name}: at least {min(TIERS)} GB of {unit} is required")
+    return HostProfile(name=normalized, chip=chip, kind=kind, memory_gb=memory, tier_gb=max(eligible))
 
 
 def plan(profile: str, role_set: str = "single") -> Plan:
