@@ -41,6 +41,7 @@ packages = ["src/nexo"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+pythonpath = ["."]  # tests share helpers via `from tests.conftest import ...`
 addopts = "-q"
 markers = ["live: needs real model servers (NEXO_LIVE=1)"]
 
