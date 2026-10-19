@@ -103,6 +103,7 @@ hosts ([Local on Apple Silicon](local-apple-silicon.md)).
 | `SENSITIVE_DATA_POLICY` | `tag` | `tag` or `redact`. |
 | `AWS_REGION` | unset | Required for `comprehend_medical`. |
 | `DEFAULT_CLEARANCE` | `internal` | Clearance when the caller does not pass one. |
+| `MCP_CLEARANCE` | unset (= `DEFAULT_CLEARANCE`) | Clearance of the `nexo mcp` server: one per server, since MCP over stdio has no per-user identity. |
 
 **Investigator agent**
 

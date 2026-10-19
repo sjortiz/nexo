@@ -113,6 +113,9 @@ class Settings(BaseSettings):
     aws_region: str | None = None
     # Highest sensitivity a caller may see when the request does not say.
     default_clearance: Literal["public", "internal", "pii", "phi"] = "internal"
+    # Clearance of the MCP server (`nexo mcp`); one per server, since MCP over
+    # stdio has no per-user identity. Unset = DEFAULT_CLEARANCE.
+    mcp_clearance: Literal["public", "internal", "pii", "phi"] | None = None
 
     # --- Investigator agent budget -------------------------------------------
     agent_max_turns: int = Field(default=12, ge=1)

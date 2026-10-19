@@ -63,19 +63,19 @@ class InvestigationContext:
             self.calls.append(summary)
 
 
-def _collect_chunk_ids(value: Any, found: set[str]) -> None:
+def collect_chunk_ids(value: Any, found: set[str]) -> None:
     if isinstance(value, str):
         if CHUNK_ID_RE.fullmatch(value):
             found.add(value)
     elif isinstance(value, dict):
         for item in value.values():
-            _collect_chunk_ids(item, found)
+            collect_chunk_ids(item, found)
     elif isinstance(value, (list, tuple)):
         for item in value:
-            _collect_chunk_ids(item, found)
+            collect_chunk_ids(item, found)
 
 
-def _redact_above(value: Any, clearance_rank: int) -> Any:
+def redact_above_clearance(value: Any, clearance_rank: int) -> Any:
     """Redact node/relationship maps whose sensitivity exceeds the caller's clearance.
 
     Only catches values projected as whole nodes; scalar projections
@@ -84,9 +84,9 @@ def _redact_above(value: Any, clearance_rank: int) -> Any:
     if isinstance(value, dict):
         if int(value.get("max_sensitivity_rank", 0) or 0) > clearance_rank:
             return {"redacted": "above caller clearance"}
-        return {k: _redact_above(v, clearance_rank) for k, v in value.items()}
+        return {k: redact_above_clearance(v, clearance_rank) for k, v in value.items()}
     if isinstance(value, list):
-        return [_redact_above(v, clearance_rank) for v in value]
+        return [redact_above_clearance(v, clearance_rank) for v in value]
     return value
 
 
@@ -143,9 +143,9 @@ def build_investigation_tools(
             span.set_attribute("error.type", exc.code or "neo4j_error")
             return _finish(ctx, "query_knowledge_graph", started, False, exc.code or "neo4j error",
                            {"error": exc.message or str(exc), "code": exc.code})
-        rows = _redact_above(result.rows, clearance.rank)
+        rows = redact_above_clearance(result.rows, clearance.rank)
         found: set[str] = set()
-        _collect_chunk_ids(rows, found)
+        collect_chunk_ids(rows, found)
         with ctx._lock:
             ctx.discovered_chunk_ids |= found
         span.set_attributes({"nexo.graph.rows": len(rows), "nexo.graph.truncated": result.truncated,

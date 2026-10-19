@@ -22,6 +22,7 @@ dependencies = [
     # pinned with its util package; do not also install instrumentation-openai-v2.
     "opentelemetry-instrumentation-genai-openai==1.2b0",
     "opentelemetry-util-genai==1.2b0",
+    "mcp>=2.1,<3",  # Model Context Protocol server (`nexo mcp`)
 ]
 
 [project.optional-dependencies]

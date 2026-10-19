@@ -59,8 +59,9 @@ class JsonFormatter(logging.Formatter):
         return json.dumps(entry, default=str)
 
 
-def configure_logging(settings: Settings) -> None:
-    handler = logging.StreamHandler(sys.stdout)
+def configure_logging(settings: Settings, stream=None) -> None:
+    """One handler on stdout, or another stream (e.g. stderr when stdout carries MCP stdio)."""
+    handler = logging.StreamHandler(stream or sys.stdout)
     handler.addFilter(TraceContextFilter())
     handler.setFormatter(JsonFormatter() if settings.log_format == "json" else TextFormatter())
     root = logging.getLogger()

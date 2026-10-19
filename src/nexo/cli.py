@@ -158,6 +158,30 @@ def _graph(args: argparse.Namespace) -> int:
     return 0
 
 
+def _mcp(args: argparse.Namespace) -> int:
+    """Serve the knowledge graph and chunk store as read-only MCP tools."""
+    from nexo.llm import build_embeddings
+    from nexo.mcp_server import build_mcp_server
+    from nexo.storage.graph_store import GraphStore
+    from nexo.storage.vector_store import LocalChunkStore
+    from nexo.telemetry import setup_telemetry
+
+    settings = get_settings()
+    setup_telemetry(settings)
+    graph = GraphStore.from_settings(settings, read_only=True)
+    chunks = LocalChunkStore(build_embeddings(settings), settings.vector_store_path, mode=settings.retrieval_mode)
+    server = build_mcp_server(graph=graph, chunks=chunks, settings=settings)
+    log.info("serving MCP over %s", args.transport)
+    try:
+        if args.transport == "stdio":
+            server.run(transport="stdio")
+        else:  # no authentication: keep it on localhost or behind an authenticating proxy
+            server.run(transport="streamable-http", host=args.host, port=args.port)
+    finally:
+        graph.close()
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="nexo")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -204,8 +228,15 @@ def main(argv: list[str] | None = None) -> int:
     graph.add_argument("--output", help="write the diagram to this file (e.g. workflow.mmd)")
     graph.set_defaults(handler=_graph)
 
+    serve = sub.add_parser("mcp", help="serve the knowledge graph as read-only MCP tools")
+    serve.add_argument("--transport", choices=["stdio", "streamable-http"], default="stdio")
+    serve.add_argument("--host", default="127.0.0.1")
+    serve.add_argument("--port", type=int, default=8765)
+    serve.set_defaults(handler=_mcp)
+
     args = parser.parse_args(argv)
-    configure_logging(get_settings())
+    # MCP over stdio uses stdout for the protocol: logs go to stderr there.
+    configure_logging(get_settings(), stream=sys.stderr if args.command == "mcp" else None)
     try:
         return args.handler(args)
     finally:

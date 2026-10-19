@@ -21,6 +21,7 @@ LangSmith is optional and orthogonal: LANGSMITH_TRACING=true.
 from __future__ import annotations
 
 import os
+import sys
 import threading
 from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
@@ -84,8 +85,8 @@ def setup_telemetry(settings: Settings) -> TracerProvider:
                 metric_readers=[PeriodicExportingMetricReader(OTLPMetricExporter(endpoint=f"{base}/v1/metrics"))],
             )
             metrics.set_meter_provider(meter_provider)
-        if settings.otel_console_export:
-            tracer_provider.add_span_processor(SimpleSpanProcessor(ConsoleSpanExporter()))
+        if settings.otel_console_export:  # stderr: stdout may carry a protocol (MCP stdio)
+            tracer_provider.add_span_processor(SimpleSpanProcessor(ConsoleSpanExporter(out=sys.stderr)))
         trace.set_tracer_provider(tracer_provider)
         if settings.otel_instrument_openai:
             instrument_openai(tracer_provider, meter_provider)
