@@ -6,8 +6,10 @@ in-cluster services (`vllm-inference-service`, `neo4j`) and local fakes.
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import os
+import re
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
@@ -55,12 +57,7 @@ class _SecretStoreSource(PydanticBaseSettingsSource):
         return None, field_name, False
 
     def __call__(self) -> dict[str, Any]:
-        rendered = Path(RENDERED_ENV)
-        options = (
-            parse_dotenv(rendered.read_text(encoding="utf-8"))
-            if rendered.exists()
-            else {}
-        )
+        options = _read_env_file(Path(RENDERED_ENV))
         options |= {k: v for k, v in os.environ.items() if k.startswith("NEXO_")}
         if "NEXO_SECRETS_PROVIDER" not in options:
             return {}  # not set up by `nexo setup`: the environment and .env only
@@ -374,6 +371,81 @@ class Settings(BaseSettings):
             "span_only",
             "span_and_event",
         }
+
+
+def render_drift(rendered: Path = Path(RENDERED_ENV)) -> str | None:
+    """Why the rendered env no longer matches the setup file it came from, or None."""
+    if not rendered.exists():
+        return None
+    match = re.search(
+        r"^# source: (\S+) sha256 ([0-9a-f]{64})$",
+        rendered.read_text(encoding="utf-8"),
+        re.MULTILINE,
+    )
+    if match is None:
+        return f"{rendered} predates source tracking: run nexo setup render (or make render)"
+    source = Path(match[1])
+    if not source.exists():
+        return None  # rendered from a setup file elsewhere (nexo setup -f)
+    if hashlib.sha256(source.read_bytes()).hexdigest() == match[2]:
+        return None
+    return (
+        f"{source} changed since {rendered} was rendered, so Nexo still uses the old"
+        " settings: run nexo setup render (or make render)"
+    )
+
+
+@dataclass(frozen=True)
+class Explained:
+    """One effective setting and where its value came from (secrets redacted)."""
+
+    name: str
+    value: str
+    source: str
+
+
+def _shown(value: Any) -> str:
+    if isinstance(value, SecretStr):
+        return "<redacted>" if value.get_secret_value() else "<empty>"
+    return "" if value is None else str(value)
+
+
+def explain(
+    settings: Settings | None = None, *, everything: bool = False
+) -> list[Explained]:
+    """Each setting's effective value and source, in the order Settings reads them.
+
+    Sources: the environment, the secrets store (NEXO_SECRETS_* in the rendered env), the
+    rendered env (nexo.yaml), .env, then "derived" for values a hardware profile or the stack
+    name sets, and "default". Defaults are left out unless everything is set.
+    """
+    settings = settings or Settings()
+    stored = {k.upper(): v for k, v in _SecretStoreSource(Settings)().items()}
+    layers = [
+        ("environment", os.environ),
+        ("secrets store", stored),
+        (RENDERED_ENV, _read_env_file(Path(RENDERED_ENV))),
+        (".env", _read_env_file(Path(".env"))),
+    ]
+    rows = []
+    for name, field in Settings.model_fields.items():
+        key = name.upper()
+        value = getattr(settings, name)
+        source = next((label for label, values in layers if key in values), None)
+        if source is None:
+            source = (
+                "default"
+                if value == field.get_default(call_default_factory=True)
+                else "derived"
+            )
+        if source == "default" and not everything:
+            continue
+        rows.append(Explained(key, _shown(value), source))
+    return rows
+
+
+def _read_env_file(path: Path) -> dict[str, str]:
+    return parse_dotenv(path.read_text(encoding="utf-8")) if path.exists() else {}
 
 
 def data_dir() -> Path:

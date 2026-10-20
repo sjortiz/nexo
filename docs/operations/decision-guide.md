@@ -4,7 +4,7 @@ title: Choosing a setup
 description: Decision matrices for running Nexo - which preset for your hardware, one machine or two, how models are served, which observability add-ons, memory per combination, flags versus nexo.yaml, how to run the services, whether telemetry may hold content and where secrets live.
 tags: [operations, setup, decisions, observability, models]
 status: draft
-generated: { by: claude-code/claude-opus-5-5, at: 2026-10-20T17:00:00Z }
+generated: { by: claude-code/claude-opus-5-5, at: 2026-10-20T21:00:00Z }
 stale_after: 2027-01-20T00:00:00Z
 sources:
   - id: profiles
@@ -52,6 +52,8 @@ The profile's memory picks a tier: the largest one that fits. The same tiers app
 | Linux, CPU only | `linux-cpu`, `cpu-64` | by RAM, as above | by tier | by tier | by tier | No GPU; expect a few tokens per second |
 | Linux, 4x 80 GB NVIDIA | `linux-vllm` | Llama 3.3 70B (vLLM) | off until `models.roles.judge` is set | 32k | on the GPUs | A shared server; many users; the production path |
 
+`make env` picks the profile from this machine's chip and memory (or GPU VRAM, or RAM);
+`PROFILE=` overrides it. For no containers use `mac-native` or `linux-native` (section 7).
 `python3 src/nexo/local_profiles.py plan <profile>` prints the exact models. An explicit
 `models.roles` entry in `nexo.yaml` overrides any role, e.g. a larger agent model on a 24 GB Mac, or a
 judge where the profile has none or a stronger one elsewhere ([Judge scores](evaluation.md#judge-scores)).
@@ -99,11 +101,13 @@ system ([ADR-0015](../decisions/adr-0015-signoz-default-observability.md)).[^adr
 
 # 5. Memory for each combination
 
-Containers, measured; models are the 24 GB profile's (6.5 GB resident). The Podman VM's default
-limit is 8 GiB. `make check` and `make up` stop when the setup would not fit this machine's real
-memory (85%) or the Podman VM (90%); `FORCE=1` goes ahead anyway.
+Containers, measured; models are the 24 GB profile's (6.5 GB resident). The Podman VM's memory
+depends on the Podman version and how the machine was created (8 GiB on one Mac, 5.6 GiB on
+another). `make check` and `make up` stop when the setup would not fit this machine's real memory
+(85%) or the Podman VM (90%), and print the `podman machine set --memory` value that fits;
+`FORCE=1` goes ahead anyway.
 
-| Turned on | Containers | With the models (24 GB Mac) | Fits the default Podman VM |
+| Turned on | Containers | With the models (24 GB Mac) | Fits an 8 GiB Podman VM |
 |---|---|---|---|
 | Default: Neo4j, collector, SigNoz, host metrics | ~1.9 GB | ~8.4 GB | Yes |
 | + Jaeger | ~1.9 GB | ~8.4 GB | Yes |
@@ -125,12 +129,12 @@ Both end in the same rendered stack; the flags exist so trying an add-on never n
 
 # 7. How to run the services
 
-| | `make up` (`nexo setup`) | `podman compose up -d` | Native (no containers) |
+| | `make up` (`nexo setup`) | `podman compose up -d` | Native: `make up` with `target.mode: native` |
 |---|---|---|---|
-| Uses | `nexo.yaml`: any preset, add-ons, patches | The committed `docker-compose.yml` (the `mac-single` preset) | Neo4j from Homebrew or a package |
-| Models | Started for you (`ollama-setup.sh`) | Start them yourself: `make models` | Start them yourself: `make models` |
-| Checks | Preflight: engine, secrets, memory | None | `nexo models --check` |
-| Observability | Everything in section 4 | SigNoz and host metrics | None, or the collector and SigNoz from `make render` |
+| Uses | `nexo.yaml`: any preset, add-ons, patches | The committed `docker-compose.yml` (the `mac-single` preset) | `mac-native` or `linux-native`; Neo4j from Homebrew or a package |
+| Models | Started for you (`ollama-setup.sh`) | Start them yourself: `make models` | Started for you (`ollama-setup.sh`) |
+| Checks | Preflight: engine, secrets, memory | None | Preflight: secrets, Neo4j login, memory |
+| Observability | Everything in section 4 | SigNoz and host metrics | None (export off) |
 | Choose it when | Almost always | You want plain Compose, or to read the stack on GitHub | You cannot run containers |
 
 # 8. Message content in telemetry

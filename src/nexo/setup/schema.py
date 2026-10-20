@@ -34,7 +34,9 @@ class _Strict(BaseModel):
 class Target(_Strict):
     """Where Nexo's services run."""
 
-    mode: Literal["compose"] = "compose"  # kubernetes comes after compose ships
+    # compose: Neo4j and telemetry in containers. native: Neo4j already runs on this machine
+    # (Homebrew, a package), nothing in containers, no telemetry export. Kubernetes comes later.
+    mode: Literal["compose", "native"] = "compose"
     engine: Literal["auto", "podman", "docker"] = "auto"
     host: Literal["auto", "macos", "linux"] = "auto"
 
@@ -203,6 +205,22 @@ class Spec(_Strict):
         off = [name for name, c in self.components.items() if c.enabled is False]
         if off:
             raise ValueError(f"core components cannot be disabled yet: {off}")
+        return self
+
+    @model_validator(mode="after")
+    def _native_has_no_containers(self) -> Spec:
+        if self.target.mode != "native":
+            return self
+        problems = [f"addons.{n}" for n, a in self.addons.items() if a.enabled]
+        if self.models.provider == "vllm":
+            problems.append("models.provider vllm")
+        if self.patches:
+            problems.append("patches")
+        if problems:
+            raise ValueError(
+                f"target.mode native runs no containers: remove {', '.join(problems)}"
+                " or use target.mode compose"
+            )
         return self
 
     @model_validator(mode="after")

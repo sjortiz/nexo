@@ -22,6 +22,7 @@ ADDONS     = $(if $(LANGFUSE),--addon langfuse) $(if $(JAEGER),--addon jaeger) \
              $(if $(LANGSMITH),--addon langsmith) $(if $(AGENT_INBOX),--addon agentInbox)
 PROFILE  ?=
 ROLES    ?=
+APPLY    ?=
 FILE     ?=
 DOC_TYPE ?= general
 Q        ?=
@@ -32,7 +33,7 @@ NEO4J_TEST_PASSWORD ?= nexo-test-pass
 NEO4J_TEST_IMAGE    ?= neo4j:5.26-community
 
 .DEFAULT_GOAL := help
-.PHONY: help install install-notebook install-keychain env models up down check render lock compose-file \
+.PHONY: help install install-notebook install-keychain env models up down check render lock compose-file neo4j-init \
         ingest ask mcp review-ui review-inbox graph app \
         lint format test neo4j-test test-neo4j neo4j-test-down test-live ci \
         walkthrough site serve-site notebook clean
@@ -51,12 +52,12 @@ install-notebook: ## Also install Jupyter, for the walkthrough notebook
 install-keychain: ## Also install keyring, for secrets.provider keychain (local machines)
 	uv sync --extra keychain
 
-env: ## Write nexo.yaml from a preset (PRESET=mac-single) and create missing secrets in ~/.config/nexo/config
-	$(NEXO_SETUP) init $(if $(PRESET),--preset $(PRESET))
+env: ## Write nexo.yaml from a preset (PRESET=mac-single|mac-native; PROFILE= overrides the detected one) and create missing secrets
+	$(NEXO_SETUP) init $(if $(PRESET),--preset $(PRESET)) $(if $(PROFILE),--profile $(PROFILE))
 	$(NEXO_SETUP) secrets
 
-models: ## Pull and start the profile's models in Ollama (PROFILE=m1-max-64 ROLES=heavy; default: .env)
-	deploy/local/ollama-setup.sh $(PROFILE) $(ROLES)
+models: ## Pull and start the profile's models in Ollama (PROFILE=m1-max-64 ROLES=heavy; APPLY=1 sets a running app's settings)
+	deploy/local/ollama-setup.sh $(if $(APPLY),--apply) $(PROFILE) $(ROLES)
 
 ##@ Run
 
@@ -74,6 +75,9 @@ render: ## Write .nexo/render/ from nexo.yaml without starting anything
 
 lock: ## Resolve nexo.yaml into nexo.lock (UPGRADE=1 moves every pin to the current defaults)
 	$(NEXO_SETUP) lock $(if $(UPGRADE),--upgrade)
+
+neo4j-init: ## Native mode: give a new Homebrew Neo4j the stored password (before its first start)
+	$(NEXO_SETUP) neo4j-init
 
 compose-file: ## Regenerate docker-compose.yml and deploy/rendered/ from the mac-single preset
 	$(RUN)nexo setup -f examples/setups/mac-single/nexo.yaml render --portable

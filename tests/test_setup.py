@@ -389,8 +389,13 @@ def _compose_accepts(compose_file: Path, env_dir: Path) -> None:
         pytest.fail(result.stderr)
 
 
+CONTAINER_PRESETS = sorted(
+    p.name for p in PRESETS.iterdir() if not p.name.endswith("-native")
+)
+
+
 @pytest.mark.skipif(ENGINE is None, reason="no container engine")
-@pytest.mark.parametrize("preset", sorted(p.name for p in PRESETS.iterdir()))
+@pytest.mark.parametrize("preset", CONTAINER_PRESETS)
 def test_rendered_compose_files_are_valid_compose(workdir, preset):
     """The engine's own compose accepts every preset's render (with every add-on on)."""
     path = _setup(workdir, preset)

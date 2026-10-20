@@ -410,16 +410,25 @@ def test_setup_script_pulls_and_preloads_through_an_already_running_server(tmp_p
         "started ollama serve" not in result.stdout
     )  # the running service is left alone
     assert (
-        "already running" in result.stderr
+        "WARNING: ollama is already running" in result.stderr
+        and "were NOT applied" in result.stderr
         and "OLLAMA_CONTEXT_LENGTH=16384" in result.stderr
     )
-    assert "systemctl edit ollama" in result.stderr
+    if sys.platform == "darwin":
+        assert "--apply" in result.stderr
+    else:
+        assert "ollama.service.d/nexo.conf" in result.stderr
+        assert 'Environment="OLLAMA_CONTEXT_LENGTH=16384"' in result.stderr
     expected = lp.plan("m5-pro-24", "light").models
-    assert log.read_text().splitlines() == [f"pull {m}" for m in expected] + ["ps"]
+    # Not a terminal: pulls go through the API with plain progress lines, not the CLI.
+    assert log.read_text().splitlines() == ["ps"]
+    pulls = [m for method, path, m in _FakeOllamaAPI.calls if path == "/api/pull"]
+    assert pulls == expected
+    assert all(f"pull {m}: started" in result.stdout for m in expected)
     preloads = {
         (path, model)
         for method, path, model in _FakeOllamaAPI.calls
-        if method == "POST"
+        if method == "POST" and path != "/api/pull"
     }
     assert preloads == {
         ("/api/embed", "bge-m3"),

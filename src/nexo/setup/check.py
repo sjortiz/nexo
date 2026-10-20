@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 import platform
 import re
@@ -21,7 +22,12 @@ from neo4j.exceptions import AuthError, DriverError, Neo4jError
 from pydantic import ValidationError
 
 from nexo.config import Settings
-from nexo.local_profiles import MODEL_SIZES_GB, parse_profile
+from nexo.local_profiles import (
+    APPLE_MEMORY_GB,
+    MODEL_SIZES_GB,
+    parse_profile,
+    plan,
+)
 from nexo.secret_store import SecretStore, SecretStoreError
 from nexo.setup.components import MEMORY_GB
 from nexo.setup.envfile import generated_keys, missing_required, read_env
@@ -43,6 +49,8 @@ class Finding:
     name: str
     ok: bool
     detail: str
+    # A problem worth a WARN line that never stops check or up.
+    advisory: bool = False
 
 
 def _run(*command: str) -> str:
@@ -84,6 +92,50 @@ def machine_memory_gb() -> float | None:
         return None
 
 
+APPLE_CHIP = re.compile(r"Apple M(?P<generation>\d)(?: (?P<variant>Pro|Max|Ultra))?")
+
+
+def detect_profile(
+    system: str | None = None, run=_run, memory_gb=machine_memory_gb
+) -> tuple[str, str] | None:
+    """(profile, what it was read from) for this machine, or None when it is unknown.
+
+    Apple Silicon: the chip and unified memory (m1-max-64). Linux: an NVIDIA GPU's VRAM
+    (gpu-24), else RAM (cpu-64). None below the smallest tier.
+    """
+    system = system or platform.system()
+    try:
+        if system == "Darwin":
+            chip = APPLE_CHIP.search(run("sysctl", "-n", "machdep.cpu.brand_string"))
+            memory = memory_gb()
+            if chip is None or memory is None:
+                return None
+            # The shipped size nearest to what the OS reports.
+            size = min(APPLE_MEMORY_GB, key=lambda gb: abs(gb - memory))
+            variant = f"-{chip['variant'].lower()}" if chip["variant"] else ""
+            name = f"m{chip['generation']}{variant}-{size}"
+            seen = f"{chip[0]}, {size} GB"
+        else:
+            vram = run(
+                "nvidia-smi",
+                "--query-gpu=memory.total",
+                "--format=csv,noheader,nounits",
+            ).splitlines()
+            if vram:
+                size = round(int(vram[0]) / 1024)
+                name, seen = f"gpu-{size}", f"NVIDIA GPU, {size} GB of VRAM"
+            elif (memory := memory_gb()) is not None:
+                name, seen = (
+                    f"cpu-{round(memory)}",
+                    f"no GPU, {round(memory)} GB of RAM",
+                )
+            else:
+                return None
+        return parse_profile(name).name, seen
+    except ValueError:  # ProfileError, or nvidia-smi output that is not a number
+        return None
+
+
 def engine_memory_gb(host: Host) -> float | None:
     """The Podman VM's memory limit on macOS (containers cannot use more)."""
     if host.engine != "podman" or host.os != "macos":
@@ -101,6 +153,55 @@ def ollama_models(port: int) -> set[str] | None:
             return {m["name"] for m in json.load(response).get("models", [])}
     except (OSError, ValueError):
         return None
+
+
+def loaded_contexts(base_url: str) -> dict[str, int]:
+    """Context length of each model an Ollama server has loaded (empty when unknown)."""
+    root = base_url.rstrip("/").removesuffix("/v1")
+    try:
+        with urllib.request.urlopen(f"{root}/api/ps", timeout=2) as response:
+            loaded = json.load(response).get("models", [])
+    except (OSError, ValueError):
+        return {}
+    return {m["name"]: m["context_length"] for m in loaded if m.get("context_length")}
+
+
+def context_problem(
+    base_url: str, profile: str, role_set: str, loaded=loaded_contexts
+) -> str | None:
+    """Loaded models running with less context than the profile sets, or None.
+
+    Ollama started outside ollama-setup.sh (the macOS app, a systemd unit) keeps its own
+    defaults: 4096 tokens below ~23 GiB of GPU memory, which truncates prompts silently.
+    """
+    expected = plan(profile, role_set).context_length
+    short = {m: n for m, n in loaded(base_url).items() if n < expected}
+    if not short:
+        return None
+    runs = ", ".join(f"{m} with {n}" for m, n in sorted(short.items()))
+    return (
+        f"Ollama at {base_url} runs {runs} tokens of context; {profile} needs {expected}:"
+        f" deploy/local/ollama-setup.sh {profile} {role_set} --apply, then restart Ollama"
+    )
+
+
+def context_findings(casting: Casting, loaded=loaded_contexts) -> list[Finding]:
+    """A WARN per Ollama server whose loaded models run below the profile's context."""
+    models = casting.spec.models
+    if models.provider != "ollama":
+        return []
+    servers = [
+        (models.local, "light" if models.remote is not None else "single"),
+        (models.remote, "heavy"),
+    ]
+    findings = []
+    for machine, role_set in servers:
+        if machine is None:
+            continue
+        url = f"http://127.0.0.1:{machine.port}"
+        if problem := context_problem(url, machine.profile, role_set, loaded):
+            findings.append(Finding("ollama context", False, problem, advisory=True))
+    return findings
 
 
 def models_finding(
@@ -163,9 +264,12 @@ def neo4j_login(uri: str, user: str, password: str) -> str | None:
 
 
 def neo4j_finding(
-    store: SecretStore, host: Host, stack: str, uri: str
+    store: SecretStore, host: Host, stack: str, uri: str, *, native: bool = False
 ) -> Finding | None:
-    """A running Neo4j accepts the password the provider holds (its healthcheck is HTTP only)."""
+    """A running Neo4j accepts the password the provider holds (its healthcheck is HTTP only).
+
+    Native: Neo4j is this machine's own service, so it must already answer.
+    """
     env_path = Path.cwd() / ".env"
     dot_env = read_env(env_path)
     password = store.get(["NEO4J_PASSWORD"]).get("NEO4J_PASSWORD")
@@ -173,10 +277,29 @@ def neo4j_finding(
         return None  # up creates it
     result = neo4j_login(uri, dot_env.get("NEO4J_USER") or "neo4j", password)
     if result == "unreachable":
+        if native:
+            return Finding("neo4j", False, native_neo4j_hint(store, uri, result))
         return None  # not running yet
     if result is None:
         return Finding("neo4j", True, f"login ok at {uri}")
+    if native:
+        return Finding("neo4j", False, native_neo4j_hint(store, uri, result))
     return Finding("neo4j", False, stale_neo4j_hint(store, host, stack))
+
+
+def native_neo4j_hint(store: SecretStore, uri: str, result: str) -> str:
+    """target.mode native: how to start this machine's Neo4j or give it the stored password."""
+    if result == "unreachable":
+        return (
+            f"no Neo4j at {uri}: start it (macOS: brew services start neo4j; Linux:"
+            " sudo systemctl start neo4j); install it first if needed (brew install neo4j)"
+        )
+    return (
+        f"Neo4j at {uri} refused the password in {store.label}. A Neo4j that has never"
+        " started: stop it, run nexo setup neo4j-init (sets that password), start it."
+        " One already in use: set its password to the stored one (ALTER CURRENT USER"
+        " SET PASSWORD in cypher-shell), or put its password in the store"
+    )
 
 
 def stale_neo4j_hint(store: SecretStore, host: Host, stack: str) -> str:
@@ -336,18 +459,25 @@ def preflight(
     store: SecretStore,
 ) -> list[Finding]:
     """Everything `up` needs from this machine, without starting anything."""
+    native = casting.spec.target.mode == "native"
     findings = [
-        Finding(
-            "engine",
-            bool(_run(host.engine, "compose", "version")),
-            f"{host.engine} compose ({host.os})",
-        ),
         secrets_finding(store, on, Path.cwd() / ".env"),
         review_finding(casting),
         content_finding(casting),
     ]
+    if not native:
+        findings.insert(
+            0,
+            Finding(
+                "engine",
+                bool(_run(host.engine, "compose", "version")),
+                f"{host.engine} compose ({host.os})",
+            ),
+        )
     bolt = casting.spec.ports.bolt
-    if "neo4j" in on and (neo4j := neo4j_finding(store, host, lock["name"], bolt)):
+    if "neo4j" in on and (
+        neo4j := neo4j_finding(store, host, lock["name"], bolt, native=native)
+    ):
         findings.append(neo4j)
     rendered = Path.cwd() / RENDER_DIR / "compose.yaml"
     if rendered.exists():
@@ -374,6 +504,7 @@ def preflight(
                 )
             )
     findings += [f for f in (models_finding(casting, lock),) if f]
+    findings += context_findings(casting)
     findings += platform_findings(casting, host)
     findings += memory_findings(casting, lock, on, host)
     return findings
@@ -465,14 +596,22 @@ def memory_findings(
             ),
         )
     )
-    vm = engine_memory_gb(host)
-    if vm is not None:
-        findings.append(
-            Finding(
-                "podman vm",
-                containers <= vm * VM_SHARE,
-                f"containers {containers} GB of {vm:.1f} GB"
-                " (podman machine set --memory to raise)",
-            )
-        )
+    if casting.spec.target.mode != "native" and (vm := vm_finding(containers, host)):
+        findings.append(vm)
     return findings
+
+
+def vm_finding(containers: float, host: Host) -> Finding | None:
+    """The containers fit the Podman VM; if not, the --memory to set (whole GiB)."""
+    vm = engine_memory_gb(host)
+    if vm is None:
+        return None
+    fits = containers <= vm * VM_SHARE
+    detail = f"containers {containers} GB of {vm:.1f} GB"
+    if not fits:
+        needed = math.ceil(containers / VM_SHARE) * 1024
+        detail += (
+            f"; raise it: podman machine stop && podman machine set --memory {needed}"
+            " && podman machine start"
+        )
+    return Finding("podman vm", fits, detail)
