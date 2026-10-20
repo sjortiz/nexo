@@ -23,28 +23,54 @@ sources:
 
 # Trigger
 
-`nexo ask` (or `Runtime.start`) returns `status: awaiting_review` with a `pending_review` packet. Show
+When the [review policy](#review-policy) holds an answer, `nexo ask` (or `Runtime.start`) returns
+`status: awaiting_review` with a `pending_review` packet. Show
 it again any time with `nexo status <thread_id>`. In code, `Runtime.pending_reviews()` lists every paused
 thread, newest first, and `Runtime.review_passages(thread_id, clearance)` reads the cited chunks, masked
 below their clearance ([ADR-0019](../decisions/adr-0019-review-surfaces.md)).
 
 # Review policy
 
-`spec.review` in `nexo.yaml` (`REVIEW_POLICY`) decides which answers wait for a person; `make check`
-prints the one in force.[^compliance]
+`spec.review` in `nexo.yaml` (`REVIEW_POLICY`) decides which answers wait for a person. The default is
+`on-findings`. `make check` prints the policy in force.[^compliance]
 
-| Policy | Waits for a person | Approved without one |
-|---|---|---|
-| `always` (default) | Every answer | None |
-| `on-findings` | Any answer with a finding (`block` or `warn`) | No findings, at least one citation, and every cited chunk was fetched |
-| `never` | Answers with any finding other than `warn` | Answers with no findings or only `warn` findings |
+| Policy | Approved without a person | Waits for a person | Recorded reviewer | Choose it for |
+|---|---|---|---|---|
+| `on-findings` (default) | No findings, at least one citation, and every cited chunk was fetched | Any answer with a finding (`block` or `warn`) | `system:auto` when approved without a person, else the person | Everyday use |
+| `always` | None | Every answer | The person | Regulated or high-stakes use, where a person signs off every answer |
+| `never` | No findings, or only `warn` findings | Any answer with a finding other than `warn`, including every `block` | `system:auto` when approved without a person, else the person | Trusted corpora and demos |
 
-An answer with a `block` finding always waits, whatever the policy. An approval without a person is
-recorded like any other: the thread's `review` has `reviewer: system:auto` and a comment naming the
-policy and any warnings, and the compliance span carries `nexo.review.reviewer=system:auto` and
-`nexo.review.policy`. `nexo.env` always carries the policy, the default included, and is read after
-`.env`, so a `REVIEW_POLICY` left in `.env` cannot relax `nexo.yaml`. Only `REVIEW_POLICY` in the
-process environment overrides it, and `make check` says so when it does.
+No policy approves an answer with a `block` finding. Those answers always wait for a person, who must
+acknowledge the findings to approve them. A failed or empty investigation is still auto-rejected as
+`reviewer: system`.
+
+## `on-findings` (default)
+
+A clean answer goes out without a pause. An answer is clean when compliance raised no finding at all,
+it cites at least one chunk, and the agent fetched every chunk it cites. An answer with any finding
+waits for a person, even if the finding is only a warning such as `budget_exhausted`. Use it for
+everyday use: a person sees only the answers a check flagged.
+
+## `always`
+
+Every answer waits for a person, including clean ones. This is how Nexo behaved before the policy
+existed. Use it for regulated or high-stakes use, or wherever a named person must approve every
+released answer.
+
+## `never`
+
+Answers with no findings or only `warn` findings go out without a pause. Despite the name, review is
+not off: a `block` finding, or any severity other than `warn`, still waits for a person. Use it for
+trusted corpora and demos, where a warning such as a hit budget is not worth a person's time.
+
+## The record
+
+An approval without a person is recorded like any other. The thread's `review` has
+`reviewer: system:auto` and a comment naming the policy and any warnings. The compliance span carries
+`nexo.review.reviewer=system:auto`, and every compliance span carries `nexo.review.policy`.
+`nexo.env` always carries the policy, the default included, and is read after `.env`, so a
+`REVIEW_POLICY` left in `.env` cannot override `nexo.yaml`. Only `REVIEW_POLICY` in the process
+environment overrides it, and `make check` says so when it does.
 
 # Steps
 

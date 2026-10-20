@@ -47,7 +47,8 @@ graph TD;
 
 The edges are fixed; only the router's conditional edge (dotted) branches: `rejected` ends the run,
 anything else goes to the investigator. The compliance node pauses with `interrupt()` for human
-approval. State keys are listed in
+approval unless the [review policy](../operations/human-review.md#review-policy) approves the answer;
+under the default, `on-findings`, an answer with any finding pauses. State keys are listed in
 [Request lifecycle](../architecture/request-lifecycle.md#state).[^state]
 
 # Nodes
