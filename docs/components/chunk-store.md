@@ -10,6 +10,9 @@ sources:
   - id: vector-store
     resource: ../../src/nexo/storage/vector_store.py
     title: ChunkStore and LocalChunkStore
+  - id: neo4j-store
+    resource: ../../src/nexo/storage/neo4j_chunk_store.py
+    title: Neo4jChunkStore
   - id: aws-vdb
     resource: ../references/aws-vector-database-choice.md
     title: AWS guidance, choosing a vector database for RAG
@@ -63,12 +66,15 @@ write. Each search is a `retrieval nexo-chunks` span with `nexo.retrieval.mode`.
 
 | Backend | Status | Use |
 |---|---|---|
-| `LocalChunkStore` | implemented | Wraps LangChain `InMemoryVectorStore`; persisted to `VECTOR_STORE_PATH` with an atomic file replace. Single node only. |
-| PostgreSQL + pgvector (self-hosted or managed) | recommended next | Primary-key lookup, SQL metadata filters, ACID writes, so a chunk is readable as soon as Neo4j references it; full-text search for the BM25 side. |
+| `Neo4jChunkStore` | default (`CHUNK_STORE=neo4j`) | Text, embedded text and embedding on the graph's `(:Chunk)` nodes; a vector index (cosine) and a full-text index (accents folded), fused with RRF; filtered with the same `ChunkFilter`. Shared by every checkout of a stack; `nexo chunks import` copies a JSON store in.[^neo4j-store] |
+| `LocalChunkStore` | `CHUNK_STORE=local` | Wraps LangChain `InMemoryVectorStore`; persisted to `VECTOR_STORE_PATH` with an atomic file replace. Offline runs and tests. |
+| PostgreSQL + pgvector (self-hosted or managed) | superseded | Was the production target; a second database to keep consistent with Neo4j. |
 | OpenSearch (self-hosted or managed) | alternative | Very high query rates; native BM25 + vector; eventual consistency after writes. |
 
 The recommendation follows the AWS vector database guidance's decision criteria.[^aws-vdb] See
+[ADR-0018](../decisions/adr-0018-chunks-in-neo4j.md), which supersedes
 [ADR-0004](../decisions/adr-0004-chunk-store-interface-and-pgvector.md).
 
 [^vector-store]: ChunkStore and LocalChunkStore
+[^neo4j-store]: Neo4jChunkStore
 [^aws-vdb]: AWS guidance, choosing a vector database for RAG

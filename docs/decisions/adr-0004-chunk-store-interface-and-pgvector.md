@@ -4,7 +4,7 @@ title: "ADR-0004: Chunk store behind an interface; pgvector for production"
 description: Chunk text and vectors live outside Neo4j behind ChunkStore; a local store ships now and Aurora/RDS pgvector is the production target.
 tags: [adr, vector-store, pgvector, opensearch]
 status: draft
-decision_status: accepted
+decision_status: superseded
 generated: { by: claude-code/claude-opus-5-5, at: 2026-10-19T20:14:37Z }
 sources:
   - id: vector-store
