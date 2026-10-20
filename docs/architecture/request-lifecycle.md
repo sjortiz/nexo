@@ -27,8 +27,11 @@ sources:
    and the caller's clearance. The agent's output is appended to `agent_outputs`. See
    [the handoff](langgraph-strands-handoff.md).
 4. **Compliance.** Runs [deterministic checks](../components/compliance-checks.md). A failed or empty
-   investigation is auto-rejected with no human step. Otherwise the node calls `interrupt()` with a
-   review packet; the run pauses and its state is checkpointed.[^graph]
+   investigation is auto-rejected with no human step. If the
+   [review policy](../operations/human-review.md#review-policy) (`spec.review`, default `always`)
+   releases the answer, it is approved as `reviewer: system:auto` with no pause; an answer with a
+   `block` finding never is. Otherwise the node calls `interrupt()` with a review packet; the run
+   pauses and its state is checkpointed.[^graph]
 5. **Review.** `Runtime.review(thread_id, decision)` resumes with `Command(resume=decision)`. Invalid
    input, or an approval of blocking findings without `acknowledged_findings: true`, pauses again with
    an `error` in the packet.
@@ -69,6 +72,7 @@ no free text: the reviewer's comment is in `review.comment` and the router's rea
 | `compliance_report` | compliance | Findings and the `blocking` flag. |
 | `approval_status` | router, compliance | `pending`, `approved`, `rejected` or `not_required`. |
 | `review` | compliance | The reviewer's decision, or `reviewer: system` and `source: system` on auto-reject. |
+| `review` | compliance | The reviewer's decision: `reviewer: system` on auto-reject, `system:auto` when the review policy approves. |
 | `final_response` | router, compliance | Released answer, only after approval. |
 
 # Examples

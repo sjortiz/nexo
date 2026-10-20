@@ -65,7 +65,9 @@ approval. State keys are listed in
 **investigator** — runs the [Strands agent](investigator-agent.md) in a checkpointed `@task`; see
 [the handoff](../architecture/langgraph-strands-handoff.md).
 
-**compliance** — runs [compliance checks](compliance-checks.md), then pauses with `interrupt()`:
+**compliance** — runs [compliance checks](compliance-checks.md). Unless the
+[review policy](../operations/human-review.md#review-policy) approves the answer as `system:auto`, it
+then pauses with `interrupt()`:
 
 ```json
 {"request_id": "...", "user_query": "...", "draft_answer": "...", "citations": ["chk_..."],
