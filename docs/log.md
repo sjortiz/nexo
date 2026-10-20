@@ -1,6 +1,7 @@
 # Bundle Update Log
 
 ## 2026-10-20
+* **Update**: Traces say who asked and which question: `user.id`, `session.id` and a keyed hash of the question on request and MCP spans; the question's text is opt-in (`telemetry.queryText`); review pauses no longer export the question and draft answer as an exception ([Observability](operations/observability.md#which-user-and-which-question), ADR-0009 amended).
 * **Update**: Docs checked against main: SigNoz login source corrected (the secrets provider, not `.env`), the SELinux `:z` scripts volume documented in the [SigNoz reference](references/signoz.md), [Troubleshooting](operations/troubleshooting.md) gains a local-stack and CI section, and [Testing](operations/testing.md) lists the setup and wiring suites.
 * **Update**: The keychain is an optional extra (`make install-keychain`): nothing imports `keyring` unless `secrets.provider: keychain` is chosen, so tests and CI run without it ([Testing](operations/testing.md)).
 * **Update**: Generated secrets live in a provider (`spec.secrets.provider`): `~/.config/nexo/config` by default, keychain, SOPS or Vault opt-in; clusters mount them as files read in-process, never environment variables; locally compose gets them through the environment; `check` and `up` log in to Neo4j ([ADR-0017](decisions/adr-0017-secrets-from-a-provider.md), [Choosing a setup](operations/decision-guide.md#9-where-secrets-live)).

@@ -63,7 +63,7 @@ spec:
     jaeger: { enabled: false }
     langsmith: { enabled: false, project: nexo }
     hostMetrics: { enabled: true }
-  telemetry: { logs: otlp }
+  telemetry: { logs: otlp, queryText: false }           # queryText: the question on traces
   patches:                                              # RFC 6902, applied last
     - target: compose.yaml
       operations: [{ op: add, path: /services/neo4j/mem_limit, value: 3g }]
