@@ -25,6 +25,11 @@ from nexo.storage.schemas import ChunkRecord, Sensitivity
 from nexo.storage.vector_store import LocalChunkStore
 from nexo.telemetry import instrument_openai
 
+# Tests never reach a real keychain (it can block on an unlock prompt): keyring picks its
+# backend on first use, so this applies here and in subprocesses; the fixture below
+# installs an in-memory one per test.
+os.environ.setdefault("PYTHON_KEYRING_BACKEND", "keyring.backends.fail.Keyring")
+
 _EXPORTER = InMemorySpanExporter()
 _provider = TracerProvider()
 _provider.add_span_processor(SimpleSpanProcessor(_EXPORTER))
