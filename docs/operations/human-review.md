@@ -37,6 +37,11 @@ below their clearance ([ADR-0019](../decisions/adr-0019-review-surfaces.md)).
    nexo review <thread_id> --reject  --reviewer you@corp --comment "path via Beta Labs is unverified"
    ```
 
+   From an MCP client, ask it to list the pending reviews and propose a decision: your client
+   shows a form with the question, draft, findings and passages, and the decision is recorded only
+   when you accept it ([MCP server](../components/mcp-server.md#review-tools)). A client without
+   forms is refused and told the command above.
+
 5. **Confirm** the result shows `status: completed` and the expected `approval_status`.
 
 # Rules

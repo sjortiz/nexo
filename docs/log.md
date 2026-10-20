@@ -1,6 +1,7 @@
 # Bundle Update Log
 
 ## 2026-10-20
+* **Update**: Review over MCP: `nexo_pending_reviews`, `nexo_get_review` and `nexo_submit_review` on `nexo mcp` (`MCP_REVIEW_TOOLS`, on by default); the write asks the person to confirm by elicitation and refuses clients that cannot ([MCP server](components/mcp-server.md#review-tools), [ADR-0019](decisions/adr-0019-review-surfaces.md)).
 * **Update**: Review has a shared core: `Runtime.pending_reviews()` lists paused threads and `Runtime.review_passages()` reads the cited chunks for a clearance, masked by the redactor ([Human review](operations/human-review.md), [ADR-0019](decisions/adr-0019-review-surfaces.md)).
 * **Update**: [Judge scores](operations/evaluation.md#judge-scores) on a small Mac: pull a judge, then `JUDGE_MODEL=... nexo eval` or `roles.judge` in `nexo.yaml`; a judge named for a profile that turns it off now runs on that profile's Ollama instead of the vLLM default.
 * **Update**: Chunk text and embeddings live on the graph's (:Chunk) nodes (`CHUNK_STORE=neo4j`), so every checkout of a stack sees them; review checkpoints move to `~/.local/share/nexo/<stack>/`; `nexo chunks import` migrates a JSON store ([ADR-0018](decisions/adr-0018-chunks-in-neo4j.md) supersedes ADR-0004).

@@ -34,7 +34,7 @@ evidence; and MCP over stdio carries no user identity.
 
 | Option | Against |
 |---|---|
-| Expose `nexo ask` / review over MCP | Long-running, human-gated workflow; poor fit for a tool call. Later, if needed. |
+| Expose `nexo ask` / review over MCP | Long-running, human-gated workflow; poor fit for a tool call. `nexo ask` stays out; review tools came later ([ADR-0019](adr-0019-review-surfaces.md)). |
 | Only `nexo_graph_query` | Forces every client to write Cypher; entity and neighbor tools are safer and parameterized. |
 | Per-user clearance over MCP | Needs authentication the stdio transport does not have. |
 | No skill, instructions only | The server's `instructions` help, but a skill makes the order and checks explicit. |

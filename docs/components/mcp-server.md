@@ -1,12 +1,15 @@
 ---
 type: Component
 title: MCP server
-description: "`nexo mcp`: the knowledge graph and chunk store as six read-only Model Context Protocol tools, with the investigator's safeguards and one clearance per server."
+description: "`nexo mcp`: the knowledge graph and chunk store as six read-only Model Context Protocol tools, plus tools to review paused investigations, with the investigator's safeguards and one clearance per server."
 resource: ../../src/nexo/mcp_server.py
 tags: [mcp, tools, retrieval, security]
 status: draft
 generated: { by: claude-code/claude-opus-5-5, at: 2026-10-19T20:14:37Z }
 sources:
+  - id: review
+    resource: ../../src/nexo/mcp_review.py
+    title: Review tools
   - id: server
     resource: ../../src/nexo/mcp_server.py
     title: Nexo MCP server
@@ -20,7 +23,7 @@ sources:
 
 # Tools
 
-All tools are annotated read-only, idempotent and closed-world.[^server]
+The six retrieval tools are annotated read-only, idempotent and closed-world.[^server]
 
 | Tool | Returns | Use |
 |---|---|---|
@@ -30,6 +33,25 @@ All tools are annotated read-only, idempotent and closed-world.[^server]
 | `nexo_find_entities(name, entity_type, limit)` | Entities matching a name or alias, with keys and chunk ids | Starting points in the graph |
 | `nexo_neighbors(entity_key, limit)` | Edges in both directions with certainty, date and chunk ids; `withheld` count | Direct relationships |
 | `nexo_graph_query(cypher)` | Rows, `truncated`, `chunk_ids_found` | Multi-hop questions |
+
+# Review tools
+
+On by default (`MCP_REVIEW_TOOLS=true`); `false` leaves only the six tools above.[^review]
+
+| Tool | Returns | Annotations |
+|---|---|---|
+| `nexo_pending_reviews(limit)` | Paused investigations, newest first: thread id, question, blocking, finding count | read-only |
+| `nexo_get_review(thread_id)` | Question, draft answer, compliance findings, cited passages (masked or withheld above the server's clearance) | read-only |
+| `nexo_submit_review(thread_id, decision, comment, acknowledge_findings)` | `submitted`, `approval_status`, `reviewer` | not read-only, not idempotent |
+
+`nexo_submit_review` only proposes. It uses MCP elicitation (SDK `mcp` 2.1.1, `Resolve` and
+`Elicit`, which work on both the 2026-07-28 and the older protocol): the client shows the person the
+question, draft, findings and passages in a form with a required decision, and nothing is recorded
+unless they accept it. Their choice wins over the proposal. A client that cannot show a form gets an
+error with the `nexo review` command to run. Approving a draft with blocking findings needs the
+person to tick `acknowledge_findings`. The reviewer is `NEXO_USER` (or the login name) unless the
+person types another name on the form; the tool has no reviewer argument. A client that answers
+forms automatically, without a person, defeats the check: use a client that asks.
 
 # Safeguards
 
@@ -52,4 +74,5 @@ Telemetry: each tool runs inside an `execute_tool <name>` span. See the
 
 [^server]: Nexo MCP server
 [^tests]: MCP server tests
+[^review]: Review tools
 [^mcp]: Model Context Protocol

@@ -35,6 +35,15 @@ by the read-time redactor), and `review` records the decision. No surface owns r
 | Local web page | Demo only | Shows the flow without an MCP client; not hardened. |
 | `nexo review` | Always available | The fallback every other surface can print. |
 
+# Why MCP is the default
+
+`nexo mcp` is already how Claude Code and other clients reach Nexo, so the reviewer needs nothing new
+to run. The review tools are on by default on the local stack (`MCP_REVIEW_TOOLS=false` turns them
+off) because the server is local, and the one write needs the person: `nexo_submit_review` asks them
+through MCP elicitation and records nothing otherwise, and a client without elicitation is sent to
+`nexo review`. The model can list and read, never approve. This amends ADR-0013, whose "later, if
+needed" is now: the tools are read-only except that confirmed write.
+
 # Consequences
 
 A new surface needs no change to the graph or the checkpoints.[^review] Each surface must show the compliance
