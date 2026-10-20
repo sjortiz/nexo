@@ -216,12 +216,7 @@ class LocalChunkStore:
 
         # GenAI `retrieval` operation; INTERNAL because this store is in-process
         # (a pgvector/OpenSearch backend would be a CLIENT span).
-        attributes = {
-            "gen_ai.operation.name": "retrieval",
-            "gen_ai.data_source.id": DATA_SOURCE_ID,
-            "gen_ai.retrieval.top_k": k,
-            "nexo.retrieval.mode": self._mode,
-        }
+        attributes = retrieval_attributes(k, self._mode)
         with self._lock, traced_span(f"retrieval {DATA_SOURCE_ID}", attributes) as span:
             candidates = k if self._mode == "vector" else max(k * 4, 20)
             rankings: list[list[str]] = []
@@ -236,7 +231,7 @@ class LocalChunkStore:
                 )
             if self._mode in ("keyword", "hybrid"):
                 rankings.append(self._keyword_ranking(query, candidates, chunk_filter))
-            ranked = _fuse(rankings)[:k]
+            ranked = fuse(rankings)[:k]
             records = {
                 d.id: d.metadata["record"] for d in self._store.get_by_ids(ranked)
             }
@@ -290,7 +285,17 @@ class LocalChunkStore:
         os.replace(tmp, self._path)  # readers never see a half-written index
 
 
-def _fuse(rankings: list[list[str]]) -> list[str]:
+def retrieval_attributes(k: int, mode: RetrievalMode) -> dict[str, object]:
+    """GenAI `retrieval` operation attributes, the same for every chunk store."""
+    return {
+        "gen_ai.operation.name": "retrieval",
+        "gen_ai.data_source.id": DATA_SOURCE_ID,
+        "gen_ai.retrieval.top_k": k,
+        "nexo.retrieval.mode": mode,
+    }
+
+
+def fuse(rankings: list[list[str]]) -> list[str]:
     """Reciprocal Rank Fusion; a single ranking passes through unchanged."""
     if len(rankings) == 1:
         return rankings[0]

@@ -10,6 +10,8 @@ terminology codes on nodes.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 import hashlib
 import re
 from datetime import date, datetime
@@ -322,3 +324,11 @@ class GroundedTriple(BaseModel):
     original_relation: str | None = None
     head: ResolvedEntity  # graph head (already swapped for inverse relations)
     tail: ResolvedEntity
+
+
+@dataclass(frozen=True)
+class SourceSwap:
+    """What replacing a document changed in the graph."""
+
+    triples_written: int
+    chunks_removed: int

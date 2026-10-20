@@ -81,7 +81,7 @@ hosts ([Local on Apple Silicon](local-apple-silicon.md)).
 
 | Variable | Default | Effect |
 |---|---|---|
-| `VECTOR_STORE_PATH` | `.data/vector_store.json` | Local chunk store file. |
+| `VECTOR_STORE_PATH` | `.data/vector_store.json` | The local chunk store file (`CHUNK_STORE=local`), and what `nexo chunks import` copies into Neo4j by default. |
 | `RETRIEVAL_MODE` | `hybrid` | Seed search: `hybrid` (BM25 + vector, Reciprocal Rank Fusion), `vector` or `keyword` (BM25 only). |
 | `CHUNK_SIZE` / `CHUNK_OVERLAP` | `1200` / `150` | Characters per chunk and overlap inside a section. |
 | `EXTRACTION_ATTEMPTS` | `3` | Validation retries per chunk. |
@@ -127,7 +127,7 @@ hosts ([Local on Apple Silicon](local-apple-silicon.md)).
 |---|---|---|
 | `MAX_QUERY_CHARS` | `2000` | Router's deterministic length gate. |
 | `CHECKPOINT_BACKEND` | `sqlite` | `memory` (tests only), `sqlite` (single node) or `postgres`. |
-| `CHECKPOINT_SQLITE_PATH` | `.data/checkpoints.sqlite` | SQLite file. |
+| `CHECKPOINT_SQLITE_PATH` | `<data dir>/<stack>/checkpoints.sqlite` | SQLite file for review checkpoints, shared by every checkout of the stack; the data dir is `NEXO_DATA_DIR`, `$XDG_DATA_HOME/nexo` or `~/.local/share/nexo`. |
 | `CHECKPOINT_POSTGRES_URI` | unset | Required for `postgres` (extra `postgres`). Secret. |
 
 **Evaluation**
@@ -149,6 +149,8 @@ hosts ([Local on Apple Silicon](local-apple-silicon.md)).
 | `OTEL_SEMCONV_STABILITY_OPT_IN` | derived | Strands conventions and redaction; derived from content capture unless set. |
 | `OTEL_INSTRUMENT_OPENAI` | `true` | Official GenAI instrumentation of the openai SDK (one `chat {model}` span per vLLM call). |
 | `DEPLOYMENT_ENVIRONMENT` | `dev` | `deployment.environment.name` attribute. |
+| `CHUNK_STORE` | `neo4j` | Where chunk text and embeddings live: `neo4j`, on the graph's `(:Chunk)` nodes with vector and full-text indexes, shared by every checkout of the stack; `local`, an in-process JSON file at `VECTOR_STORE_PATH` (offline runs, tests). |
+| `NEXO_STACK` | `nexo` | The stack's name (`metadata.name`, rendered by `nexo setup`); names its data directory, e.g. `~/.local/share/nexo/nexo/` for review checkpoints. |
 | `NEXO_USER` | login name | `user.id` on request and MCP spans; `nexo ask --user` and a reviewer override it. |
 | `QUERY_HASH_KEY` | generated | Key for `nexo.query.hash` (HMAC of the question) on traces; generated into the secrets store by `make env`, never exported. Unset: no hash. |
 | `TRACE_QUERY_TEXT` | `false` | `true` puts the question on the request span (`nexo.query.text`); `nexo.yaml` sets it (`telemetry.queryText`). Self-hosted backends only: LangSmith never receives it. |
