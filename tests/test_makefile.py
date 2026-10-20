@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import platform
 import re
 import shlex
@@ -16,6 +17,7 @@ from nexo import cli
 ROOT = Path(__file__).resolve().parent.parent
 MAKEFILE = (ROOT / "Makefile").read_text()
 TARGETS = re.findall(r"^([a-z0-9-]+):.*## ", MAKEFILE, re.MULTILINE)
+DEFAULTS = set(re.findall(r"^([A-Z_]+)\s*\?=", MAKEFILE, re.MULTILINE))  # RUN, CONTAINER, ...
 # Values for targets that refuse to run without arguments.
 ARGS = {"ingest": ["FILE=corpus/memo.md"], "ask": ["Q=How is A connected to B?"], "app": ["ARGS=models --check"]}
 
@@ -26,7 +28,11 @@ pytestmark =pytest.mark.skipif(shutil.which("make") is None, reason="make is not
 
 def make(*args: str, dry_run: bool = True) -> subprocess.CompletedProcess[str]:
     command = ["make", "--no-print-directory", *(["-n"] if dry_run else []), *args]
-    return subprocess.run(command, cwd=ROOT, capture_output=True, text=True, timeout=60)
+    # Under `make test RUN=` (as in CI) make exports its command-line variables to children, both as
+    # MAKEFLAGS and as plain environment variables that the Makefile's `?=` defaults would pick up.
+    inherited = {"MAKEFLAGS", "MFLAGS", "MAKELEVEL", "MAKEOVERRIDES", *DEFAULTS}
+    env = {k: v for k, v in os.environ.items() if k not in inherited}
+    return subprocess.run(command, cwd=ROOT, capture_output=True, text=True, timeout=60, env=env)
 
 
 def test_every_documented_target_is_phony_and_listed_by_help():
