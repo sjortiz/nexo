@@ -6,4 +6,4 @@ __pycache__/
 .pytest_cache/
 .claude/worktrees/
 .claude/settings.local.json
-corpus/
+/corpus/

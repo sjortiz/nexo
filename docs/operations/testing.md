@@ -25,7 +25,9 @@ sources:
 | `tests/test_retrieval.py` | nothing | BM25 (IDF, accent folding), keyword/vector/hybrid modes, RRF fusion, filtering, index invalidation and persistence. |
 | `tests/test_local_profiles.py` | nothing | Profile parsing and tiers (each fits its memory), settings resolution and precedence, the setup script resolving the same models, the playbook listing every model. |
 | `tests/test_models_command.py` | nothing | `nexo models`: per-role resolution across profiles and explicit settings, no secrets in output, `--check` against a fake OpenAI `/models` server (served, missing, other tag, unreachable) and its exit code. |
-| `tests/test_site.py` | nothing | The GitHub Pages page: self-contained, anchors and repository links resolve, quickstart commands match the CLI, compose and env template. |
+| `tests/test_site.py` | nothing | Every GitHub Pages page: self-contained, anchors, cross-page and repository links resolve; quickstart commands match the CLI, compose and env template. |
+| `tests/test_walkthrough.py` | nothing | The walkthrough page equals the executed notebook, which equals the script's cells run once in order without errors; Nexo imports exist; highlighting preserves code exactly. |
+| `tests/test_aio.py` | nothing | `run_sync` works with and without a running event loop (notebooks) and keeps the caller's context. |
 | `tests/test_model_roles.py` | nothing | Per-role endpoints and fallbacks, reasoning effort only for JSON roles, env templates use only real settings. |
 | `tests/test_live_models.py` | model servers, `NEXO_LIVE=1` | Real models: schema-valid extraction and routing, embeddings ranking (English and Spanish), agent tool calls, GenAI spans. |
 | `tests/test_mcp_server.py` | nothing | Every MCP tool over the real protocol (in-process and `nexo mcp` over stdio), clearance, parameterized lookups, rejected writes, JSON-only stdout. |

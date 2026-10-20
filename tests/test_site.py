@@ -1,4 +1,4 @@
-"""The GitHub Pages site (site/index.html) must be self-contained, accessible and match the repository."""
+"""The GitHub Pages site (site/*.html) must be self-contained, accessible and match the repository."""
 
 from __future__ import annotations
 
@@ -15,7 +15,9 @@ from nexo import cli
 from nexo import local_profiles as lp
 
 ROOT = Path(__file__).resolve().parent.parent
-PAGE = ROOT / "site" / "index.html"
+SITE = ROOT / "site"
+PAGE = SITE / "index.html"
+PAGES = sorted(SITE.glob("*.html"))
 REPO_BLOB = "https://github.com/sjortiz/nexo/blob/main/"
 
 
@@ -45,11 +47,22 @@ class _Page(HTMLParser):
             self._code.append(data)
 
 
+def _parse(path: Path) -> _Page:
+    parser = _Page()
+    parser.feed(path.read_text(encoding="utf-8"))
+    return parser
+
+
 @pytest.fixture(scope="module")
 def page() -> _Page:
-    parser = _Page()
-    parser.feed(PAGE.read_text(encoding="utf-8"))
-    return parser
+    """The landing page: quickstart checks apply to it."""
+    return _parse(PAGE)
+
+
+@pytest.fixture(scope="module", params=PAGES, ids=lambda p: p.name)
+def any_page(request) -> tuple[Path, _Page]:
+    """Every page on the site: structure, links and self-containment."""
+    return request.param, _parse(request.param)
 
 
 def _attrs(page: _Page, tag: str) -> list[dict[str, str]]:
@@ -67,15 +80,25 @@ def _commands(page: _Page) -> list[list[str]]:
     return commands
 
 
-def test_document_basics(page):
+def _ids(page: _Page) -> set[str]:
+    return {a["id"] for _, a in page.tags if "id" in a}
+
+
+def test_site_has_the_expected_pages():
+    assert [p.name for p in PAGES] == ["index.html", "walkthrough.html"]
+
+
+def test_document_basics(any_page):
+    path, page = any_page
     html = _attrs(page, "html")
     assert html and html[0].get("lang") == "en"
     assert any(a.get("name") == "viewport" for a in _attrs(page, "meta"))
     assert any(a.get("name") == "description" and a.get("content") for a in _attrs(page, "meta"))
-    assert re.search(r"<title>[^<]+</title>", PAGE.read_text(encoding="utf-8"))
+    assert re.search(r"<title>[^<]+</title>", path.read_text(encoding="utf-8"))
 
 
-def test_ids_are_unique_and_every_fragment_resolves(page):
+def test_ids_are_unique_and_every_fragment_resolves(any_page):
+    _, page = any_page
     ids = [a["id"] for _, a in page.tags if "id" in a]
     assert len(ids) == len(set(ids)), "duplicate id"
     fragments = {a["href"][1:] for a in _attrs(page, "a") if a.get("href", "").startswith("#")}
@@ -89,14 +112,26 @@ def test_ids_are_unique_and_every_fragment_resolves(page):
     assert refs <= set(ids), f"dangling references: {refs - set(ids)}"
 
 
-def test_repository_links_point_at_existing_files(page):
+def test_links_between_pages_resolve(any_page):
+    _, page = any_page
+    for href in (a.get("href", "") for a in _attrs(page, "a")):
+        if re.match(r"^[\w-]+\.html", href):
+            name, _, fragment = href.partition("#")
+            assert (SITE / name).is_file(), href
+            if fragment:
+                assert fragment in _ids(_parse(SITE / name)), href
+
+
+def test_repository_links_point_at_existing_files(any_page):
+    path, page = any_page
     links = {unescape(a["href"]) for a in _attrs(page, "a") if a.get("href", "").startswith(REPO_BLOB)}
-    assert len(links) >= 5
+    assert len(links) >= (5 if path == PAGE else 2)
     missing = [link for link in links if not (ROOT / link[len(REPO_BLOB) :].split("#", 1)[0]).is_file()]
     assert not missing, missing
 
 
-def test_self_contained(page):
+def test_self_contained(any_page):
+    _, page = any_page
     assert not _attrs(page, "script"), "the page needs no JavaScript"
     assert not [a for a in _attrs(page, "link") if "stylesheet" in a.get("rel", "")]
     for tag, attrs in page.tags:
@@ -104,19 +139,22 @@ def test_self_contained(page):
             assert not attrs.get(name, "").startswith(("http:", "https:", "//")), (tag, attrs)
 
 
-def test_images_have_text_alternatives(page):
+def test_images_have_text_alternatives(any_page):
+    path, page = any_page
     for attrs in _attrs(page, "img"):
         assert "alt" in attrs, attrs
     labelled = [a for a in _attrs(page, "svg") if a.get("role") == "img"]
-    assert labelled, "the workflow diagram should be exposed as an image"
+    if path == PAGE:
+        assert labelled, "the workflow diagram should be exposed as an image"
     for attrs in labelled:
         assert attrs.get("aria-labelledby"), attrs
     for attrs in _attrs(page, "svg"):
         assert attrs.get("role") == "img" or attrs.get("aria-hidden") == "true", attrs
 
 
-def test_dark_mode_and_license_are_declared():
-    text = PAGE.read_text(encoding="utf-8")
+def test_dark_mode_and_license_are_declared(any_page):
+    path, _ = any_page
+    text = path.read_text(encoding="utf-8")
     assert "prefers-color-scheme: dark" in text
     assert (ROOT / "LICENSE").read_text().startswith("MIT License")
     assert f'{REPO_BLOB}LICENSE">MIT License' in text

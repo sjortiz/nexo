@@ -2,7 +2,9 @@
 
 Graph RAG investigation service: LangGraph orchestration, a Strands Agents micro-agent, a self-hosted vLLM
 model (Llama 3.3 70B), Neo4j and a vector chunk store, traced end to end with OpenTelemetry.
-Overview: [sjortiz.github.io/nexo](https://sjortiz.github.io/nexo/).
+Overview: [sjortiz.github.io/nexo](https://sjortiz.github.io/nexo/). Step by step, with real outputs:
+[the walkthrough](https://sjortiz.github.io/nexo/walkthrough.html), also as a
+[Jupyter notebook](examples/walkthrough.ipynb).
 
 ```
             ┌────────────── LangGraph StateGraph (checkpointed) ──────────────┐
