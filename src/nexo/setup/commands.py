@@ -25,7 +25,14 @@ from nexo.setup.check import detect_host, preflight
 from nexo.setup.components import UIS
 from nexo.setup.envfile import ensure_secrets
 from nexo.setup.lock import lock as resolve_lock
-from nexo.setup.render import RENDER_DIR, Host, enabled_set, render
+from nexo.setup.render import (
+    RENDER_DIR,
+    Host,
+    enabled_set,
+    portable_files,
+    render,
+    write_files,
+)
 from nexo.setup.schema import ADDONS, Casting, SetupError, load_casting
 
 log = logging.getLogger(__name__)
@@ -101,6 +108,11 @@ def _lock(args: argparse.Namespace) -> int:
 
 
 def _render(args: argparse.Namespace) -> int:
+    if args.portable:  # the committed docker-compose.yml: fragment defaults, no lock
+        files = portable_files(load_casting(Path(args.file)), Path.cwd())
+        write_files(Path.cwd(), files)
+        log.info("wrote %s", ", ".join(files))
+        return 0
     casting, lock = _context(args)
     out = render(casting, lock, Path.cwd(), detect_host(casting), _addons(args))
     log.info("rendered %s", out)
@@ -220,7 +232,11 @@ def add_parser(
     verb("lock", _lock, "resolve nexo.yaml into nexo.lock").add_argument(
         "--upgrade", action="store_true", help="move every pin to the current defaults"
     )
-    verb("render", _render, "write .nexo/render/", addons=True)
+    verb("render", _render, "write .nexo/render/", addons=True).add_argument(
+        "--portable",
+        action="store_true",
+        help="write docker-compose.yml and deploy/rendered/ (repo-relative paths)",
+    )
     verb(
         "check", _check, "preflight and model server checks", addons=True
     ).add_argument(

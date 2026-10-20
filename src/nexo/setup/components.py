@@ -110,12 +110,13 @@ COMPONENTS: dict[str, ComponentDef] = {
     )
 }
 DEFAULT_ON = {"neo4j", "collector", "signoz", "hostMetrics", "app"}
-# Resident memory measured on a 24 GB Apple Silicon Mac, for the preflight budget.
+# Resident memory measured on a 24 GB Apple Silicon Mac after an ingest (podman stats,
+# upper end of the range), for the preflight budget.
 MEMORY_GB = {
-    "neo4j": 0.56,
-    "collector": 0.03,
-    "signoz": 3.0,  # estimate until measured
-    "langfuse": 3.1,
+    "neo4j": 0.63,
+    "collector": 0.05,
+    "signoz": 1.4,  # ClickHouse ~1.15, keeper, ingester, app and Postgres
+    "langfuse": 3.0,  # web 1.4, worker 0.8, ClickHouse 0.65, storage, Postgres, Redis
     "jaeger": 0.01,
 }
 UIS = {

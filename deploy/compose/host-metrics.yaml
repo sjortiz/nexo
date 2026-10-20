@@ -7,7 +7,7 @@ services:
     user: "0"
     security_opt: ["label=disable"]
     environment:
-      OTEL_RESOURCE_ATTRIBUTES: host.name=${NEXO_HOST}
+      OTEL_RESOURCE_ATTRIBUTES: host.name=${NEXO_HOST:-nexo-host}
     volumes:
       - /:/hostfs:ro
       - ${CONTAINER_SOCKET:-/var/run/docker.sock}:/var/run/docker.sock:ro

@@ -6,26 +6,18 @@
 VENV      ?= .venv
 RUN       ?= $(VENV)/bin/
 CONTAINER ?= $(shell command -v podman >/dev/null 2>&1 && echo podman || echo docker)
-COMPOSE   ?= $(CONTAINER) compose
-# On Linux the nexo container uses the host network to reach Ollama (see docker-compose.linux.yml).
-ifeq ($(shell uname -s),Linux)
-COMPOSE_APP ?= $(COMPOSE) -f docker-compose.yml -f docker-compose.linux.yml --profile app
-else
-COMPOSE_APP ?= $(COMPOSE) --profile app
-endif
-
-# Opt-in observability add-ons for `make up`: LANGFUSE=1, JAEGER=1, LANGSMITH=1.
+# The stack is described by nexo.yaml (`make env` writes it from a preset) and run by
+# `nexo setup`, which renders .nexo/render/. Add-ons for one run, without editing nexo.yaml:
+# make up LANGFUSE=1 JAEGER=1 LANGSMITH=1.
+SETUP     ?= nexo.yaml
+PRESET    ?=
 LANGFUSE  ?=
 JAEGER    ?=
 LANGSMITH ?=
-ADDONS    = OTEL_LANGFUSE=$(if $(LANGFUSE),langfuse,none) \
-            OTEL_JAEGER=$(if $(JAEGER),jaeger,none) \
-            OTEL_LANGSMITH=$(if $(LANGSMITH),langsmith,none)
-# The container engine's API socket, for container metrics (as the engine sees it: inside the
-# Podman VM on macOS). Docker's default socket otherwise.
-CONTAINER_SOCKET ?= $(shell $(CONTAINER) info --format '{{.Host.RemoteSocket.Path}}' 2>/dev/null | sed -n 's|^unix://||p')
-# host.name on host and container metrics (the containers' own hostnames are random).
-NEXO_HOST ?= $(shell hostname -s)
+UPGRADE   ?=
+NEXO_SETUP = $(RUN)nexo setup -f $(SETUP)
+ADDONS     = $(if $(LANGFUSE),--addon langfuse) $(if $(JAEGER),--addon jaeger) \
+             $(if $(LANGSMITH),--addon langsmith)
 PROFILE  ?=
 ROLES    ?=
 FILE     ?=
@@ -37,7 +29,8 @@ NEO4J_TEST_PORT     ?= 7688
 NEO4J_TEST_PASSWORD ?= nexo-test-pass
 
 .DEFAULT_GOAL := help
-.PHONY: help install install-notebook env models up down check ingest ask mcp graph app \
+.PHONY: help install install-notebook env models up down check render lock compose-file \
+        ingest ask mcp graph app \
         lint format test neo4j-test test-neo4j neo4j-test-down test-live ci \
         walkthrough site serve-site notebook clean
 
@@ -52,25 +45,32 @@ install: ## Install Python, Nexo and the dev tools into .venv with uv (from uv.l
 install-notebook: ## Also install Jupyter, for the walkthrough notebook
 	uv sync --extra notebook
 
-env: ## Create .env from the local template and fill missing secrets (keeps existing values)
-	@if [ -f .env ]; then echo ".env exists; keeping its values"; else cp deploy/local/local.env.example .env && echo "created .env: set LOCAL_PROFILE"; fi
-	@deploy/local/env-secrets.sh .env
+env: ## Write nexo.yaml from a preset (PRESET=mac-single) and fill missing secrets in .env
+	$(NEXO_SETUP) init $(if $(PRESET),--preset $(PRESET))
+	$(NEXO_SETUP) secrets
 
 models: ## Pull and start the profile's models in Ollama (PROFILE=m1-max-64 ROLES=heavy; default: .env)
 	deploy/local/ollama-setup.sh $(PROFILE) $(ROLES)
 
 ##@ Run
 
-up: ## Start Neo4j, the collector and SigNoz (add-ons: LANGFUSE=1, JAEGER=1, LANGSMITH=1)
-	$(ADDONS) NEXO_HOST=$(NEXO_HOST) $(if $(CONTAINER_SOCKET),CONTAINER_SOCKET=$(CONTAINER_SOCKET)) \
-	  $(COMPOSE) $(if $(LANGFUSE),--profile langfuse) up -d neo4j otel-collector signoz \
-	  $(if $(LANGFUSE),langfuse-web langfuse-worker) $(if $(JAEGER),jaeger)
+up: ## Start the models and the stack in nexo.yaml (one run: LANGFUSE=1, JAEGER=1, LANGSMITH=1)
+	$(NEXO_SETUP) up $(ADDONS)
 
-down: ## Stop them (data volumes are kept)
-	$(COMPOSE) --profile langfuse --profile jaeger down
+down: ## Stop the stack (data volumes are kept)
+	$(NEXO_SETUP) down
 
-check: ## Check each model role's server and model (nexo models --check)
-	$(RUN)nexo models --check
+check: ## Preflight (engine, secrets, memory), then each model role's server and model
+	$(NEXO_SETUP) check $(ADDONS)
+
+render: ## Write .nexo/render/ from nexo.yaml without starting anything
+	$(NEXO_SETUP) render $(ADDONS)
+
+lock: ## Resolve nexo.yaml into nexo.lock (UPGRADE=1 moves every pin to the current defaults)
+	$(NEXO_SETUP) lock $(if $(UPGRADE),--upgrade)
+
+compose-file: ## Regenerate docker-compose.yml and deploy/rendered/ from the mac-single preset
+	$(RUN)nexo setup -f examples/setups/mac-single/nexo.yaml render --portable
 
 ingest: ## Ingest a document: make ingest FILE=corpus/memo.md DOC_TYPE=memo
 	@if [ -z "$(FILE)" ]; then echo "usage: make ingest FILE=path/to/doc.md [DOC_TYPE=memo]" >&2; exit 2; fi
@@ -87,7 +87,7 @@ graph: ## Print the LangGraph workflow as Mermaid
 	$(RUN)nexo graph
 
 app: ## Run the nexo CLI in a container: make app ARGS="models --check"
-	$(COMPOSE_APP) run --rm nexo $(ARGS)
+	$(NEXO_SETUP) compose run --rm nexo $(ARGS)
 
 ##@ Test
 

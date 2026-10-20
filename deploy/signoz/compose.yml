@@ -1,4 +1,4 @@
-# Self-hosted SigNoz (traces, metrics, logs, dashboards, alerts), included by docker-compose.yml.
+# Self-hosted SigNoz (traces, metrics, logs, dashboards, alerts), a core component of `nexo setup`.
 # Generated with SigNoz's installer (foundryctl 0.3.0, docker compose casting), then pinned:
 # shorter service names, images pinned, only the UI (8080) published on 127.0.0.1. The Nexo
 # collector forwards to the ingester over the compose network. Secrets come from .env

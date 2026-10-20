@@ -9,6 +9,7 @@ import pytest
 from pydantic import SecretStr
 
 from nexo.config import Settings
+from nexo.setup.components import COMPONENTS
 from nexo.llm import build_chat_model, build_strands_model
 
 
@@ -56,17 +57,13 @@ def test_role_overrides_come_from_environment(monkeypatch):
 
 
 ROOT = Path(__file__).resolve().parent.parent
-# Keys the compose stack reads (and passes to the collector, SigNoz or Langfuse), not Settings.
-COMPOSE_FILES = [
-    "docker-compose.yml",
-    "docker-compose.gpu.yml",
-    "deploy/signoz/compose.yml",
-    "deploy/langfuse/compose.yml",
-]
+# Keys the stack's fragments read (and pass to the collector, SigNoz or Langfuse), not Settings.
+COMPOSE_FILES = [c.compose for c in COMPONENTS.values() if c.compose]
 PASSTHROUGH = {
     name
-    for compose_file in COMPOSE_FILES
-    for name in re.findall(r"\$\{(\w+)", (ROOT / compose_file).read_text())
+    for text in [(ROOT / f).read_text() for f in COMPOSE_FILES]
+    + [v for c in COMPONENTS.values() for v in c.collector_env.values()]
+    for name in re.findall(r"\$\{(\w+)", text)
 }
 
 

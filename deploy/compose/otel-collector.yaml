@@ -2,7 +2,7 @@
 # base deploy/otel-collector.yaml plus each enabled add-on's deploy/otel-addons/ fragment.
 services:
   otel-collector:
-    image: otel/opentelemetry-collector-contrib:0.111.0
+    image: docker.io/otel/opentelemetry-collector-contrib:0.162.0
     command: [--config=/etc/otelcol/config.yaml]
     depends_on: [signoz-ingester]
     ports: ["127.0.0.1:4318:4318", "127.0.0.1:8889:8889"]  # OTLP in, Prometheus metrics out
