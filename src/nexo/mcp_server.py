@@ -7,9 +7,11 @@ evidence with `nexo_get_chunks`. The skill in `.claude/skills/nexo-knowledge`
 tells Claude to use them in that order and cite every claim.
 
 The tools reuse the investigator's safeguards: the read-only Cypher guard and
-READ transactions, and one clearance (MCP_CLEARANCE) that withholds chunks and
-redacts entities above it. The server has no per-user authentication: run it
-locally over stdio, or behind something that authenticates.
+READ transactions, and one clearance (MCP_CLEARANCE): chunks above it are masked
+by the same ChunkRedactor as the agent (detected PII replaced by [EMAIL] and the
+like) or withheld, and graph rows above it are redacted. The server has no
+per-user authentication: run it locally over stdio, or behind something that
+authenticates.
 """
 
 from __future__ import annotations
@@ -22,6 +24,7 @@ from mcp.server.mcpserver.exceptions import ToolError
 from neo4j.exceptions import Neo4jError, ServiceUnavailable, SessionExpired
 from pydantic import BaseModel, Field
 
+from nexo.agents.redaction import ChunkRedactor
 from nexo.agents.tools import collect_chunk_ids, redact_above_clearance
 from nexo.config import Settings
 from nexo.mcp_review import READ_ONLY, REVIEW_INSTRUCTIONS, register_review_tools
@@ -32,6 +35,7 @@ from nexo.storage.graph_store import (
     validate_read_only_cypher,
 )
 from nexo.storage.schemas import CHUNK_ID_RE, EntityType, Sensitivity
+from nexo.storage.sensitive_data import NoopDetector
 from nexo.storage.vector_store import ChunkFilter, ChunkStore
 from nexo.telemetry import caller_attributes, query_attributes, traced_span
 
@@ -85,14 +89,21 @@ def build_mcp_server(  # pylint: disable=too-many-locals  # one closure per tool
     chunks: ChunkStore,
     settings: Settings,
     runtime: Runtime | None = None,
+    redactor: ChunkRedactor | None = None,
 ) -> MCPServer:
     """Build the MCP server; every result is filtered by the clearance.
 
-    The retrieval tools are read-only. With a runtime (and MCP_REVIEW_TOOLS on) it also
-    serves the review tools, whose only write needs the person's confirmation.
+    Chunks above the clearance go through the redactor: masked where only detected
+    PII puts them there, withheld otherwise. Without one (and no runtime), they are
+    withheld whole. The retrieval tools are read-only. With a runtime (and
+    MCP_REVIEW_TOOLS on) it also serves the review tools, whose only write needs
+    the person's confirmation.
     """
     clearance = Sensitivity(settings.mcp_clearance or settings.default_clearance)
     scope = ChunkFilter(max_sensitivity=clearance)
+    redactor = redactor or (
+        runtime.redactor if runtime is not None else ChunkRedactor(NoopDetector())
+    )
     # Who is calling (NEXO_USER or the login name) and this server's session, on every span.
     caller = caller_attributes(settings)
     server = MCPServer(
@@ -158,7 +169,8 @@ def build_mcp_server(  # pylint: disable=too-many-locals  # one closure per tool
     ) -> list[SearchHit]:
         """Find passages by keyword and meaning (hybrid BM25 + vector search).
         Returns snippets with chunk ids; read full text with nexo_get_chunks
-        before citing."""
+        before citing. Personal details in a passage above the server's clearance
+        appear as [EMAIL], [PHONE] and similar."""
         with traced_span(
             "execute_tool nexo_search",
             {
@@ -167,8 +179,11 @@ def build_mcp_server(  # pylint: disable=too-many-locals  # one closure per tool
                 **query_attributes(settings, query),
             },
         ):
-            records = chunks.search(
-                query, k, scope.model_copy(update={"doc_types": doc_types or None})
+            records = redactor.search(
+                chunks,
+                query,
+                k,
+                scope.model_copy(update={"doc_types": doc_types or None}),
             )
             return [
                 SearchHit(
@@ -190,7 +205,9 @@ def build_mcp_server(  # pylint: disable=too-many-locals  # one closure per tool
         ],
     ) -> dict[str, Any]:
         """Read the exact source text of chunks. This is the evidence to cite as
-        [chunk:<chunk_id>]. Chunks above the server's clearance are withheld."""
+        [chunk:<chunk_id>]. Personal details in a chunk above the server's
+        clearance appear as [EMAIL], [PHONE] and similar (listed in `masked`);
+        anything else above it is withheld."""
         with traced_span(
             "execute_tool nexo_get_chunks",
             {"gen_ai.tool.name": "nexo_get_chunks", **caller},
@@ -200,7 +217,8 @@ def build_mcp_server(  # pylint: disable=too-many-locals  # one closure per tool
             ]
             wanted = well_formed[: settings.agent_max_chunks_per_call]
             records = chunks.get_by_ids(wanted)
-            allowed = [r for r in records if scope.allows(r)]
+            views = [(r, redactor.visible(r, scope)) for r in records]
+            allowed = [shown for _, shown in views if shown is not None]
             found = {r.chunk_id for r in records}
             return {
                 "chunks": [
@@ -213,6 +231,9 @@ def build_mcp_server(  # pylint: disable=too-many-locals  # one closure per tool
                         ),
                     ).model_dump()
                     for r in allowed
+                ],
+                "masked": [
+                    r.chunk_id for r, shown in views if shown and shown.text != r.text
                 ],
                 "withheld": sorted(found - {r.chunk_id for r in allowed}),
                 "not_found": [c for c in wanted if c not in found],

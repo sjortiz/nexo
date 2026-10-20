@@ -71,7 +71,9 @@ spans alone until re-ingested. Search ranks the original text (the store indexes
 masked first; a partial value such as an email domain can still influence ranking. The model-facing
 chunk, the ledger and spans never hold the masked-out text; the ledger keeps the stored level, so
 [compliance](compliance-checks.md) still warns `pii_in_evidence`. A real detector adds a call per
-over-clearance candidate at read time, which matters for `comprehend_medical`. `nexo mcp` still withholds.
+over-clearance candidate at read time, which matters for `comprehend_medical`. `nexo mcp`'s `nexo_search` and `nexo_get_chunks`
+([MCP server](mcp-server.md#safeguards)) use the same redactor. Graph rows are not masked: entities and
+edges above clearance stay redacted (ADR-0006).
 
 See [ADR-0006](../decisions/adr-0006-sensitivity-and-caller-clearance.md).[^sensitive]
 
