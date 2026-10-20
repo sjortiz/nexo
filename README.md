@@ -81,7 +81,8 @@ your documents with a citation per claim: [Use from Claude Code](docs/operations
 
 Models run natively through Ollama, chosen by a hardware profile: `m1-max-64` / `m5-pro-24` on Apple
 Silicon, `gpu-24` (VRAM) or `cpu-64` on Linux. Services run in Podman or natively; either way on one
-machine or two (e.g. a Linux GPU box serving the agent for a Mac):
+machine or two (e.g. a Linux GPU box serving the agent for a Mac). The same steps as make targets:
+`make install env models up check`.
 
 ```bash
 cp deploy/local/local.env.example .env       # set LOCAL_PROFILE (and REMOTE_PROFILE for two Macs)
@@ -113,10 +114,12 @@ container there).
 ## Test
 
 ```bash
-pytest                                                  # offline: fakes only at the vLLM HTTP edge
-podman run -d -p 127.0.0.1:7688:7687 -e NEO4J_AUTH=neo4j/nexo-test-pass neo4j:5.26-community
-NEO4J_TEST_URI=bolt://127.0.0.1:7688 NEO4J_TEST_PASSWORD=nexo-test-pass pytest tests/test_neo4j_integration.py
+make test          # offline: fakes only at the model HTTP edge
+make test-neo4j    # integration tests on a throwaway Neo4j (127.0.0.1:7688)
+make test-live     # the real models, once they run
 ```
+
+`make` lists every task (setup, models, services, ingest/ask, tests, the walkthrough and the site).
 
 ## Production notes
 

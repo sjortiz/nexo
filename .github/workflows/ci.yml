@@ -24,20 +24,15 @@ jobs:
           cache: pip
       - name: Install
         run: pip install -e ".[dev]"
+      # The Makefile targets developers run; RUN= uses the tools installed above.
       - name: Lint
-        run: ruff check src tests
-      # Service containers only exist on Linux runners; the Neo4j tests skip elsewhere.
+        run: make lint RUN=
+      # Containers only run on Linux runners; the Neo4j tests skip elsewhere.
       - name: Start Neo4j
         if: runner.os == 'Linux'
-        run: |
-          docker run -d --name neo4j -p 127.0.0.1:7688:7687 -e NEO4J_AUTH=neo4j/nexo-test-pass neo4j:5.26-community
-          for i in $(seq 1 60); do
-            python -c "from neo4j import GraphDatabase; GraphDatabase.driver('bolt://127.0.0.1:7688', auth=('neo4j', 'nexo-test-pass')).verify_connectivity()" && exit 0
-            sleep 2
-          done
-          docker logs neo4j; exit 1
+        run: make neo4j-test RUN= CONTAINER=docker
       - name: Test
         env:
           NEO4J_TEST_URI: ${{ runner.os == 'Linux' && 'bolt://127.0.0.1:7688' || '' }}
           NEO4J_TEST_PASSWORD: nexo-test-pass
-        run: pytest -o addopts="" -q -rs
+        run: make test RUN=

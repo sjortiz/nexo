@@ -1,5 +1,8 @@
 # Bundle Update Log
 
+## 2026-10-20
+* **Update**: A `Makefile` covers setup, models, services, tests, the walkthrough and the site; CI runs its targets ([Testing](operations/testing.md)).
+
 ## 2026-10-19
 * **Creation**: Step-by-step walkthrough ([page](https://sjortiz.github.io/nexo/walkthrough.html), `examples/walkthrough.ipynb`, `examples/walkthrough.py`), generated from one real run.
 * **Update**: Profiles pin GGUF Ollama tags (MLX builds cannot do structured output); `nexo models --check` probes structured output for JSON roles ([How local setup works](operations/local-setup.md)).

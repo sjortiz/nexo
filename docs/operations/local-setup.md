@@ -105,7 +105,7 @@ SSH provides it.
 # Check
 
 1. `nexo models` prints the model and server each role resolved to (no secrets).
-2. `nexo models --check` asks each server whether it serves that model, and sends the JSON roles
+2. `nexo models --check` (or `make check`) asks each server whether it serves that model, and sends the JSON roles
    (extraction, router, judge) one tiny schema-constrained request; it exits 1 if either fails.[^models]
 3. `ollama ps` on each model machine lists the resident models (100% GPU on a Mac).
 4. `NEXO_LIVE=1 pytest -m live -v` exercises the real models.

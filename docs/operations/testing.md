@@ -27,6 +27,7 @@ sources:
 | `tests/test_models_command.py` | nothing | `nexo models`: per-role resolution across profiles and explicit settings, no secrets in output, `--check` against a fake OpenAI `/models` server (served, missing, other tag, unreachable) and its exit code. |
 | `tests/test_site.py` | nothing | Every GitHub Pages page: self-contained, anchors, cross-page and repository links resolve; quickstart commands match the CLI, compose and env template. |
 | `tests/test_walkthrough.py` | nothing | The walkthrough page equals the executed notebook, which equals the script's cells run once in order without errors; Nexo imports exist; highlighting preserves code exactly. |
+| `tests/test_makefile.py` | `make` | Every documented target dry-runs, is phony and listed by `make`; paths and `nexo` flags exist; Linux override only on Linux; CI and docs use real targets. |
 | `tests/test_aio.py` | nothing | `run_sync` works with and without a running event loop (notebooks) and keeps the caller's context. |
 | `tests/test_model_roles.py` | nothing | Per-role endpoints and fallbacks, reasoning effort only for JSON roles, env templates use only real settings. |
 | `tests/test_live_models.py` | model servers, `NEXO_LIVE=1` | Real models: schema-valid extraction and routing, embeddings ranking (English and Spanish), agent tool calls, GenAI spans. |
@@ -42,15 +43,15 @@ tool wiring, message formatting and stop reasons are exercised without a GPU.[^t
 # Steps
 
 ```bash
-pip install -e ".[dev]"
-ruff check src tests
-pytest                                   # integration tests skip without NEO4J_TEST_URI
-
-podman run -d --name nexo-neo4j-test -p 127.0.0.1:7688:7687 \
-  -e NEO4J_AUTH=neo4j/nexo-test-pass neo4j:5.26-community
-NEO4J_TEST_URI=bolt://127.0.0.1:7688 NEO4J_TEST_PASSWORD=nexo-test-pass pytest
-podman rm -f nexo-neo4j-test
+make install
+make lint
+make test                                # integration tests skip without NEO4J_TEST_URI
+make test-neo4j                          # starts nexo-neo4j-test on 127.0.0.1:7688, runs them
+make neo4j-test-down
 ```
+
+CI runs the same targets (`make lint`, `make neo4j-test`, `make test`) with `RUN=`, which uses the tools
+on `PATH` instead of `.venv`.
 
 # Writing tests
 
