@@ -167,11 +167,12 @@ class Investigator:
         )
         answer = str(result).strip()
 
-        # Smaller models sometimes end the turn after reasoning without writing the answer, or drop the
-        # citations. One bounded follow-up from the evidence already gathered; compliance still checks it.
+        # Smaller models sometimes stop after reasoning without writing the answer, run out of turns, or
+        # drop the citations. One bounded follow-up from the evidence already gathered; compliance still
+        # checks it. Token caps are cost limits, so they get no follow-up.
         follow_up = _follow_up(answer, ctx)
         remaining = self._settings.agent_timeout_s - (time.monotonic() - started)
-        if follow_up and str(result.stop_reason) == "end_turn" and remaining > 5:
+        if follow_up and str(result.stop_reason) in ("end_turn", "limit_turns") and remaining > 5:
             log.info("investigation %s: asking for %s", ctx.request_id, follow_up[0])
             result = await asyncio.wait_for(
                 agent.invoke_async(follow_up[1],
@@ -206,7 +207,8 @@ def _follow_up(answer: str, ctx: InvestigationContext) -> tuple[str, str] | None
     if not answer:
         return ("the missing final answer",
                 "You ended without writing a final answer. Write it now from the evidence you already have, "
-                "citing each fact as [chunk:<chunk_id>]. Do not call any more tools.")
+                "citing each fact as [chunk:<chunk_id>]. If that evidence does not answer the question, say "
+                "what you could not find. Do not call any more tools.")
     if ctx.fetched and not extract_citations(answer):
         return ("citations",
                 "Your answer has no citations. Rewrite it, citing each fact as [chunk:<chunk_id>] using only "

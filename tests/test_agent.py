@@ -226,6 +226,20 @@ def test_cited_answer_and_answer_without_evidence_get_no_follow_up(settings, chu
     assert len(nothing.requests) == 1  # no evidence fetched: nothing to cite
 
 
+def test_turn_capped_agent_is_asked_for_what_it_found(settings, chunk_store):
+    client = ScriptedClient([
+        _tool_call("t1", "query_knowledge_graph", {"cypher_query": "MATCH (n:Entity) RETURN n.name AS name LIMIT 5"}),
+        _completion({"content": "The graph has no evidence about the chief executive."}, "stop"),
+    ])
+    output = Investigator(model=OpenAIModel(client=client, model_id="m", stream=False),
+                          graph=FakeGraph(rows=[{"name": "Beta Labs"}]), chunks=chunk_store,
+                          settings=settings.model_copy(update={"agent_max_turns": 1})).investigate(
+        "Who runs Beta Labs?", scope=InvestigationScope(strategy="graph"))
+    assert len(client.requests) == 2
+    assert "without writing a final answer" in _last_user_text(client.requests[1])
+    assert output.answer == "The graph has no evidence about the chief executive."
+
+
 def test_follow_up_happens_once(settings, chunk_store):
     _, client = _seeded(chunk_store, ["", ""])
     output = Investigator(model=OpenAIModel(client=client, model_id="m", stream=False), graph=FakeGraph(),
