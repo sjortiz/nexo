@@ -99,6 +99,8 @@ def fixture_settings(tmp_path) -> Settings:
         chunk_size=400,
         chunk_overlap=0,
         seed_chunks=2,
+        # The review tests exercise the pause; test_review_policy covers the default.
+        review_policy="always",
     )
 
 

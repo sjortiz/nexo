@@ -494,7 +494,9 @@ def _add_document_commands(sub: argparse._SubParsersAction) -> None:
     )
     ingest.set_defaults(handler=_ingest)
 
-    ask = sub.add_parser("ask", help="start an investigation (pauses for review)")
+    ask = sub.add_parser(
+        "ask", help="start an investigation (pauses for review per spec.review)"
+    )
     ask.add_argument("query")
     ask.add_argument("--thread-id")
     ask.add_argument("--clearance", choices=["public", "internal", "pii", "phi"])

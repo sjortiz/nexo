@@ -30,10 +30,24 @@ def _with_policy(settings, policy, output):
     return _runtime(settings, FakeInvestigator([output]))
 
 
-def test_always_is_the_default_and_pauses_even_a_clean_answer(settings):
-    """Unset, every answer waits for a person, as before the policy existed."""
-    assert settings.review_policy == "always"
-    paused = _runtime(settings, FakeInvestigator([grounded_output()])).start("q")
+def test_default_approves_a_clean_grounded_answer_and_pauses_on_any_finding(
+    settings, workdir, monkeypatch
+):
+    """Unset, the policy is on-findings: clean and grounded is released, any finding waits."""
+    monkeypatch.delenv("REVIEW_POLICY", raising=False)
+    default = Settings(_env_file=None).review_policy
+    assert default == "on-findings"
+    assert load_casting(_setup(workdir, "mac-single")).spec.review == default
+    done = _with_policy(settings, default, grounded_output()).start("q")
+    assert done.status == "completed" and done.approval_status == "approved"
+    for output in (grounded_output(**WARNED), grounded_output(**UNGROUNDED)):
+        paused = _with_policy(settings, default, output).start("q")
+        assert paused.status == "awaiting_review" and paused.final_response is None
+
+
+def test_always_pauses_even_a_clean_answer(settings):
+    """always: every answer waits for a person, as before the policy existed."""
+    paused = _with_policy(settings, "always", grounded_output()).start("q")
     assert paused.status == "awaiting_review" and paused.final_response is None
     assert not _review(paused)["compliance_report"]["findings"]
 
@@ -128,13 +142,11 @@ def test_on_findings_also_requires_grounded_citations():
 def test_setup_file_sets_the_policy_and_the_default_is_rendered_too(workdir):
     """spec.review reaches nexo.env as REVIEW_POLICY, the default included."""
     _, _, env = _render(workdir, _setup(workdir, "mac-single"))
-    assert env["REVIEW_POLICY"] == "always"
-    path = _setup(
-        workdir, "mac-single", lambda d: d["spec"].update(review="on-findings")
-    )
-    assert load_casting(path).spec.review == "on-findings"
-    _, _, env = _render(workdir, path)
     assert env["REVIEW_POLICY"] == "on-findings"
+    path = _setup(workdir, "mac-single", lambda d: d["spec"].update(review="always"))
+    assert load_casting(path).spec.review == "always"
+    _, _, env = _render(workdir, path)
+    assert env["REVIEW_POLICY"] == "always"
 
 
 def test_rendered_env_overrides_a_stale_policy_in_dot_env(workdir, tmp_path):
