@@ -22,8 +22,10 @@ search_chunks(query: str, k: int = 5) -> str  # JSON
 
 1. Reserves one call from the tool budget.
 2. Calls `ChunkStore.search` (hybrid BM25 + vector by default; see [chunk store](chunk-store.md)) with the
-   request's `ChunkFilter`, so chunks above the caller's clearance or outside the router's scope are never
-   ranked or returned. `k` is capped at `AGENT_MAX_CHUNKS_PER_CALL`.
+   request's scope and a few times `k` candidates, then drops chunks outside the scope or above clearance.
+   A chunk above clearance only because of detected PII spans stays, masked
+   ([read-time redaction](sensitive-data-detection.md#read-time-redaction)); the query is masked first, and
+   ranking uses the original text. `k` is capped at `AGENT_MAX_CHUNKS_PER_CALL`.
 3. Returns the chunks in the same shape as [fetch_vector_chunks](fetch-vector-chunks.md) and records them
    in the evidence ledger, so the answer may cite them and [compliance](compliance-checks.md) treats them
    as grounded.[^tools]

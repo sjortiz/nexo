@@ -31,8 +31,9 @@ the router chose and who is asking. Each result also logs the answer, the tool c
 [`examples/golden/acme-gamma.jsonl`](../../examples/golden/acme-gamma.jsonl) covers the two sample documents
 in `examples/corpus`: a multi-hop chain through a missing entity (Delta Devices), a direct lookup, a
 question that needs both documents and a question the documents do not answer. Ingest both documents
-first. The first three cases need `pii` clearance because the leadership chunk (it has an email address)
-is classified `pii`.
+first. The leadership chunk has an email address, so it is classified `pii`. The Delta case runs at the default `internal`
+clearance and is answered from the masked chunk ([read-time redaction](../components/sensitive-data-detection.md#read-time-redaction));
+the two cases after it use `pii` to read the chunk whole.
 
 Build it from real reviewer-approved threads: the approved answer becomes `reference_answer`, and the
 chunks the reviewer confirmed become `relevant_chunk_ids`.

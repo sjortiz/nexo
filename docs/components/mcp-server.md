@@ -36,7 +36,7 @@ All tools are annotated read-only, idempotent and closed-world.[^server]
 - **Read-only.** `nexo_graph_query` goes through the [Cypher guard](graph-store.md#read-only-enforcement)
   and a READ transaction; the lookup tools use parameterized Cypher, so user text is never spliced in.
 - **Clearance.** One per server: `MCP_CLEARANCE`, defaulting to `DEFAULT_CLEARANCE`. Chunks above it are
-  withheld; entities and edges above it are redacted or withheld
+  withheld whole (no read-time masking here); entities and edges above it are redacted or withheld
   ([sensitivity model](sensitive-data-detection.md#sensitivity-levels)). MCP over stdio has no per-user
   identity, so run one server per clearance.
 - **Errors.** Anticipated failures (unsafe Cypher, unknown entity type, graph unavailable) come back as
