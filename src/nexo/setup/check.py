@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import json
 import os
 import platform
 import shutil
 import socket
 import subprocess
+import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -80,6 +82,45 @@ def engine_memory_gb(host: Host) -> float | None:
     return int(mib.splitlines()[0]) / 1024 if mib else None
 
 
+def ollama_models(port: int) -> set[str] | None:
+    """Models this machine's Ollama has pulled; None when it is not running."""
+    try:
+        with urllib.request.urlopen(
+            f"http://127.0.0.1:{port}/api/tags", timeout=2
+        ) as response:
+            return {m["name"] for m in json.load(response).get("models", [])}
+    except (OSError, ValueError):
+        return None
+
+
+def models_finding(
+    casting: Casting, lock: dict[str, Any], pulled=ollama_models
+) -> Finding | None:
+    """Which models this machine serves, and which `up` still has to pull."""
+    models = casting.spec.models
+    if models.provider != "ollama":
+        return None
+    local_server = f"http://localhost:{models.local.port}/v1"
+    served = sorted(
+        {
+            entry["model"]
+            for entry in lock["models"].values()
+            if entry["server"] == local_server and entry["model"]
+        }
+    )
+    size = round(sum(MODEL_SIZES_GB.get(m, 0.0) for m in served), 1)
+    detail = f"this machine serves {', '.join(served)} ({size} GB)"
+    have = pulled(models.local.port)
+    if have is None:
+        detail += "; Ollama is not running (up starts it and pulls what is missing)"
+    else:
+        missing = [m for m in served if m not in have and f"{m}:latest" not in have]
+        if missing:
+            sizes = ", ".join(f"{m} ({MODEL_SIZES_GB.get(m, 0.0)} GB)" for m in missing)
+            detail += f"; up will pull {sizes}"
+    return Finding("models", True, detail)
+
+
 def memory_budget(
     casting: Casting, lock: dict[str, Any], on: set[str]
 ) -> dict[str, float]:
@@ -138,6 +179,7 @@ def preflight(
                     f" ssh -N -L {remote.port}:127.0.0.1:11434 <remote host>",
                 )
             )
+    findings += [f for f in (models_finding(casting, lock),) if f]
     findings += platform_findings(casting, host)
     findings += memory_findings(casting, lock, on, host)
     return findings
