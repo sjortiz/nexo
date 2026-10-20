@@ -507,3 +507,28 @@ def test_linux_presets_render_host_networking_even_on_a_mac(workdir, monkeypatch
     monkeypatch.setattr(check, "this_os", lambda: "macos")
     compose, _, _ = _render(workdir, _setup(workdir, "linux-cpu"), LINUX)
     assert compose["services"]["nexo"]["network_mode"] == "host"
+
+
+def test_check_names_the_models_up_will_pull(workdir):
+    """Two machines serve a different light set here than one machine; check says what is missing."""
+    single = load_casting(_setup(workdir, "mac-single"))
+    single_lock = lock(single, workdir / "nexo.yaml", workdir)
+    have = {"qwen3.5:9b-q4_K_M", "bge-m3:latest"}
+    found = check.models_finding(single, single_lock, pulled=lambda _port: have)
+    assert found.ok and "up will pull" not in found.detail
+
+    two = load_casting(_setup(workdir, "mac-two-machines"))
+    found = check.models_finding(
+        two, lock(two, workdir / "nexo.yaml", workdir), pulled=lambda _port: have
+    )
+    to_pull = found.detail.split("up will pull ")[1]
+    assert "qwen3:4b-instruct-2507-q4_K_M (2.5 GB)" in to_pull
+    assert "llama3.1:8b-instruct-q4_K_M (4.9 GB)" in to_pull
+    assert "bge-m3" not in to_pull  # pulled as bge-m3:latest
+
+    down = check.models_finding(single, single_lock, pulled=lambda _port: None)
+    assert "Ollama is not running" in down.detail
+    vllm = load_casting(_setup(workdir, "linux-vllm"))
+    assert (
+        check.models_finding(vllm, lock(vllm, workdir / "nexo.yaml", workdir)) is None
+    )

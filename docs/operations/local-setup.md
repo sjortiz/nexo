@@ -128,6 +128,11 @@ the script with `single` (one machine) or `light` (two machines); on the remote 
 service (systemd, the macOS app), the script pulls through it and prints the settings to
 apply.[^setup] See what a profile resolves to with `python3 src/nexo/local_profiles.py plan m1-max-64 heavy`.
 
+The `light` set is not the `single` set without the heavy models: on a 24 GB Mac it adds a
+separate router (qwen3 4B, 2.5 GB) and the judge (Llama 3.1 8B, 4.9 GB), so moving from one
+machine to two pulls about 7.4 GB more. `make check` lists the models this machine serves and
+the ones `make up` will pull.
+
 # How each setting is resolved
 
 For every setting, the first match wins:[^config]
