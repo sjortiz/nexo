@@ -113,6 +113,10 @@ class ChunkRecord(BaseModel):
     source_uri: str | None = None
     effective_date: date | None = None
     sensitivity: Sensitivity = Sensitivity.INTERNAL
+    declared_sensitivity: Sensitivity | None = Field(
+        default=None,
+        description="Declared level before detection raised it; None on older chunks",
+    )
     ingested_at: datetime
     schema_version: str = SCHEMA_VERSION
 

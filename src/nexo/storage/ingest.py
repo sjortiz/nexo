@@ -277,6 +277,7 @@ class KnowledgeGraphIngestor:
                     update={
                         "text": text,
                         "sensitivity": level,
+                        "declared_sensitivity": chunk.sensitivity,
                         "chunk_id": ChunkRecord.make_id(
                             chunk.source_id, chunk.ordinal, text
                         ),

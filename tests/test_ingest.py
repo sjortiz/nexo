@@ -97,6 +97,8 @@ def test_ingest_validates_grounds_and_links_chunks(settings, chunk_store):
     assert (
         stored.sensitivity is Sensitivity.PII
         and "Acme Holdings acquired" in stored.text
+        and stored.declared_sensitivity
+        is Sensitivity.INTERNAL  # the floor, not the detected level
     )
 
 
