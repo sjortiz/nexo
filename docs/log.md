@@ -1,6 +1,7 @@
 # Bundle Update Log
 
 ## 2026-10-19
+* **Update**: vLLM services moved to `docker-compose.gpu.yml`; local runs no longer need GPU secrets for `compose up neo4j` ([Compose stack with vLLM](operations/local-stack.md)).
 * **Creation**: [How local setup works](operations/local-setup.md): roles, one profile catalog with two readers, setting precedence, who listens where, `nexo models --check`. Playbooks link to it; stale "script stops if Ollama runs" gotcha corrected; "Local stack" retitled [Compose stack with vLLM](operations/local-stack.md).
 * **Creation**: [MCP server](components/mcp-server.md), [Use from Claude Code](operations/claude-code.md) (skill + `.mcp.json`), [MCP reference](references/model-context-protocol.md), [ADR-0013](decisions/adr-0013-read-only-mcp-and-skill.md).
 * **Update**: Sensitivity is now the least sensitive supporting source for entities and relationships, recomputed on every change ([data model](architecture/data-model.md), [ADR-0006](decisions/adr-0006-sensitivity-and-caller-clearance.md)).

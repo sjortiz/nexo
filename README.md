@@ -55,7 +55,7 @@ bundle: architecture, components, operations, decisions and references.
 ```bash
 cp .env.example .env                                   # fill in secrets
 docker compose up -d neo4j otel-collector jaeger
-docker compose --profile gpu up -d                     # vLLM: needs 4x80GB GPUs
+docker compose -f docker-compose.yml -f docker-compose.gpu.yml up -d   # vLLM: 4x80GB GPUs
 pip install -e ".[dev]"
 nexo ingest corpus/memo.md --doc-type memo --effective-date 2025-06-30
 nexo ask "How is Acme Holdings connected to Gamma Clinics?"   # prints thread_id + review packet

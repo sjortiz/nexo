@@ -18,23 +18,25 @@ sources:
 
 # Services
 
-| Service | Profile | Notes |
+| Service | Where | Notes |
 |---|---|---|
-| `neo4j` | default | `neo4j:5.26-community`, ports bound to `127.0.0.1`. |
-| `otel-collector` | default | OTLP/HTTP on `127.0.0.1:4318`; strips content attributes and events; traces to Jaeger, metrics on `127.0.0.1:8889` (Prometheus format). |
-| `jaeger` | default | UI on http://localhost:16686. |
-| `vllm-inference-service` | `gpu` | Llama 3.3 70B, tensor-parallel 4 (4×80 GB GPUs), tool calling enabled. |
-| `vllm-embedding-service` | `gpu` | BAAI/bge-m3 on 1 GPU. |
-| `nexo` | `app` | The CLI image. |
+| `neo4j` | `docker-compose.yml` | `neo4j:5.26-community`, ports bound to `127.0.0.1`. |
+| `otel-collector` | `docker-compose.yml` | OTLP/HTTP on `127.0.0.1:4318`; strips content attributes and events; traces to Jaeger, metrics on `127.0.0.1:8889` (Prometheus format). |
+| `jaeger` | `docker-compose.yml` | UI on http://localhost:16686. |
+| `vllm-inference-service` | `docker-compose.gpu.yml` | Llama 3.3 70B, tensor-parallel 4 (4×80 GB GPUs), tool calling enabled. |
+| `vllm-embedding-service` | `docker-compose.gpu.yml` | BAAI/bge-m3 on 1 GPU. |
+| `nexo` | `docker-compose.yml`, profile `app` | The CLI image. |
 
-Compose refuses to start without `VLLM_IMAGE_TAG`, `VLLM_API_KEY`, `HF_TOKEN`, `EMBEDDING_API_KEY` and
-`NEO4J_PASSWORD`, so an unpinned image or an empty secret never ships silently.[^compose]
+Compose refuses to start without `NEO4J_PASSWORD`, and with the GPU file also without `VLLM_IMAGE_TAG`,
+`VLLM_API_KEY`, `HF_TOKEN` and `EMBEDDING_API_KEY`, so an unpinned image or an empty secret never ships
+silently.[^compose] The vLLM services live in their own file because Compose checks required variables
+for every service it loads; local runs with Ollama do not need them.
 
 # Steps
 
 1. `cp .env.example .env` and fill in the secrets; pin `VLLM_IMAGE_TAG` to a vLLM release.
 2. `docker compose up -d neo4j otel-collector jaeger`
-3. `docker compose --profile gpu up -d` (first start downloads ~140 GB of weights; the health check
+3. `docker compose -f docker-compose.yml -f docker-compose.gpu.yml up -d` (first start downloads ~140 GB of weights; the health check
    allows 15 minutes).
 4. `pip install -e ".[dev]"` and run the CLI locally, or use the container:
    `docker compose --profile app run --rm nexo ingest /corpus/memo.md --doc-type memo`

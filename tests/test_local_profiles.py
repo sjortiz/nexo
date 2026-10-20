@@ -232,3 +232,14 @@ def test_docs_list_every_catalog_model_and_tier():
         assert re.search(rf"\|\s*{tier} GB", page), f"tier {tier} GB missing from the playbook"
     for model in lp.MODEL_SIZES_GB:
         assert f"`{model}`" in page, f"{model} missing from the playbook"
+
+
+def test_local_compose_needs_only_local_secrets():
+    # Compose checks ${VAR:?} for every service in the files it loads, so GPU-only
+    # secrets in docker-compose.yml would block `compose up neo4j` on a laptop.
+    required = re.compile(r"\$\{(\w+):\?")
+    local = set(required.findall((ROOT / "docker-compose.yml").read_text()))
+    gpu = set(required.findall((ROOT / "docker-compose.gpu.yml").read_text()))
+    assert local == {"NEO4J_PASSWORD"}
+    assert gpu == {"VLLM_IMAGE_TAG", "VLLM_API_KEY", "HF_TOKEN", "EMBEDDING_API_KEY"}
+    assert re.search(r"^NEO4J_PASSWORD=", (ROOT / "deploy/local/local.env.example").read_text(), re.MULTILINE)

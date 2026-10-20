@@ -36,7 +36,7 @@ sources:
 | Models with Ollama | Same catalog as macOS, with `gpu-<VRAM GB>` or `cpu-<RAM GB>` profiles. |
 | Podman path | Supported with `docker-compose.linux.yml` (host network for the Nexo container). |
 | Native path | Neo4j from Neo4j's Debian repository; Jaeger release binary. |
-| Production vLLM on NVIDIA (`--profile gpu`) | Linux is the target platform; GPU passthrough is not tested by this project. |
+| Production vLLM on NVIDIA (`docker-compose.gpu.yml`) | Linux is the target platform; GPU passthrough is not tested by this project. |
 
 How the pieces fit together, and how to check them with `nexo models --check`:
 [How local setup works](local-setup.md).
@@ -96,7 +96,7 @@ A Linux GPU box can serve the agent and extraction models while a Mac runs Nexo:
 
 # Production GPU path (vLLM)
 
-`docker compose --profile gpu up -d` requests NVIDIA GPUs through Compose `deploy.resources`, which
+`docker compose -f docker-compose.yml -f docker-compose.gpu.yml up -d` requests NVIDIA GPUs through Compose `deploy.resources`, which
 needs Docker with the NVIDIA Container Toolkit. With Podman, generate a CDI spec
 (`sudo nvidia-ctk cdi generate --output=/etc/cdi/nvidia.yaml`) and pass `--device nvidia.com/gpu=all`.[^nvidia-cdi]
 Neither is exercised by this project's tests: verify on the target host with `NEXO_LIVE=1 pytest -m live`.

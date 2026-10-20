@@ -8,8 +8,8 @@ generated: { by: claude-code/claude-opus-5-5, at: 2026-10-19T20:14:37Z }
 stale_after: 2027-04-19T00:00:00Z
 sources:
   - id: compose
-    resource: ../../docker-compose.yml
-    title: Docker Compose stack
+    resource: ../../docker-compose.gpu.yml
+    title: vLLM compose file
   - id: llm
     resource: ../../src/nexo/llm.py
     title: Model clients
@@ -57,5 +57,5 @@ Local models (Ollama, profiles, SSH tunnel): run `nexo models --check` and see
 | `thread ... is not awaiting review` | Wrong thread id, already decided, or in-memory checkpointer restarted | Use `nexo status <thread_id>`; use `sqlite` or `postgres` checkpoints. |
 | Approval keeps returning `awaiting_review` | Blocking findings without acknowledgement | Add `--acknowledge-findings` after reading the findings. |
 
-[^compose]: Docker Compose stack
+[^compose]: vLLM compose file
 [^llm]: Model clients

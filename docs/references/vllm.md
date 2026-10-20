@@ -18,13 +18,13 @@ sources:
     resource: https://docs.vllm.ai/en/latest/features/structured_outputs.html
     title: vLLM structured outputs
   - id: compose
-    resource: ../../docker-compose.yml
-    title: Nexo compose stack
+    resource: ../../docker-compose.gpu.yml
+    title: vLLM compose file
 ---
 
 # Role in Nexo
 
-vLLM serves the models in the GPU deployment (`docker compose --profile gpu`): Llama 3.3 70B for chat
+vLLM serves the models in the GPU deployment (`docker-compose.gpu.yml`): Llama 3.3 70B for chat
 and BAAI/bge-m3 for embeddings, behind an OpenAI-compatible API that LangChain and Strands both speak.[^docs]
 On Macs and smaller machines, [Ollama](ollama.md) takes its place with the same API.
 
@@ -44,4 +44,4 @@ GPU passthrough is not exercised by this project's tests ([Local on Linux](../op
 [^docs]: vLLM documentation
 [^tools]: vLLM tool calling
 [^structured]: vLLM structured outputs
-[^compose]: Nexo compose stack
+[^compose]: vLLM compose file
