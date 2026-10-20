@@ -344,6 +344,37 @@ def open_runtime(settings: Settings) -> Iterator[Runtime]:
         )
 
 
+class _NoInvestigator:  # pylint: disable=too-few-public-methods
+    """Stands in for the investigator in a runtime that only reviews."""
+
+    def investigate(self, *args: Any, **kwargs: Any) -> Any:
+        """Never called: a review-only runtime cannot start a question."""
+        raise RuntimeError("this runtime only reviews; it cannot start investigations")
+
+
+@contextmanager
+def open_review_runtime(settings: Settings, chunks: ChunkStore) -> Iterator[Runtime]:
+    """Yield a runtime that lists, reads and decides reviews, without models or the graph.
+
+    It needs only the checkpointer, the detector and the chunk store, so a review server
+    starts (and stays up) when Neo4j or the model host is down.
+    """
+    with ExitStack() as stack:
+        checkpointer = stack.enter_context(open_checkpointer(settings))
+        detector = build_detector(
+            settings.sensitive_data_provider, aws_region=settings.aws_region
+        )
+        deps = GraphDependencies(
+            settings=settings, investigator=_NoInvestigator(), detector=detector
+        )
+        yield Runtime(
+            graph=build_graph(deps, checkpointer),
+            settings=settings,
+            chunks=chunks,
+            redactor=ChunkRedactor(detector),
+        )
+
+
 @contextmanager
 def open_ingestor(
     settings: Settings, *, writes: bool = True
