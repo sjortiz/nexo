@@ -30,6 +30,7 @@ dependencies = [
     # `nexo setup`: the setup file, its lock and the rendered stack.
     "pyyaml>=6,<7",
     "jsonpatch>=1.33,<2",
+    "keyring>=25.6,<26",
 ]
 
 [project.optional-dependencies]

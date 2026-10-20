@@ -6,15 +6,22 @@ in-cluster services (`vllm-inference-service`, `neo4j`) and local fakes.
 
 from __future__ import annotations
 
+import logging
+import os
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import Field, SecretStr, field_validator, model_validator
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic_settings import (
+    BaseSettings,
+    PydanticBaseSettingsSource,
+    SettingsConfigDict,
+)
 
 from nexo.local_profiles import needs_reasoning_off, plan
+from nexo.secret_store import SecretStoreError, parse_dotenv, store_from_options
 
 ModelRole = Literal["agent", "extraction", "router", "judge"]
 ReasoningEffort = Literal["none", "minimal", "low", "medium", "high"]
@@ -30,16 +37,61 @@ class ModelEndpoint:
     reasoning_effort: ReasoningEffort | None = None  # JSON roles only
 
 
-class Settings(BaseSettings):
-    """All runtime settings, read from the environment or `.env`."""
+log = logging.getLogger(__name__)
+RENDERED_ENV = ".nexo/render/nexo.env"
+# Settings that `nexo setup` generates and keeps in the secrets provider.
+STORED_SECRETS = ("NEO4J_PASSWORD", "VLLM_API_KEY", "EMBEDDING_API_KEY")
 
-    # .nexo/render/nexo.env (written by `nexo setup` from nexo.yaml) is read after .env,
-    # so the setup file wins; real environment variables win over both.
+
+class _SecretStoreSource(PydanticBaseSettingsSource):
+    """Generated secrets from the provider nexo.env names (the OS keychain by default)."""
+
+    def get_field_value(self, field: Any, field_name: str) -> tuple[Any, str, bool]:
+        return None, field_name, False
+
+    def __call__(self) -> dict[str, Any]:
+        rendered = Path(RENDERED_ENV)
+        options = (
+            parse_dotenv(rendered.read_text(encoding="utf-8"))
+            if rendered.exists()
+            else {}
+        )
+        options |= {k: v for k, v in os.environ.items() if k.startswith("NEXO_")}
+        if "NEXO_SECRETS_PROVIDER" not in options:
+            return {}  # not set up by `nexo setup`: the environment and .env only
+        try:
+            values = store_from_options(options).get(STORED_SECRETS)
+        except SecretStoreError as exc:
+            log.warning("secrets: %s", exc)
+            return {}
+        return {key.lower(): value for key, value in values.items()}
+
+
+class Settings(BaseSettings):
+    """All runtime settings, read from the environment, the secrets provider or `.env`."""
+
+    # First match wins: the environment, generated secrets from the provider `nexo setup`
+    # chose (keychain by default), .nexo/render/nexo.env (rendered from nexo.yaml), .env.
     model_config = SettingsConfigDict(
-        env_file=(".env", ".nexo/render/nexo.env"),
+        env_file=(".env", RENDERED_ENV),
         env_file_encoding="utf-8",
         extra="ignore",
     )
+
+    @classmethod
+    def settings_customise_sources(
+        cls,
+        settings_cls: type[BaseSettings],
+        init_settings: PydanticBaseSettingsSource,
+        env_settings: PydanticBaseSettingsSource,
+        dotenv_settings: PydanticBaseSettingsSource,
+        file_secret_settings: PydanticBaseSettingsSource,
+    ) -> tuple[PydanticBaseSettingsSource, ...]:
+        sources = [init_settings, env_settings]
+        # An explicit _env_file (tests, tools) means exactly those files, no provider.
+        if getattr(dotenv_settings, "env_file", None) == cls.model_config["env_file"]:
+            sources.append(_SecretStoreSource(settings_cls))
+        return (*sources, dotenv_settings, file_secret_settings)
 
     # --- Default chat model (any OpenAI-compatible server: vLLM, Ollama, ...) --
     vllm_base_url: str = "http://vllm-inference-service:8000/v1"

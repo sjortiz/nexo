@@ -7,6 +7,8 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
 
+import keyring
+import keyring.backend
 import pytest
 from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import AIMessage
@@ -29,6 +31,38 @@ _provider.add_span_processor(SimpleSpanProcessor(_EXPORTER))
 trace.set_tracer_provider(_provider)
 os.environ.pop("OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT", None)
 instrument_openai(_provider)
+
+
+class MemoryKeyring(keyring.backend.KeyringBackend):
+    """A keychain that lives for one test."""
+
+    priority = 1
+
+    def __init__(self):
+        super().__init__()
+        self.items: dict[tuple[str, str], str] = {}
+
+    def get_password(self, service, username):
+        return self.items.get((service, username))
+
+    def set_password(self, service, username, password):
+        self.items[(service, username)] = password
+
+    def delete_password(self, service, username):
+        self.items.pop((service, username), None)
+
+
+@pytest.fixture(autouse=True)
+def memory_keychain(tmp_path_factory, monkeypatch):
+    """No test reads or writes the real keychain or ~/.config/nexo."""
+    backend = MemoryKeyring()
+    previous = keyring.get_keyring()
+    keyring.set_keyring(backend)
+    monkeypatch.setenv("NEXO_CONFIG_DIR", str(tmp_path_factory.mktemp("nexo-config")))
+    for key in [k for k in os.environ if k.startswith("NEXO_")]:
+        monkeypatch.delenv(key)
+    yield backend
+    keyring.set_keyring(previous)
 
 
 @pytest.fixture
