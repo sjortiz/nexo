@@ -1,6 +1,7 @@
 # Bundle Update Log
 
 ## 2026-10-20
+* **Update**: `spec.ports` in `nexo.yaml` sets the host ports the stack publishes; `nexo.env`, the lock, the Neo4j login probe and the printed links follow, and `check` names whoever holds a port already, so a second stack can run beside the first.
 * **Update**: The investigator has [find_paths and entity_neighbours](components/graph-lookup-tools.md): fixed path and neighbour lookups by entity key, so small models no longer write that Cypher; paths and edges above the caller's clearance are withheld, and unranked edges count as PHI ([Investigator agent](components/investigator-agent.md)).
 * **Creation**: [Review in Agent Inbox](operations/agent-inbox.md): an opt-in `agentInbox` add-on (`AGENT_INBOX=1`, `make review-inbox`) renders LangChain's archived, MIT-licensed Agent Inbox from a pinned commit and an adapter that sends every decision to `Runtime.review` ([ADR-0019](decisions/adr-0019-review-surfaces.md)).
 * **Creation**: A [demo review page](operations/human-review.md#demo-review-page) (`make review-ui`): no authentication, loopback only, off unless started.
