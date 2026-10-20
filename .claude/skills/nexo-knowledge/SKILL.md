@@ -40,6 +40,8 @@ proof.
 
 Check: each fact you plan to state appears in fetched text. Mark anything else "unverified" or drop it.
 If chunks come back `withheld`, say evidence exists above your clearance; never guess its contents.
+Text with `[EMAIL]`, `[PHONE]` and similar had a personal detail masked (the chunk is listed in `masked`):
+cite it, but never guess or reconstruct the masked value.
 
 ## 5. Answer
 

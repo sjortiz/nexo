@@ -16,11 +16,16 @@ from mcp.types import LATEST_PROTOCOL_VERSION
 from neo4j.exceptions import ServiceUnavailable
 
 from pydantic import SecretStr
+from nexo.agents.redaction import ChunkRedactor
 from nexo.telemetry import SESSION_ID, query_attributes
 from nexo.mcp_server import build_mcp_server
 from nexo.storage.graph_store import ReadResult
 from nexo.storage.schemas import Sensitivity
+from nexo.storage.sensitive_data import RegexDetector
+from nexo.storage.vector_store import LocalChunkStore
+from nexo.llm import build_embeddings
 from tests.conftest import make_chunk
+from tests.test_graph import FakeInvestigator, runtime
 
 TOOLS = {
     "nexo_index",
@@ -197,7 +202,117 @@ def test_get_chunks_withholds_and_reports_missing_and_invalid(
     assert [c["chunk_id"] for c in out["chunks"]] == [public.chunk_id]
     assert out["chunks"][0]["text"] == public.text
     assert out["withheld"] == [phi.chunk_id] and out["not_found"] == ["chk_" + "0" * 16]
+    assert out["masked"] == []
     assert out["invalid_or_over_limit"] == ["not-an-id"]
+
+
+EMAIL = "jane.roe@beta.example"
+CONTACT = f"Gamma Works signed with Beta Labs. Investor contact: {EMAIL}"
+
+
+@pytest.fixture(name="contact")
+def fixture_contact(chunk_store):
+    """Store chunks above an internal clearance: one only for a detected email
+    (maskable), one with a PHI span and one whose document is declared pii (both
+    withheld, though each also holds the maskable email)."""
+    pii = make_chunk(
+        "board", 0, CONTACT, Sensitivity.PII, declared_sensitivity=Sensitivity.INTERNAL
+    )
+    mrn = make_chunk(
+        "board",
+        1,
+        f"Gamma Works patient MRN: A1234567, {EMAIL}",
+        Sensitivity.PHI,
+        declared_sensitivity=Sensitivity.INTERNAL,
+    )
+    declared = make_chunk(
+        "hr",
+        0,
+        f"Gamma Works salary review for Jane Roe, {EMAIL}",
+        Sensitivity.PII,
+        declared_sensitivity=Sensitivity.PII,
+    )
+    chunk_store.upsert([pii, mrn, declared], [pii.text, mrn.text, declared.text])
+    return pii, mrn, declared
+
+
+def _masking(settings, chunk_store, clearance="internal"):
+    return build_mcp_server(
+        graph=RoutedGraph(),
+        chunks=chunk_store,
+        settings=settings.model_copy(update={"mcp_clearance": clearance}),
+        redactor=ChunkRedactor(RegexDetector()),
+    )
+
+
+def test_read_tools_mask_detected_pii_below_its_clearance(
+    settings, chunk_store, contact
+):
+    """Search and get_chunks show the pii chunk with [EMAIL]; PHI and declared pii stay withheld."""
+    pii, mrn, declared = contact
+    server = _masking(settings, chunk_store)
+    ids = [pii.chunk_id, mrn.chunk_id, declared.chunk_id]
+
+    out = data(call(server, "nexo_get_chunks", {"chunk_ids": ids}))
+    [shown] = out["chunks"]
+    assert shown["chunk_id"] == pii.chunk_id and EMAIL not in shown["text"]
+    assert shown["text"].endswith("Investor contact: [EMAIL]")
+    assert out["masked"] == [pii.chunk_id]
+    assert out["withheld"] == sorted([mrn.chunk_id, declared.chunk_id])
+
+    hits = data(call(server, "nexo_search", {"query": "Gamma Works", "k": 5}))
+    assert [h["chunk_id"] for h in hits] == [pii.chunk_id]
+    assert hits[0]["snippet"].endswith("[EMAIL]") and "@" not in hits[0]["snippet"]
+
+
+def test_search_masks_the_query_so_it_cannot_probe(settings, tmp_path, contact):
+    """Searching a keyword index for the address finds nothing below its clearance."""
+    keyword = LocalChunkStore(
+        build_embeddings(settings), tmp_path / "keyword.json", mode="keyword"
+    )
+    keyword.upsert([contact[0]], [CONTACT])
+    hits = data(call(_masking(settings, keyword), "nexo_search", {"query": EMAIL}))
+    assert hits == []
+    cleared = data(
+        call(_masking(settings, keyword, "pii"), "nexo_search", {"query": EMAIL})
+    )
+    assert [h["chunk_id"] for h in cleared] == [contact[0].chunk_id]
+
+
+@pytest.mark.parametrize("clearance", ["pii", "phi"])
+def test_read_tools_show_the_original_to_a_sufficient_clearance(
+    settings, chunk_store, contact, clearance
+):
+    """At or above the chunk's level nothing is masked."""
+    pii = contact[0]
+    server = _masking(settings, chunk_store, clearance)
+    out = data(call(server, "nexo_get_chunks", {"chunk_ids": [pii.chunk_id]}))
+    assert out["chunks"][0]["text"] == CONTACT and out["masked"] == []
+    hits = data(call(server, "nexo_search", {"query": "Investor contact", "k": 5}))
+    assert {h["chunk_id"]: h["snippet"] for h in hits}[pii.chunk_id] == CONTACT
+
+
+def test_read_tools_withhold_whole_without_a_detector(settings, chunk_store, contact):
+    """No redactor and no runtime: chunks above clearance are withheld, as before."""
+    pii = contact[0]
+    server = build_mcp_server(
+        graph=RoutedGraph(), chunks=chunk_store, settings=settings
+    )
+    out = data(call(server, "nexo_get_chunks", {"chunk_ids": [pii.chunk_id]}))
+    assert out["chunks"] == [] and out["withheld"] == [pii.chunk_id]
+    assert data(call(server, "nexo_search", {"query": "Gamma Works"})) == []
+
+
+def test_read_tools_use_the_runtimes_redactor(settings, chunk_store, contact):
+    """With the review runtime, the read tools mask with the same redactor as the review."""
+    pii = contact[0]
+    rt = runtime(settings, FakeInvestigator([]))
+    rt.chunks, rt.redactor = chunk_store, ChunkRedactor(RegexDetector())
+    server = build_mcp_server(
+        graph=RoutedGraph(), chunks=chunk_store, settings=settings, runtime=rt
+    )
+    out = data(call(server, "nexo_get_chunks", {"chunk_ids": [pii.chunk_id]}))
+    assert out["masked"] == [pii.chunk_id] and "[EMAIL]" in out["chunks"][0]["text"]
 
 
 def test_find_entities_is_parameterized_and_redacts(settings, chunk_store):
@@ -392,8 +507,12 @@ def test_stdout_carries_only_json_rpc_and_logs_go_to_stderr(tmp_path):
 
 
 @pytest.mark.parametrize("review", [True, False])
-def test_nexo_mcp_speaks_clean_stdio(settings, tmp_path, stored, review):
-    """Launch `nexo mcp` as a subprocess: logging must not touch stdout, or the handshake breaks."""
+def test_nexo_mcp_speaks_clean_stdio(  # pylint: disable=too-many-arguments
+    settings, tmp_path, stored, contact, review
+):
+    """Launch `nexo mcp` as a subprocess: logging must not touch stdout, or the handshake
+    breaks; it masks with the configured detector whether or not the review tools are on.
+    """
     env = {
         "EMBEDDING_PROVIDER": "fake",
         "EMBEDDING_DIMENSIONS": str(settings.embedding_dimensions),
@@ -417,12 +536,17 @@ def test_nexo_mcp_speaks_clean_stdio(settings, tmp_path, stored, review):
         async with Client(params) as client:
             tools = {t.name for t in (await client.list_tools()).tools}
             hits = await client.call_tool("nexo_search", {"query": "XR-7731"})
-            return tools, hits
+            read = await client.call_tool(
+                "nexo_get_chunks", {"chunk_ids": [contact[0].chunk_id]}
+            )
+            return tools, hits, read
 
-    tools, hits = asyncio.run(run())
+    tools, hits, read = asyncio.run(run())
+    assert data(read)["chunks"][0]["text"].endswith("[EMAIL]")
     review_tools = {"nexo_pending_reviews", "nexo_get_review", "nexo_submit_review"}
     assert tools == (TOOLS | review_tools if review else TOOLS)
-    assert [h["chunk_id"] for h in data(hits)] == [stored[0].chunk_id]
+    found = [h["chunk_id"] for h in data(hits)]  # the masked contact chunk ranks lower
+    assert found[0] == stored[0].chunk_id and stored[1].chunk_id not in found
 
 
 def test_tool_spans_say_who_called_and_which_question(settings, chunk_store, spans):

@@ -416,8 +416,22 @@ def _mcp(args: argparse.Namespace) -> int:
             if settings.mcp_review_tools
             else None
         )
+        # The same read-time masking as the agent, with or without the review tools.
+        redactor = (
+            runtime.redactor
+            if runtime is not None
+            else ChunkRedactor(
+                build_detector(
+                    settings.sensitive_data_provider, aws_region=settings.aws_region
+                )
+            )
+        )
         server = build_mcp_server(
-            graph=graph, chunks=chunks, settings=settings, runtime=runtime
+            graph=graph,
+            chunks=chunks,
+            settings=settings,
+            runtime=runtime,
+            redactor=redactor,
         )
         log.info("serving MCP over %s", args.transport)
         if args.transport == "stdio":

@@ -28,8 +28,8 @@ The six retrieval tools are annotated read-only, idempotent and closed-world.[^s
 | Tool | Returns | Use |
 |---|---|---|
 | `nexo_index` | Documents (within clearance), relation patterns with counts, retrieval mode, clearance, usage guidance | First call in a conversation |
-| `nexo_search(query, k, doc_types)` | Snippets with chunk ids, ranked by hybrid BM25 + vector search | Topics, codes, phrases |
-| `nexo_get_chunks(chunk_ids)` | Exact chunk text; `withheld`, `not_found`, `invalid_or_over_limit` | The evidence to cite |
+| `nexo_search(query, k, doc_types)` | Snippets with chunk ids, ranked by hybrid BM25 + vector search, masked like `nexo_get_chunks` | Topics, codes, phrases |
+| `nexo_get_chunks(chunk_ids)` | Exact chunk text (detected PII masked above clearance); `masked`, `withheld`, `not_found`, `invalid_or_over_limit` | The evidence to cite |
 | `nexo_find_entities(name, entity_type, limit)` | Entities matching a name or alias, with keys and chunk ids | Starting points in the graph |
 | `nexo_neighbors(entity_key, limit)` | Edges in both directions with certainty, date and chunk ids; `withheld` count | Direct relationships |
 | `nexo_graph_query(cypher)` | Rows, `truncated`, `chunk_ids_found` | Multi-hop questions |
@@ -57,10 +57,15 @@ forms automatically, without a person, defeats the check: use a client that asks
 
 - **Read-only.** `nexo_graph_query` goes through the [Cypher guard](graph-store.md#read-only-enforcement)
   and a READ transaction; the lookup tools use parameterized Cypher, so user text is never spliced in.
-- **Clearance.** One per server: `MCP_CLEARANCE`, defaulting to `DEFAULT_CLEARANCE`. Chunks above it are
-  withheld whole (no read-time masking here); entities and edges above it are redacted or withheld
-  ([sensitivity model](sensitive-data-detection.md#sensitivity-levels)). MCP over stdio has no per-user
-  identity, so run one server per clearance.
+- **Clearance.** One per server: `MCP_CLEARANCE`, defaulting to `DEFAULT_CLEARANCE`. Chunks above it go
+  through the agent's `ChunkRedactor` ([read-time redaction](sensitive-data-detection.md#read-time-redaction),
+  with the `SENSITIVE_DATA_PROVIDER` detector): a chunk above it only because of detected PII is shown with
+  those spans masked (`[EMAIL]`, `[PHONE]`) and listed in `masked`; anything else above it, PHI included, is
+  withheld whole. `nexo_search` masks the query before ranking, so it cannot probe for a detected value.
+  Entities and edges above it are redacted or withheld
+  ([sensitivity model](sensitive-data-detection.md#sensitivity-levels)), even when their only sources are
+  maskable chunks ([ADR-0006](../decisions/adr-0006-sensitivity-and-caller-clearance.md)); the fact stays
+  reachable through `nexo_search`. MCP over stdio has no per-user identity, so run one server per clearance.
 - **Errors.** Anticipated failures (unsafe Cypher, unknown entity type, graph unavailable) come back as
   tool errors with a message; unexpected exceptions are masked and logged on the server.
 - **Transport.** `stdio` by default. `--transport streamable-http` binds `127.0.0.1:8765` and has no

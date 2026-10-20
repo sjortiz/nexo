@@ -37,6 +37,16 @@ access.
   is detected PII spans; chunks carry `declared_sensitivity` so a declared level is never
   mistaken for a detected one. Everything else stays withheld.
   See [read-time redaction](../components/sensitive-data-detection.md#read-time-redaction).
+- **Amended 2026-10-20 (MCP):** `nexo mcp`'s chunk tools (`nexo_search`, `nexo_get_chunks`) use the same
+  redactor as the agent, with the server's clearance. Graph rows (entities, edges, Cypher results) above
+  clearance stay redacted wholesale, even when every supporting chunk is `pii` only because of maskable
+  spans. A row has no span-level provenance: names, aliases, descriptions and edge evidence were written
+  by the extraction model from the unmasked text and can hold the detected value verbatim or reformatted
+  (a phone number spelled differently, an email as a person's alias), which the detector may not catch on
+  a short field. Showing the row would also need every supporting chunk re-checked at read time, and an
+  entity's existence or an edge is itself a fact about the person. The fact stays reachable as text:
+  `nexo_search` returns the masked chunk. Revisit if rows gain per-field provenance or masking at write
+  time.
 
 # Consequences
 
