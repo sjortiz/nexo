@@ -77,6 +77,13 @@ spec:
 The judge adds about 4.9 GB. `make up` lets Ollama keep only the profile's models loaded (two here),
 so with a judge it swaps models during a run: prefer the one-run form on a small Mac.[^profiles]
 
+With more memory, a second machine or a GPU server, use a stronger judge: any model on an
+OpenAI-compatible endpoint works (`JUDGE_API_KEY` if it needs a key).
+
+```yaml
+    roles: { judge: { model: qwen3:30b-a3b-instruct-2507-q4_K_M, base_url: "http://localhost:11435/v1" } }
+```
+
 # Extraction against gold triples
 
 `nexo eval-extraction gold.jsonl` runs chunking and extraction only (no graph or vector writes) on
