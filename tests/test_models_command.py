@@ -319,16 +319,17 @@ def fixture_cli_env(monkeypatch, tmp_path):
     get_settings.cache_clear()
     yield monkeypatch
     get_settings.cache_clear()
-    logging.getLogger().handlers.clear()  # the CLI bound a handler to this test's captured stdout
+    logging.getLogger().handlers.clear()  # the CLI bound a handler to this test's captured stderr
 
 
 def _cli_record(capsys) -> dict:
+    """The CLI's log record (stderr) with the command's JSON output (stdout) as `result`."""
+    captured = capsys.readouterr()
     lines = [
-        json.loads(line)
-        for line in capsys.readouterr().out.splitlines()
-        if line.startswith("{")
+        json.loads(line) for line in captured.err.splitlines() if line.startswith("{")
     ]
-    return next(entry for entry in lines if entry["logger"] == "nexo.cli")
+    record = next(entry for entry in lines if entry["logger"] == "nexo.cli")
+    return {**record, "result": json.loads(captured.out)}
 
 
 def test_cli_exit_code_follows_the_check(cli_env, models_api, capsys):

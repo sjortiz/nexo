@@ -26,7 +26,7 @@ One JSON object per line:
 Optional fields: `answer_contains` (phrases a correct answer states; scored without a judge),
 `strategy` (`graph`, `vector` or `hybrid`, default `hybrid`) and `clearance` (`public`, `internal`, `pii`,
 `phi`; default `DEFAULT_CLEARANCE`). `nexo eval` skips the router, so `strategy` and `clearance` replay what
-the router chose and who is asking. Each result also logs the answer, the tool call count and the stop reason.
+the router chose and who is asking. Each result also holds the answer, the tool call count and the stop reason.
 
 [`examples/golden/acme-gamma.jsonl`](../../examples/golden/acme-gamma.jsonl) covers the two sample documents
 in `examples/corpus`: a multi-hop chain through a missing entity (Delta Devices), a direct lookup, a
@@ -43,10 +43,9 @@ chunks the reviewer confirmed become `relevant_chunk_ids`.
 1. Ingest the corpus the golden set refers to (chunk ids are deterministic, so they stay stable as
    long as the text does).
 2. Optionally turn on the judge ([below](#judge-scores)) for faithfulness and relevancy.
-3. Run `LOG_FORMAT=json nexo eval golden.jsonl > results.jsonl`.
-4. Each case is logged with the question plus the [metrics](../components/evaluation.md) in its
-   `result` field (`LOG_FORMAT=json` for one object per line), and is also an `eval.case` span with
-   `eval.*` attributes.
+3. Run `nexo eval golden.jsonl > results.jsonl`.
+4. Each case is one JSON object per line on stdout (logs go to stderr): the question plus the
+   [metrics](../components/evaluation.md). It is also an `eval.case` span with `eval.*` attributes.
 
 `nexo eval` calls the investigator directly. It skips the router and human review, so it measures
 retrieval and generation only.[^cli]
@@ -96,7 +95,7 @@ each case and scores the result:
 
 Gold relations go through the same ontology mapping, so a gold `ACQUIRED_BY` matches a predicted
 `ACQUIRED` in the right direction. Each case and the overall precision, recall and capture rate are
-logged as `result` records. Use it before and after changing the extraction prompt or the ontology.
+written to stdout, one JSON object per line (`"case": "overall"` last). Use it before and after changing the extraction prompt or the ontology.
 
 # Reading results
 

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import sys
 
 import pytest
 from opentelemetry.sdk._logs import LoggerProvider
@@ -46,28 +47,27 @@ def test_records_carry_the_current_trace_and_nothing_outside_a_span():
     assert inside.span_id == format(context.span_id, "016x")
 
 
-def test_json_lines_include_structured_result_and_trace():
-    """JSON lines carry message, logger, structured result and trace id, not raw record fields."""
+def test_json_lines_carry_message_and_trace_but_not_the_result():
+    """JSON lines carry message, logger and trace id; the result is stdout's, not the log's."""
     with get_tracer().start_as_current_span("work"):
         record = _record(
             "thread t1: completed", result={"thread_id": "t1", "status": "completed"}
         )
     entry = json.loads(JsonFormatter().format(record))
     assert entry["message"] == "thread t1: completed" and entry["logger"] == "nexo.cli"
-    assert entry["result"] == {"thread_id": "t1", "status": "completed"}
+    assert "result" not in entry
     assert len(entry["trace_id"]) == 32
     assert (
         "args" not in entry and "msg" not in entry
     )  # standard LogRecord fields are not leaked
 
 
-def test_text_format_appends_result_only_when_present():
-    """Text lines end with the message and append the result as JSON only when one is given."""
+def test_text_format_is_one_line_without_the_result():
+    """Text lines end with the message; a result payload is stdout's, so it is not appended."""
     plain = TextFormatter().format(_record("hello"))
     assert plain.endswith("INFO nexo.cli hello")
     with_result = TextFormatter().format(_record("scored", result={"precision": 0.5}))
-    assert with_result.splitlines()[0].endswith("scored")
-    assert json.loads("\n".join(with_result.splitlines()[1:])) == {"precision": 0.5}
+    assert with_result.splitlines() == [with_result] and with_result.endswith("scored")
 
 
 @pytest.mark.parametrize(
@@ -85,6 +85,7 @@ def test_configure_logging_installs_one_handler(settings, fmt, formatter):
             root.handlers[0].formatter, formatter
         )
         assert root.level == logging.DEBUG
+        assert root.handlers[0].stream is sys.stderr
         assert logging.getLogger("httpx").level == logging.WARNING
     finally:
         root.handlers[:], _ = saved[0], root.setLevel(saved[1])
@@ -118,7 +119,7 @@ def test_exported_logs_keep_answers_out_unless_capture_is_on(capture, exported_r
     assert log.log_record.trace_id == span.get_span_context().trace_id
     assert record.result == {
         "answer": "Acme"
-    }  # the stdout handler's record is untouched
+    }  # the stderr handler's record is untouched
 
 
 def test_exporter_logs_are_never_exported():

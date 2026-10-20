@@ -98,9 +98,11 @@ question was asked.
 
 # Logs
 
-Logs go to stdout through one handler (`LOG_FORMAT=text|json`, `LOG_LEVEL`). Every record carries
-`trace_id` and `span_id` of the current span, so a log line leads to its trace. CLI results and
-evaluation rows are logged with a structured `result` field.[^logging]
+Logs go to stderr through one handler (`LOG_FORMAT=text|json`, `LOG_LEVEL`). Every record carries
+`trace_id` and `span_id` of the current span, so a log line leads to its trace. Stdout carries only the
+command's output: CLI results as JSON (`nexo ask ... | jq`), evaluation rows as one JSON object per
+line, and the protocol for `nexo mcp` over stdio. Each result's record also holds it as a `result` field
+for OTLP export; the stderr lines leave it out.[^logging]
 
 Opt-in: `OTEL_LOGS_EXPORTER=otlp` also sends records to the collector with the same trace ids. The
 `result` field is left out unless content capture is on, and OpenTelemetry's own records are never

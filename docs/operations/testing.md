@@ -19,7 +19,8 @@ sources:
 | `tests/test_storage.py` | nothing | Schemas, normalization, chunking, Cypher guard, chunk filter, chunk store, write planning. |
 | `tests/test_ingest.py` | nothing | Validation retry, evidence grounding, previous-chunk context, ontology mapping, resolution, PII classification, failed chunks, re-ingestion, redaction. |
 | `tests/test_resolution.py` | nothing | Ontology mapping (synonyms, inverses, type constraints, fallback), name normalization, resolution including the cases that must not merge. |
-| `tests/test_logging.py` | nothing | Trace-correlated log records, JSON and text formats, handler setup. |
+| `tests/test_logging.py` | nothing | Trace-correlated log records, JSON and text formats, handler setup on stderr. |
+| `tests/test_cli_output.py` | nothing | `nexo ask`, `status`, `chunks status` and `models` (as a process): stdout parses as the command's JSON, logs go to stderr. |
 | `tests/test_agent.py` | nothing | Both tools, the real Strands event loop against a scripted OpenAI-compatible client, Strands span attributes, and that message content reaches traces only when capture is on. |
 | `tests/test_graph.py` | nothing | Routing, interrupt/resume, review validation, blocking findings, failures, retries, clearance, SQLite durability, GenAI span shape, and the official instrumentation's single `chat {model}` span per vLLM call. |
 | `tests/test_redaction.py` | nothing | Read-time masking of PII spans for lower clearances, what stays withheld, masked search queries, spans and logs without the address, compliance on masked drafts. |
