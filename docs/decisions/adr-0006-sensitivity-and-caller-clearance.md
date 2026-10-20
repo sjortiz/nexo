@@ -40,13 +40,21 @@ access.
 - **Amended 2026-10-20 (MCP):** `nexo mcp`'s chunk tools (`nexo_search`, `nexo_get_chunks`) use the same
   redactor as the agent, with the server's clearance. Graph rows (entities, edges, Cypher results) above
   clearance stay redacted wholesale, even when every supporting chunk is `pii` only because of maskable
-  spans. A row has no span-level provenance: names, aliases, descriptions and edge evidence were written
-  by the extraction model from the unmasked text and can hold the detected value verbatim or reformatted
-  (a phone number spelled differently, an email as a person's alias), which the detector may not catch on
-  a short field. Showing the row would also need every supporting chunk re-checked at read time, and an
-  entity's existence or an edge is itself a fact about the person. The fact stays reachable as text:
-  `nexo_search` returns the masked chunk. Revisit if rows gain per-field provenance or masking at write
-  time.
+  spans. This is an engineering choice, not a privacy guarantee: a row has no per-field provenance (we
+  cannot tell which alias or description came from which chunk, or whether it holds a masked value),
+  and nothing re-checks a row's sources at read time, so there is no safe way to show part of one.
+  It does not keep PII-derived text out of visible rows. An entity's rank is the minimum over its
+  supporting chunks, and its aliases come from every `MENTIONED_IN` surface (its description may draw on
+  any of them too), so an entity mentioned in
+  one `internal` chunk and one `pii` chunk is visible to `internal` with the aliases taken from the `pii`
+  chunk (an email written as a person's alias, say). That mixed-source exposure is the real residual risk
+  of the graph; it needs per-field provenance or masking at write time, and is the trigger to revisit.
+  Graph tools drop chunk text, search text and embeddings from every row, and rank `:Chunk` maps by
+  their `sensitivity`, so `nexo_graph_query` returns no chunk text in a map or by name; a computed key
+  (`c[k]`) still can, and needs database roles. `nexo_search` returns a masked chunk only when the query
+  matches its masked text, without words that masking removed; ranking among matching chunks still
+  uses the original text and embedding, so their order can shift with the masked words
+  ([read-time redaction](../components/sensitive-data-detection.md#read-time-redaction)).
 
 # Consequences
 

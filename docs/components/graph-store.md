@@ -36,10 +36,20 @@ Agent-authored Cypher passes three independent layers:
    statements, write clauses (`CREATE`, `MERGE`, `SET`, `DELETE`, `REMOVE`, `DROP`, `FOREACH`,
    `LOAD CSV`, `... IN TRANSACTIONS`, admin commands, `SHOW`, `USE`) and procedure calls other than
    `db.labels()`, `db.relationshipTypes()` and `db.propertyKeys()`. `CALL { }` subqueries are allowed.
+   It also rejects reading chunk text by name (`.text`, `.search_text`, `.embedding`, `['text']`):
+   with `CHUNK_STORE=neo4j` it sits on the `:Chunk` nodes, and only the chunk tools serve it, through
+   the redactor. A computed key (`c[k]`) still gets through; the database role is the control for that.
 2. **READ transaction** — the server refuses writes even if the guard is bypassed (verified against
    Neo4j 5.26).
 3. **Database role** — on Enterprise, a reader account with `DENY TRAVERSE` on `:PII` / `:PHI`
-   labels.[^rbac]
+   labels, and `DENY READ {text, search_text, embedding}` on `:Chunk` nodes.[^rbac]
+
+Rows then pass `redact_above_clearance` (shared by the investigator's query, path and neighbour tools
+and the MCP graph tools). It redacts any map above the caller's clearance, ranked by `sensitivity_rank`
+(entities, edges) or `sensitivity` (chunks, documents). A `MENTIONED_IN` map holds a verbatim `surface`
+and no rank, so it counts as `phi`, as does a level it cannot read. It drops `text`, `search_text` and
+`embedding` from every map at any clearance. Scalar projections (`RETURN e.name`, `RETURN m.surface`)
+carry no rank and pass through.
 
 See [ADR-0002](../decisions/adr-0002-read-only-defense-in-depth.md).
 

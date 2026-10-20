@@ -61,11 +61,20 @@ forms automatically, without a person, defeats the check: use a client that asks
   through the agent's `ChunkRedactor` ([read-time redaction](sensitive-data-detection.md#read-time-redaction),
   with the `SENSITIVE_DATA_PROVIDER` detector): a chunk above it only because of detected PII is shown with
   those spans masked (`[EMAIL]`, `[PHONE]`) and listed in `masked`; anything else above it, PHI included, is
-  withheld whole. `nexo_search` masks the query before ranking, so it cannot probe for a detected value.
-  Entities and edges above it are redacted or withheld
+  withheld whole. `nexo_search` masks the query, and returns a masked chunk only when a query word is a
+  word of its masked text and no query word is one that masking removed. So the whole value (`jane.roe@…`)
+  and fragments of it (`0134`, `415`, `jane`) find nothing, and a chunk found only by its embedding is
+  dropped. Ranking still runs on the original text, so the order of chunks that do match can shift with
+  the masked words ([what remains](sensitive-data-detection.md#read-time-redaction)).
+- **Graph rows.** Entities and edges above the clearance are redacted or withheld
   ([sensitivity model](sensitive-data-detection.md#sensitivity-levels)), even when their only sources are
-  maskable chunks ([ADR-0006](../decisions/adr-0006-sensitivity-and-caller-clearance.md)); the fact stays
-  reachable through `nexo_search`. MCP over stdio has no per-user identity, so run one server per clearance.
+  maskable chunks ([ADR-0006](../decisions/adr-0006-sensitivity-and-caller-clearance.md)). `nexo_graph_query`
+  redacts `:Chunk` and `:Document` maps above it by their `sensitivity`, and `MENTIONED_IN` maps (a verbatim
+  `surface`) unless the clearance is `phi`. It never returns chunk text, search text or embeddings, and the
+  guard rejects reading them by name. Scalar projections (`RETURN e.name`, `RETURN m.surface`) and computed
+  keys are not caught: on Community they can still return a value above the clearance; on Enterprise, deny
+  them with database roles ([read-only enforcement](graph-store.md#read-only-enforcement)).
+- **Identity.** MCP over stdio has no per-user identity, so run one server per clearance.
 - **Errors.** Anticipated failures (unsafe Cypher, unknown entity type, graph unavailable) come back as
   tool errors with a message; unexpected exceptions are masked and logged on the server.
 - **Transport.** `stdio` by default. `--transport streamable-http` binds `127.0.0.1:8765` and has no
