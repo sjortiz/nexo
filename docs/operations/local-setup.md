@@ -64,6 +64,7 @@ spec:
     langsmith: { enabled: false, project: nexo }
     hostMetrics: { enabled: true }
   telemetry: { logs: otlp, queryText: false }           # queryText: the question on traces
+  ports: { neo4jBolt: 7687, signoz: 8080 }              # host ports; move them for a second stack
   patches:                                              # RFC 6902, applied last
     - target: compose.yaml
       operations: [{ op: add, path: /services/neo4j/mem_limit, value: 3g }]
@@ -175,6 +176,11 @@ Everything binds `127.0.0.1`; nothing is exposed on the network.
 | SigNoz UI (browser; Nexo does not call it) | `127.0.0.1:8080` | http://localhost:8080 | - | - |
 | Langfuse UI, add-on (browser) | `127.0.0.1:3000` | http://localhost:3000 | - | - |
 
+These are the defaults. `spec.ports` moves each published port (`neo4jBolt`, `neo4jHttp`, `otlp`,
+`metrics`, `signoz`, `langfuse`, `langfuseStorage`, `jaeger`, `vllm`, `vllmEmbedding`); `nexo.env`,
+the lock and the printed links follow, and ports inside the stack stay. A second stack on one
+machine needs its own ports and `metadata.name`.
+
 `nexo.env` holds the native values; the render gives the Nexo container its own. On Linux, rootless
 Podman cannot reach host loopback through `host.containers.internal`, so the render puts the Nexo
 container on the host network (with Docker on macOS it uses `host.docker.internal`). The remote
@@ -198,6 +204,7 @@ authentication, SSH provides it.
 | `FAIL secrets: ...; set: HF_TOKEN` | A key only you can provide, or a read-only mount that lacks a secret | Add it to `.env`, or to the mounted secret. |
 | `FAIL secrets: secrets file ... not found`, `keychain ...` or `vault ...: HTTP 403` | The provider cannot be read (no mount, a locked keychain, a wrong token, no `sops` key) | Mount it, unlock it or fix its credentials; the message names the provider. |
 | `FAIL neo4j: Neo4j refused the password` | The `neo4j-data` volume was made with other secrets | Put the old password back in the store, or delete the named volume (its data goes). |
+| `FAIL ports: in use: 7687 (nexo-neo4j-1, stack nexo)` | Another stack or process holds a port this setup publishes | Set `spec.ports` (and another `metadata.name` for a second stack); `FORCE=1` to go ahead anyway. |
 | `FAIL profile: ... is for 64 GB; this machine has 24 GB` | The profile names more memory than the machine has | Set the profile for this machine; `FORCE=1` to go ahead anyway. |
 | `FAIL host: rendered for linux; this machine runs macos` | A Linux preset on a Mac (or the reverse) | Use a preset for this OS, or set `target.host`; `FORCE=1` to render anyway. |
 | `FAIL gpu` | A `gpu-*` profile without `nvidia-smi`/`rocm-smi`, or vLLM without NVIDIA GPUs usable by containers | Install the driver tools; for vLLM the NVIDIA Container Toolkit (Docker) or a CDI spec (Podman). |
