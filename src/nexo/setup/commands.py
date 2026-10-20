@@ -315,6 +315,19 @@ def chunks_have_text() -> bool:
     return True
 
 
+def carry_checkpoints(root: Path) -> None:
+    """Copy a checkout's old .data/checkpoints.sqlite to the stack's, if it has none (ADR-0018)."""
+    settings = Settings()  # fresh: render just rewrote nexo.env
+    old, new = root / ".data/checkpoints.sqlite", settings.checkpoint_sqlite_path
+    if settings.checkpoint_backend != "sqlite" or not old.is_file() or new.exists():
+        return  # never overwrite: the stack's file may hold other checkouts' reviews
+    new.parent.mkdir(parents=True, exist_ok=True)
+    for suffix in ("", "-wal"):  # a WAL left by an unclean exit holds recent writes
+        if (source := Path(f"{old}{suffix}")).is_file():
+            shutil.copy2(source, f"{new}{suffix}")
+    log.info("checkpoints: copied %s to %s (the old file is kept)", old, new)
+
+
 def _start_models(casting: Casting) -> int:
     models = casting.spec.models
     roles = "light" if models.remote is not None else "single"
@@ -334,6 +347,7 @@ def _up(args: argparse.Namespace) -> int:
     render(casting, lock, Path.cwd(), host, _addons(args))
     if not _report(casting, lock, on, host, args.force):
         return 1
+    carry_checkpoints(Path.cwd())
     if casting.spec.models.provider == "ollama" and not args.skip_models:
         if code := _start_models(casting):
             return code

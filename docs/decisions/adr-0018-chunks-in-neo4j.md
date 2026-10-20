@@ -45,6 +45,8 @@ another.[^adr-0017]
   every checkout.
 - **Migration**: `nexo chunks import` copies an existing JSON store into Neo4j with its stored vectors (no
   re-embedding); `nexo chunks status` and `make check` report graph chunks without text.
+- **Checkpoints**: `make up` (`nexo setup up`) copies a checkout's `.data/checkpoints.sqlite` to the
+  stack's data directory when the stack has none yet, and says so; it never overwrites one.
 - `CHUNK_STORE=local` keeps the in-process JSON store for offline runs and tests.
 
 # Options considered
