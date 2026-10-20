@@ -612,3 +612,48 @@ def test_system_prompt_says_absence_from_the_graph_is_not_evidence(
     system = client.requests[0]["messages"][0]["content"]
     assert "Absence from the graph is not evidence of absence" in system
     assert "search_chunks" in system
+
+
+# --- answering without exhausting the turns ----------------------------------
+
+
+def test_tool_results_report_calls_left_and_hint_only_on_empty_graph_results(
+    settings, chunk_store
+):
+    """Each result says how many calls remain; an empty graph result suggests text search."""
+    _, query, _, _ = _tools(settings, FakeGraph(), chunk_store, budget=3)
+    empty = json.loads(query("MATCH (n) RETURN n LIMIT 1"))
+    assert empty["tool_calls_left"] == 2 and "search_chunks" in empty["hint"]
+
+    _, query, _, _ = _tools(settings, FakeGraph(rows=[{"n": 1}]), chunk_store, budget=3)
+    found = json.loads(query("MATCH (n) RETURN n LIMIT 1"))
+    assert found["tool_calls_left"] == 2 and "hint" not in found
+
+
+def test_tool_budget_leaves_a_turn_to_write_the_answer(settings, chunk_store):
+    """With three turns, the second query spends the budget and the third turn is the answer."""
+    short = settings.model_copy(update={"agent_max_turns": 3})
+    query = _tool_call(
+        "t", "query_knowledge_graph", {"cypher_query": "MATCH (n) RETURN n"}
+    )
+    client = ScriptedClient(
+        [
+            query,
+            query,
+            _completion({"content": "The graph has nothing on this."}, "stop"),
+        ]
+    )
+    investigator = Investigator(
+        model=OpenAIModel(client=client, model_id="m", stream=False),
+        graph=FakeGraph(),
+        chunks=chunk_store,
+        settings=short,
+    )
+
+    output = investigator.investigate(
+        "Who is X?", scope=InvestigationScope(strategy="graph")
+    )
+
+    assert '\\"tool_calls_left\\": 0' in json.dumps(client.requests[2]["messages"])
+    assert len(client.requests) == 3 and output.stop_reason == "end_turn"
+    assert output.answer == "The graph has nothing on this."

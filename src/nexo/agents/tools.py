@@ -80,6 +80,11 @@ class InvestigationContext:
             self.calls.append(ToolCallSummary(tool="(reserved)", ok=False))
             return True
 
+    def calls_left(self) -> int:
+        """Tool calls still available in the budget."""
+        with self._lock:
+            return max(self.max_tool_calls - len(self.calls), 0)
+
     def complete_call(self, summary: ToolCallSummary) -> None:
         """Replace a reserved slot with the finished call's summary."""
         with self._lock:
@@ -237,6 +242,10 @@ def _query_tool(
             "rows": rows,
             "chunk_ids_found": sorted(found),
         }
+        if not rows:
+            payload["hint"] = (
+                "no rows: try another name or alias, or search_chunks for the text"
+            )
         return _finish(
             ctx,
             _summary("query_knowledge_graph", started, True, f"{len(rows)} rows"),
@@ -421,6 +430,11 @@ def _finish(
     payload: dict[str, Any],
     max_chars: int = 4000,
 ) -> str:
-    """Record the call and return its payload as JSON for the model."""
+    """Record the call and return its payload as JSON for the model.
+
+    The payload says how many tool calls remain, so the model can plan to answer
+    instead of running into the limit.
+    """
     ctx.complete_call(summary)
+    payload["tool_calls_left"] = ctx.calls_left()
     return _dump(payload, max_chars)
