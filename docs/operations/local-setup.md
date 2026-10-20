@@ -63,7 +63,8 @@ spec:
     jaeger: { enabled: false }
     langsmith: { enabled: false, project: nexo }
     hostMetrics: { enabled: true }
-  telemetry: { logs: otlp, queryText: false }           # queryText: the question on traces
+  telemetry: { logs: otlp, queryText: false, content: internal }  # queryText: the question on traces
+                                                        # content: none | public | internal (default) | pii | phi
   ports: { neo4jBolt: 7687, signoz: 8080 }              # host ports; move them for a second stack
   review: on-findings                                   # on-findings (default) | always | never
   patches:                                              # RFC 6902, applied last

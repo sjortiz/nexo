@@ -17,6 +17,9 @@ sources:
   - id: semconv
     resource: ../references/opentelemetry-genai-conventions.md
     title: OpenTelemetry GenAI semantic conventions
+  - id: service
+    resource: ../../src/nexo/service.py
+    title: Content gate (content_gate)
   - id: collector
     resource: ../../deploy/otel-collector.yaml
     title: Collector configuration
@@ -79,6 +82,46 @@ with capture off, and that content does appear with capture on.[^telemetry] The 
 content attributes before export as a second line.[^collector] A review pause is not recorded as an
 exception: its payload holds the question and the draft answer.
 
+# Question and answer logs
+
+Operators need what was asked and what was answered, and most runs touch nothing sensitive, so
+each run's question and released answer are exported when the run is no more sensitive than
+`telemetry.content` in `nexo.yaml` (`TELEMETRY_CONTENT_MAX_SENSITIVITY`, default `internal`;
+[ADR-0009](../decisions/adr-0009-opentelemetry-genai-conventions.md), amended).[^service]
+
+A run's level is the highest of:
+
+- the chunks its agent read (the evidence ledger, `fetched_sensitivity`, that also grounds citations);
+- what the sensitive-data detector finds in the question, the released answer, the reviewer's
+  comment and the router's reason.
+
+A level Nexo does not rank counts as `phi`; a run that read nothing and in which nothing is found is
+`public`. Graph rows are not in the ledger: the detector on the answer is what catches personal details
+the agent took from them.
+
+| Setting | Runs logged with their content |
+|---|---|
+| `none` | None: no question or answer is exported (the behaviour before this setting) |
+| `public` | Runs that read only public chunks and in which the detector finds nothing |
+| `internal` (default) | Also runs that read internal chunks |
+| `pii` | Also runs that read PII chunks, or whose question or answer has an email, phone number, SSN and so on |
+| `phi` | Every run the detector could classify |
+
+At or below the setting, after each `start` and `review` Nexo logs `thread <id>: content: released
+(internal)` from `nexo.service`; the OTLP record carries `nexo.content.question`,
+`nexo.content.answer` (only once released by a reviewer or the review policy, never a draft),
+`nexo.content.review_comment` and `nexo.content.routing_reason`, and the request span gets the
+same attributes as a `nexo.content` event. Above it the line reads `content: withheld (pii)` and
+carries no text. With `telemetry.logs: otlp` the record reaches SigNoz; the span event reaches the
+self-hosted trace backends, and the LangSmith add-on drops it.[^addons] The stderr line never carries
+the text. The request span's `nexo.content` attribute holds the verdict either way.
+
+The gate fails closed: when the detector raises (for example Comprehend Medical is unreachable) or
+the runtime has none, the content is withheld (`withheld (detector failed)`). With
+`SENSITIVE_DATA_PROVIDER=none` nothing is detected, so only the chunks read decide.
+`OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT=span_only|span_and_event` still exports every
+run's content (`released (content capture on)`). `make check` shows the setting in force.
+
 # Which user and which question
 
 Every request span (`invoke_workflow`) and MCP tool span says who asked and which question, without
@@ -94,7 +137,8 @@ the question itself:
 | `nexo.query.text` | The question, only with `telemetry.queryText: true` in `nexo.yaml` (`TRACE_QUERY_TEXT=true`); kept for self-hosted backends, never sent to LangSmith, and stripped by the collector otherwise |
 
 In SigNoz, filter traces by `user.id` or `nexo.query.hash` to find a user's questions or every time a
-question was asked.
+question was asked. Apart from `nexo.query.text`, the question reaches a trace only in the
+`nexo.content` event, by the run's sensitivity (see [Question and answer logs](#question-and-answer-logs)).
 
 # Logs
 
@@ -106,7 +150,8 @@ for OTLP export; the stderr lines leave it out.[^logging]
 
 Opt-in: `OTEL_LOGS_EXPORTER=otlp` also sends records to the collector with the same trace ids. The
 `result` field is left out unless content capture is on, and OpenTelemetry's own records are never
-exported. SigNoz stores them and links each line to its trace. The setting defaults to `none` in code; the
+exported. A run's question and answer are exported on their own record, by sensitivity (see
+[Question and answer logs](#question-and-answer-logs)). SigNoz stores them and links each line to its trace. The setting defaults to `none` in code; the
 local template sets `otlp`.
 
 # Backends
@@ -144,6 +189,7 @@ and SigNoz containers.
 [^telemetry]: Telemetry setup
 [^logging]: Logging setup
 [^semconv]: OpenTelemetry GenAI semantic conventions
+[^service]: Content gate (content_gate)
 [^collector]: Collector configuration
 [^addons]: Collector add-on pipelines
 [^signoz]: SigNoz
