@@ -30,6 +30,7 @@ from nexo.llm import (
 from nexo.logging_setup import configure_logging
 from nexo.mcp_server import build_mcp_server
 from nexo.orchestration.graph import workflow_mermaid
+from nexo.review_ui import ReviewApp, check_loopback, make_server
 from nexo.setup.commands import add_parser as add_setup_parser
 from nexo.service import (
     build_investigator,
@@ -108,6 +109,29 @@ def _review(args: argparse.Namespace) -> int:
             f"thread {result.thread_id}: {result.status} ({result.approval_status})",
             result,
         )
+    return 0
+
+
+def _review_ui(args: argparse.Namespace) -> int:
+    """Serve the demo review page on loopback; refuses any other host."""
+    settings = get_settings()
+    try:
+        check_loopback(args.host)
+    except ValueError as exc:
+        log.error("%s", exc)
+        return 2
+    with open_runtime(settings) as runtime:
+        server = make_server(ReviewApp(runtime, settings), args.host, args.port)
+        log.warning(
+            "demo review page (no authentication) at http://%s:%d/",
+            *server.server_address[:2],
+        )
+        try:
+            server.serve_forever()
+        except KeyboardInterrupt:
+            pass
+        finally:
+            server.server_close()
     return 0
 
 
@@ -421,6 +445,14 @@ def main(argv: list[str] | None = None) -> int:
     )
     evaluate_extraction.add_argument("dataset")
     evaluate_extraction.set_defaults(handler=_eval_extraction)
+
+    review_ui = sub.add_parser(
+        "review-ui",
+        help="serve the demo review page (no authentication, loopback only)",
+    )
+    review_ui.add_argument("--host", default="127.0.0.1")
+    review_ui.add_argument("--port", type=int, default=8766)
+    review_ui.set_defaults(handler=_review_ui)
 
     graph = sub.add_parser("graph", help="Mermaid diagram of the LangGraph workflow")
     graph.add_argument(
