@@ -413,6 +413,8 @@ def build_env(casting: Casting) -> dict[str, str]:
             "AGENT_INBOX_PORT": str(ports.agent_inbox),
             "REVIEW_INBOX_PORT": str(ports.review_inbox),
         }
+    if spec.review != "always":  # the default needs no line; Nexo's default matches
+        env["REVIEW_POLICY"] = spec.review
     for role, override in models.roles.items():
         if override.model:
             env[f"{role.upper()}_MODEL"] = override.model

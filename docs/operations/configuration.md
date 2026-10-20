@@ -128,6 +128,7 @@ hosts ([Local on Apple Silicon](local-apple-silicon.md)).
 |---|---|---|
 | `MAX_QUERY_CHARS` | `2000` | Router's deterministic length gate. |
 | `CHECKPOINT_BACKEND` | `sqlite` | `memory` (tests only), `sqlite` (single node) or `postgres`. |
+| `REVIEW_POLICY` | `always` | Which answers wait for a person: `always`, `on-findings` (no findings and grounded citations are approved as `system:auto`) or `never` (only answers with blocking findings wait). Blocking findings always wait. `nexo.yaml` sets it (`spec.review`). See [Review policy](human-review.md#review-policy). |
 | `CHECKPOINT_SQLITE_PATH` | `<data dir>/<stack>/checkpoints.sqlite` | SQLite file for review checkpoints, shared by every checkout of the stack; the data dir is `NEXO_DATA_DIR`, `$XDG_DATA_HOME/nexo` or `~/.local/share/nexo`. |
 | `CHECKPOINT_POSTGRES_URI` | unset | Required for `postgres` (extra `postgres`). Secret. |
 

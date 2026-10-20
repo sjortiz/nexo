@@ -16,6 +16,9 @@ sources:
   - id: state
     resource: ../../src/nexo/orchestration/state.py
     title: ReviewDecision
+  - id: graph
+    resource: ../../src/nexo/orchestration/compliance.py
+    title: auto_approves
 ---
 
 # Trigger
@@ -24,6 +27,23 @@ sources:
 it again any time with `nexo status <thread_id>`. In code, `Runtime.pending_reviews()` lists every paused
 thread, newest first, and `Runtime.review_passages(thread_id, clearance)` reads the cited chunks, masked
 below their clearance ([ADR-0019](../decisions/adr-0019-review-surfaces.md)).
+
+# Review policy
+
+`spec.review` in `nexo.yaml` (`REVIEW_POLICY`) decides which answers wait for a person; `make check`
+prints the one in force.[^graph]
+
+| Policy | Waits for a person | Approved without one |
+|---|---|---|
+| `always` (default) | Every answer | None |
+| `on-findings` | Any answer with a finding (`block` or `warn`) | No findings, at least one citation, and every cited chunk was fetched |
+| `never` | Answers with a `block` finding | Answers with no findings or only `warn` findings |
+
+An answer with a `block` finding always waits, whatever the policy. An approval without a person is
+recorded like any other: the thread's `review` has `reviewer: system:auto` and a comment naming the
+policy and any warnings, and the compliance span carries `nexo.review.reviewer=system:auto` and
+`nexo.review.policy`. `nexo.env` carries the policy only when it is not `always`, so a `REVIEW_POLICY`
+in `.env` still applies under the default; `make check` says when it overrides `nexo.yaml`.
 
 # Steps
 
@@ -69,5 +89,6 @@ withheld ones say so. Use review over MCP for real work ([ADR-0019](../decisions
   Postgres).[^cli]
 
 [^cli]: CLI
+[^graph]: auto_approves
 [^state]: ReviewDecision
 [^ui]: Demo review page

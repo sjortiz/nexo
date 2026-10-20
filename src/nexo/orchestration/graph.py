@@ -3,7 +3,9 @@
     START -> router --(rejected)--> END
                |
                +--(investigator)--> investigator -> compliance -> END
-                                                    (interrupt: human approval)
+                                                    (interrupt: human approval,
+                                                     unless the review policy
+                                                     auto-approves)
 
 The graph owns the corporate workflow (validation, audit trail, approval).
 The Strands agent owns the open-ended reasoning inside `investigator`.
@@ -27,6 +29,7 @@ from langgraph.func import task
 from langgraph.graph import END, START, StateGraph
 from langgraph.graph.state import CompiledStateGraph
 from langgraph.types import RetryPolicy, interrupt
+from opentelemetry import trace
 from opentelemetry.trace import Status, StatusCode
 from pydantic import ValidationError
 
@@ -34,7 +37,11 @@ from nexo.agents.investigator import is_transient
 from nexo.agents.models import AgentOutput, InvestigationScope
 from nexo.config import Settings
 from nexo.llm import invoke_structured
-from nexo.orchestration.compliance import run_compliance_checks
+from nexo.orchestration.compliance import (
+    AUTO_REVIEWER,
+    auto_approves,
+    run_compliance_checks,
+)
 from nexo.orchestration.state import GraphState, ReviewDecision, RouteDecision
 from nexo.storage.schemas import Sensitivity
 from nexo.storage.sensitive_data import NoopDetector, SensitiveDataDetector
@@ -241,7 +248,8 @@ def _investigator_node(deps: GraphDependencies) -> Callable[..., dict[str, Any]]
 
 
 def _compliance_node(deps: GraphDependencies) -> Callable[..., dict[str, Any]]:
-    """Node 3: check the draft and pause for a person's decision."""
+    """Node 3: check the draft and pause for a person's decision (or the review policy's)."""
+    policy = deps.settings.review_policy
 
     # LangGraph passes the run config by this parameter name, used or not.
     def compliance(  # pylint: disable=unused-argument
@@ -262,6 +270,24 @@ def _compliance_node(deps: GraphDependencies) -> Callable[..., dict[str, Any]]:
                     "comment": "no releasable output",
                     "source": "system",
                 },
+            }
+
+        span = trace.get_current_span()
+        span.set_attribute("nexo.review.policy", policy)
+        if auto_approves(policy, report, latest):
+            # No pause: the policy is the reviewer, recorded as one on the thread.
+            warnings = ", ".join(f.code for f in report.findings) or "none"
+            decision = ReviewDecision(
+                approval_status="approved",
+                reviewer=AUTO_REVIEWER,
+                comment=f"review policy {policy}; findings: {warnings}",
+            )
+            span.set_attribute("nexo.review.reviewer", AUTO_REVIEWER)
+            return {
+                "approval_status": "approved",
+                "review": decision.model_dump(mode="json"),
+                "compliance_report": report.as_state(),
+                "final_response": latest.answer,
             }
 
         request = {

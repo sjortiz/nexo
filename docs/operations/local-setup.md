@@ -65,6 +65,7 @@ spec:
     hostMetrics: { enabled: true }
   telemetry: { logs: otlp, queryText: false }           # queryText: the question on traces
   ports: { neo4jBolt: 7687, signoz: 8080 }              # host ports; move them for a second stack
+  review: always                                        # always | on-findings | never
   patches:                                              # RFC 6902, applied last
     - target: compose.yaml
       operations: [{ op: add, path: /services/neo4j/mem_limit, value: 3g }]
@@ -91,7 +92,7 @@ Kubernetes comes after the compose target. Presets live in `examples/setups/`.[^
 | `make env` | `nexo setup init`, `nexo setup secrets` | `nexo.yaml` from a preset (kept if it exists); `.env` from the template for personal settings; random secrets for the enabled components (existing values kept) |
 | `make lock` | `nexo setup lock` | `nexo.lock`: the components on, every service's image and each role's model. Pins stay when `nexo.yaml` changes; `UPGRADE=1` moves them to the current defaults |
 | `make render` | `nexo setup render` | `.nexo/render/`: `compose.yaml` (only the enabled services), `otel-collector.yaml` (the base plus each add-on's pipeline), `nexo.env` |
-| `make check` | `nexo setup check` | Preflight (engine, secrets, Ollama, the profile against this machine's memory, memory budget, Podman VM limit), then each role's server and model; a failed memory check stops `check` and `up` unless `FORCE=1` |
+| `make check` | `nexo setup check` | Preflight (engine, secrets, the [review policy](human-review.md#review-policy), Ollama, the profile against this machine's memory, memory budget, Podman VM limit), then each role's server and model; a failed memory check stops `check` and `up` unless `FORCE=1` |
 | `make up` | `nexo setup up` | Secrets, render, preflight, `ollama-setup.sh` for this machine's roles, `compose up -d` (removing add-ons a previous run enabled), then waits until every service runs; fails with the service's last log lines when one exits |
 | `make down` / `make app` | `nexo setup down` / `compose run nexo` | Stop (volumes kept) / the CLI in a container |
 

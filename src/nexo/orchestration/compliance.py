@@ -15,6 +15,8 @@ from nexo.storage.schemas import Sensitivity
 from nexo.storage.sensitive_data import SensitiveDataDetector
 
 Severity = Literal["block", "warn"]
+ReviewPolicy = Literal["always", "on-findings", "never"]
+AUTO_REVIEWER = "system:auto"
 
 
 class Finding(BaseModel):
@@ -151,3 +153,27 @@ def run_compliance_checks(
             )
         )
     return report
+
+
+def grounded_citations(output: AgentOutput) -> bool:
+    """The answer cites at least one chunk, and the agent read every chunk it cites."""
+    return bool(output.citations) and all(
+        c in output.fetched_sensitivity for c in output.citations
+    )
+
+
+def auto_approves(
+    policy: ReviewPolicy, report: ComplianceReport, output: AgentOutput
+) -> bool:
+    """Whether the review policy releases this answer without a person (ADR-0003).
+
+    Blocking findings always wait for a person, whatever the policy: approving them
+    needs a reviewer who acknowledges them.
+    """
+    if report.blocking or output.error or not output.answer:
+        return False
+    if policy == "never":
+        return True
+    if policy == "on-findings":
+        return not report.findings and grounded_citations(output)
+    return False
