@@ -14,6 +14,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 from opentelemetry import trace
+from opentelemetry.instrumentation.logging.handler import LoggingHandler
 
 from nexo.config import Settings
 
@@ -76,7 +77,11 @@ def configure_logging(settings: Settings, stream=None) -> None:
         JsonFormatter() if settings.log_format == "json" else TextFormatter()
     )
     root = logging.getLogger()
-    root.handlers[:] = [handler]
+    # Keep OTLP log export if telemetry was set up first (OTEL_LOGS_EXPORTER=otlp).
+    root.handlers[:] = [
+        handler,
+        *(h for h in root.handlers if isinstance(h, LoggingHandler)),
+    ]
     root.setLevel(settings.log_level.upper())
     for noisy in ("httpx", "httpcore", "neo4j", "openai"):
         logging.getLogger(noisy).setLevel(max(logging.WARNING, root.level))

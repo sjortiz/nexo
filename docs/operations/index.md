@@ -17,3 +17,4 @@
 # Fix
 
 * [Troubleshooting](troubleshooting.md) - Symptoms, causes and fixes for common failures.
+* [FAQ](faq.md) - Which trace backend to use, what Nexo is and is not, data and model questions.

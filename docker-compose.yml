@@ -3,6 +3,7 @@
 #   docker compose up -d neo4j otel-collector langfuse-web langfuse-worker   # make up
 #   OTEL_JAEGER=jaeger docker compose up -d ... jaeger      # + Jaeger (make up JAEGER=1)
 #   OTEL_LANGSMITH=langsmith docker compose up -d ...       # + LangSmith (make up LANGSMITH=1)
+#   OTEL_LGTM=lgtm docker compose up -d ... lgtm             # + Grafana LGTM (make up LGTM=1)
 #   docker compose --profile app run --rm nexo ingest /corpus/memo.md --doc-type memo
 #   docker compose -f docker-compose.yml -f docker-compose.gpu.yml up -d   # + vLLM on GPUs
 #
@@ -34,6 +35,7 @@ services:
       - --config=/etc/otelcol/config.yaml
       - --config=/etc/otelcol/addons/${OTEL_JAEGER:-none}.yaml
       - --config=/etc/otelcol/addons/${OTEL_LANGSMITH:-none}.yaml
+      - --config=/etc/otelcol/addons/${OTEL_LGTM:-none}.yaml
     volumes:
       - ./deploy/otel-collector.yaml:/etc/otelcol/config.yaml:ro
       - ./deploy/otel-addons:/etc/otelcol/addons:ro
@@ -50,6 +52,12 @@ services:
     profiles: ["jaeger"]
     ports: ["127.0.0.1:16686:16686"]
 
+  lgtm:  # add-on: make up LGTM=1 - traces, metrics and logs in one Grafana
+    image: docker.io/grafana/otel-lgtm:0.37.0
+    profiles: ["lgtm"]
+    ports: ["127.0.0.1:3001:3000"]  # 3000 is Langfuse
+    volumes: [lgtm-data:/data]
+
   nexo:
     build: .
     profiles: ["app"]
@@ -65,5 +73,6 @@ services:
       neo4j: { condition: service_healthy }
 
 volumes:
+  lgtm-data:
   neo4j-data:
   nexo-data:

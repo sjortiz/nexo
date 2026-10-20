@@ -20,6 +20,9 @@ LangSmith is optional and orthogonal: LANGSMITH_TRACING=true.
 
 from __future__ import annotations
 
+import copy
+import json
+import logging
 import os
 import sys
 import threading
@@ -27,10 +30,14 @@ from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
 from typing import Any
 
-from opentelemetry import metrics, trace
+from opentelemetry import _logs, metrics, trace
+from opentelemetry.exporter.otlp.proto.http._log_exporter import OTLPLogExporter
 from opentelemetry.exporter.otlp.proto.http.metric_exporter import OTLPMetricExporter
 from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
 from opentelemetry.instrumentation.genai.openai import OpenAIInstrumentor
+from opentelemetry.instrumentation.logging.handler import LoggingHandler
+from opentelemetry.sdk._logs import LoggerProvider
+from opentelemetry.sdk._logs.export import BatchLogRecordProcessor
 from opentelemetry.sdk.metrics import MeterProvider
 from opentelemetry.sdk.metrics.export import PeriodicExportingMetricReader
 from opentelemetry.sdk.resources import Resource
@@ -47,8 +54,27 @@ from nexo.config import Settings
 TRACER_NAME = "nexo"
 
 _setup_lock = threading.Lock()
-# The process-wide (tracer, meter) providers, once installed.
-_INSTALLED: dict[str, tuple[TracerProvider, MeterProvider | None]] = {}
+# The process-wide providers, once installed: "providers" -> (tracer, meter), "logs" -> logger.
+_INSTALLED: dict[str, Any] = {}
+
+
+class OtelLogHandler(LoggingHandler):
+    """Export log records over OTLP, keeping answer payloads out unless content capture is on."""
+
+    def __init__(self, logger_provider: LoggerProvider, capture_content: bool) -> None:
+        super().__init__(logger_provider=logger_provider)
+        self._capture_content = capture_content
+
+    def emit(self, record: logging.LogRecord) -> None:
+        if record.name.startswith("opentelemetry"):
+            return  # the exporter's own logs would feed back into the export
+        if hasattr(record, "result"):
+            record = copy.copy(record)  # other handlers still see the original
+            if self._capture_content:
+                record.result = json.dumps(record.result, default=str)
+            else:
+                del record.result
+        super().emit(record)
 
 
 def apply_genai_env(settings: Settings) -> None:
@@ -98,6 +124,8 @@ def setup_telemetry(settings: Settings) -> TracerProvider:
                 ],
             )
             metrics.set_meter_provider(meter_provider)
+            if settings.otel_logs_exporter == "otlp":
+                _install_log_export(settings, resource, f"{base}/v1/logs")
         # stderr: stdout may carry a protocol (MCP stdio)
         if settings.otel_console_export:
             tracer_provider.add_span_processor(
@@ -108,6 +136,19 @@ def setup_telemetry(settings: Settings) -> TracerProvider:
             instrument_openai(tracer_provider, meter_provider)
         _INSTALLED["providers"] = (tracer_provider, meter_provider)
         return tracer_provider
+
+
+def _install_log_export(settings: Settings, resource: Resource, endpoint: str) -> None:
+    """Send root-logger records over OTLP from now on."""
+    logger_provider = LoggerProvider(resource=resource)
+    logger_provider.add_log_record_processor(
+        BatchLogRecordProcessor(OTLPLogExporter(endpoint=endpoint))
+    )
+    _logs.set_logger_provider(logger_provider)
+    logging.getLogger().addHandler(
+        OtelLogHandler(logger_provider, settings.capture_content)
+    )
+    _INSTALLED["logs"] = logger_provider
 
 
 def instrument_openai(
@@ -130,6 +171,8 @@ def shutdown_telemetry() -> None:
         tracer_provider.shutdown()
         if meter_provider is not None:
             meter_provider.shutdown()
+    if "logs" in _INSTALLED:
+        _INSTALLED["logs"].shutdown()
 
 
 def get_tracer() -> trace.Tracer:

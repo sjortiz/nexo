@@ -59,7 +59,8 @@ Ingestion adds `ingest.document`, one `ingest.extract_triples` per chunk (each w
 When `OTEL_EXPORTER_OTLP_ENDPOINT` is set, a MeterProvider exports OTLP metrics. The GenAI
 instrumentation records `gen_ai.client.operation.duration` and `gen_ai.client.token.usage` per vLLM
 call; Strands adds agent and tool metrics. The GenAI metric names are still in development and are
-expected to change upstream.
+expected to change upstream. The collector exposes them on `127.0.0.1:8889`; the LGTM add-on stores
+them (Prometheus), so they can be charted, including `nexo eval` scores.
 
 # Content capture
 
@@ -79,6 +80,11 @@ Logs go to stdout through one handler (`LOG_FORMAT=text|json`, `LOG_LEVEL`). Eve
 `trace_id` and `span_id` of the current span, so a log line leads to its trace. CLI results and
 evaluation rows are logged with a structured `result` field.[^logging]
 
+Opt-in: `OTEL_LOGS_EXPORTER=otlp` also sends records to the collector with the same trace ids. The
+`result` field is left out unless content capture is on, and OpenTelemetry's own records are never
+exported. Without the LGTM add-on the collector drops them; with it, Loki stores them and Grafana
+links each line to its trace in Tempo.
+
 # Backends
 
 The application exports OTLP to the collector; the collector chooses the backends
@@ -89,7 +95,8 @@ The application exports OTLP to the collector; the collector chooses the backend
 | Langfuse (default) | `make up`; OTLP/HTTP to `/api/public/otel`, Basic auth with the `nexo` project keys, `x-langfuse-ingestion-version: 4`[^collector] | http://localhost:3000; log in with `LANGFUSE_USER_EMAIL` / `LANGFUSE_USER_PASSWORD` from `.env` |
 | Jaeger (add-on) | `make up JAEGER=1`; pipeline `traces/jaeger`[^addons] | http://localhost:16686 |
 | LangSmith (add-on) | `make up LANGSMITH=1` with `LANGSMITH_API_KEY` and `LANGSMITH_PROJECT` in `.env`; pipeline `traces/langsmith` | LangSmith project |
-| Prometheus metrics | always | http://127.0.0.1:8889/metrics |
+| Grafana LGTM (add-on) | `make up LGTM=1`; pipelines `traces/lgtm`, `metrics/lgtm`, `logs/lgtm`: Tempo, Prometheus and Loki in `grafana/otel-lgtm` | http://localhost:3001 |
+| Prometheus metrics | always (not stored without LGTM) | http://127.0.0.1:8889/metrics |
 
 Add-ons can be combined. Each one runs the same content-stripping processors as the main pipeline; a
 disabled add-on loads `deploy/otel-addons/none.yaml`. Do not enable `LANGSMITH_TRACING` in the

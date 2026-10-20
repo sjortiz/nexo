@@ -43,8 +43,10 @@ exporters:
       x-langfuse-ingestion-version: "4"  # without it, traces can take minutes to appear
   prometheus:
     endpoint: 0.0.0.0:8889
+  # Logs (OTEL_LOGS_EXPORTER=otlp) are kept only by an add-on that stores them (lgtm).
+  nop: {}
 
-# Jaeger and LangSmith are add-ons with their own pipelines: deploy/otel-addons/.
+# Jaeger, LangSmith and Grafana LGTM are add-ons with their own pipelines: deploy/otel-addons/.
 service:
   extensions: [basicauth/langfuse]
   pipelines:
@@ -56,3 +58,7 @@ service:
       receivers: [otlp]
       processors: [batch]
       exporters: [prometheus]
+    logs:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [nop]

@@ -96,6 +96,7 @@ Everything binds `127.0.0.1`; nothing is exposed on the network.
 | Neo4j | `127.0.0.1:7687` | `localhost:7687` | `neo4j:7687` | `127.0.0.1:7687` |
 | OTLP (the collector) | `127.0.0.1:4318` | `localhost:4318` | `otel-collector:4318` | `127.0.0.1:4318` |
 | Langfuse UI (browser; Nexo does not call it) | `127.0.0.1:3000` | http://localhost:3000 | - | - |
+| Grafana, LGTM add-on (browser) | `127.0.0.1:3001` | http://localhost:3001 | - | - |
 
 `.env` holds the native values; the compose files set the container values.[^compose] On Linux,
 rootless Podman cannot reach host loopback through `host.containers.internal`, so

@@ -154,6 +154,9 @@ class Settings(BaseSettings):
     # OTLP/HTTP base URL, e.g. http://otel-collector:4318. Unset = no export.
     otel_exporter_otlp_endpoint: str | None = None
     otel_console_export: bool = False
+    # Opt-in: also send log records over OTLP (to the collector) with their trace ids.
+    # Standard OTel variable name; Nexo defaults it to "none".
+    otel_logs_exporter: Literal["none", "otlp"] = "none"
     # Standard GenAI content-capture switch, shared with the OpenTelemetry GenAI
     # instrumentations. Prompts, answers and Cypher can carry PII: keep them off
     # spans unless the trace backend is cleared for that data.

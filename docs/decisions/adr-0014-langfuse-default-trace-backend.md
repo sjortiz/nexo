@@ -33,6 +33,10 @@ needs an Enterprise plan, and the data may include PHI.[^langsmith]
   config fragment in `deploy/otel-addons/` with its own pipeline (`traces/jaeger`, `traces/langsmith`)
   and the same content-stripping processors.[^collector]
 - **SeaweedFS** provides Langfuse's S3 storage; MinIO's community repository was archived in April 2026.
+- **Amended 2026-10-20:** a third add-on, Grafana LGTM (`make up LGTM=1`), stores traces, metrics and
+  logs, which Langfuse does not take. Log export from Nexo is opt-in (`OTEL_LOGS_EXPORTER=otlp`); the
+  base pipeline drops logs. An all-in-one platform as the default (e.g. SigNoz) was weighed: it would
+  cover operations, but not Langfuse's datasets, experiments, scores and annotation queues.
 
 # Options considered
 

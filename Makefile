@@ -14,10 +14,13 @@ else
 COMPOSE_APP ?= $(COMPOSE) --profile app
 endif
 
-# Opt-in observability add-ons for `make up`: JAEGER=1, LANGSMITH=1.
+# Opt-in observability add-ons for `make up`: JAEGER=1, LANGSMITH=1, LGTM=1.
 JAEGER    ?=
 LANGSMITH ?=
-ADDONS    = OTEL_JAEGER=$(if $(JAEGER),jaeger,none) OTEL_LANGSMITH=$(if $(LANGSMITH),langsmith,none)
+LGTM      ?=
+ADDONS    = OTEL_JAEGER=$(if $(JAEGER),jaeger,none) \
+            OTEL_LANGSMITH=$(if $(LANGSMITH),langsmith,none) \
+            OTEL_LGTM=$(if $(LGTM),lgtm,none)
 PROFILE  ?=
 ROLES    ?=
 FILE     ?=
@@ -53,11 +56,12 @@ models: ## Pull and start the profile's models in Ollama (PROFILE=m1-max-64 ROLE
 
 ##@ Run
 
-up: ## Start Neo4j, the collector and Langfuse (add-ons: JAEGER=1, LANGSMITH=1)
-	$(ADDONS) $(COMPOSE) up -d neo4j otel-collector langfuse-web langfuse-worker $(if $(JAEGER),jaeger)
+up: ## Start Neo4j, the collector and Langfuse (add-ons: JAEGER=1, LANGSMITH=1, LGTM=1)
+	$(ADDONS) $(COMPOSE) up -d neo4j otel-collector langfuse-web langfuse-worker \
+	  $(if $(JAEGER),jaeger) $(if $(LGTM),lgtm)
 
 down: ## Stop them (data volumes are kept)
-	$(COMPOSE) --profile jaeger down
+	$(COMPOSE) --profile jaeger --profile lgtm down
 
 check: ## Check each model role's server and model (nexo models --check)
 	$(RUN)nexo models --check

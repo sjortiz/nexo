@@ -142,8 +142,9 @@ Two opt-in add-ons, each its own collector pipeline behind the same content stri
 | --- | --- | --- |
 | Jaeger | `make up JAEGER=1` | Span UI on http://localhost:16686. |
 | LangSmith | `make up LANGSMITH=1` | Needs `LANGSMITH_API_KEY` and `LANGSMITH_PROJECT` in `.env`. |
+| Grafana LGTM | `make up LGTM=1` | Traces, stored metrics and logs in one Grafana on http://localhost:3001; set `OTEL_LOGS_EXPORTER=otlp` to send logs. |
 
-Both can be combined. Without `make`: `OTEL_JAEGER=jaeger docker compose up -d neo4j otel-collector
+Add-ons can be combined. Which to use when: [FAQ](docs/operations/faq.md). Without `make`: `OTEL_JAEGER=jaeger docker compose up -d neo4j otel-collector
 langfuse-web langfuse-worker jaeger`, and `OTEL_LANGSMITH=langsmith` for LangSmith.
 
 LangSmith also offers Studio for local graph debugging (`langgraph dev`) and evaluation tooling
