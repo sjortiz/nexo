@@ -140,7 +140,7 @@ hosts ([Local on Apple Silicon](local-apple-silicon.md)).
 | `OTEL_SERVICE_NAME` | `nexo` | `service.name` resource attribute. |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | unset | OTLP/HTTP base URL; unset disables export. |
 | `OTEL_CONSOLE_EXPORT` | `false` | Print spans to stdout. |
-| `OTEL_LOGS_EXPORTER` | `none` | `otlp` also sends log records to the collector, with trace ids; `result` payloads only with content capture on. Stored by the LGTM add-on. |
+| `OTEL_LOGS_EXPORTER` | `none` | `otlp` also sends log records to the collector, with trace ids; `result` payloads only with content capture on. Stored by SigNoz; the local template sets `otlp`. |
 | `OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT` | `no_content` | `span_only` / `span_and_event` put prompts, outputs and agent Cypher on spans (may carry PII). Standard GenAI variable. |
 | `OTEL_SEMCONV_STABILITY_OPT_IN` | derived | Strands conventions and redaction; derived from content capture unless set. |
 | `OTEL_INSTRUMENT_OPENAI` | `true` | Official GenAI instrumentation of the openai SDK (one `chat {model}` span per vLLM call). |

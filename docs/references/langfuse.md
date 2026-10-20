@@ -1,7 +1,7 @@
 ---
 type: Reference
 title: Langfuse
-description: Open-source LLM observability platform, self-hosted as Nexo's default trace backend - OpenTelemetry ingestion, the self-hosted components and the v4 read API.
+description: Open-source LLM observability platform, self-hosted as an opt-in add-on for LLM evaluation - OpenTelemetry ingestion, the self-hosted components and the v4 read API.
 resource: https://langfuse.com/self-hosting
 tags: [reference, observability, langfuse, opentelemetry]
 status: draft
@@ -36,10 +36,11 @@ sources:
 
 # Role in Nexo
 
-The default trace backend: `make up` starts it next to Neo4j and the OpenTelemetry collector, and the
-collector sends every trace to it after stripping message content. It shows GenAI spans as
-generations with model and token usage. Jaeger and LangSmith are opt-in add-ons
-([ADR-0014](../decisions/adr-0014-langfuse-default-trace-backend.md)).
+An opt-in add-on for LLM evaluation and fine-tuning work (datasets, experiments, scores, LLM-as-judge,
+annotation queues): `make up LANGFUSE=1` starts it, and the collector then also sends every trace to it
+after stripping message content. It shows GenAI spans as generations with model and token usage.
+SigNoz is the default backend ([ADR-0015](../decisions/adr-0015-signoz-default-observability.md);
+[ADR-0014](../decisions/adr-0014-langfuse-default-trace-backend.md) made Langfuse the default before).
 
 # OpenTelemetry ingestion
 

@@ -113,8 +113,8 @@ show(
 
 # %% [markdown]
 # Collect traces in memory, so later steps can look at what happened inside each call. With
-# `make up`, the same spans go through the OpenTelemetry collector to Langfuse, which runs
-# locally at http://localhost:3000; Jaeger and LangSmith are opt-in add-ons.
+# `make up`, the same spans go through the OpenTelemetry collector to SigNoz, which runs
+# locally at http://localhost:8080; Langfuse (`LANGFUSE=1`), Jaeger and LangSmith are add-ons.
 
 # %%
 spans = InMemorySpanExporter()
@@ -492,9 +492,9 @@ show(found)
 # and each database query, named with the OpenTelemetry GenAI conventions. This is the trace of the
 # run that paused for review in step 11.
 #
-# In Langfuse the same trace appears with each model call as a generation, with its token counts,
-# and each embedding call as an embedding. Message content stays out of it: the collector strips
-# it unless you opt in.
+# In SigNoz the same trace appears with each model call and its token counts, next to the metrics
+# and logs; with `LANGFUSE=1`, Langfuse shows the calls as generations and embeddings. Message
+# content stays out of both: the collector strips it unless you opt in.
 
 # %%
 finished = spans.get_finished_spans()

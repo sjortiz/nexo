@@ -37,7 +37,7 @@ Two independent choices:
 |---|---|---|
 | Models | Ollama, native (Metal GPU) | Ollama, native (Metal GPU) |
 | Neo4j | container (`neo4j:5.26-community`) | Homebrew (`neo4j` 2026.09) |
-| Telemetry | collector (strips content) + Langfuse containers; Jaeger optional | none, or the collector and Langfuse containers |
+| Telemetry | collector (strips content) + SigNoz containers; Langfuse, Jaeger optional | none, or the collector and SigNoz containers |
 | Nexo | container (`--profile app`) or `uv sync` | `uv sync` |
 | Good for | matching the server setup; clean teardown | fewest moving parts; no VM |
 
@@ -76,11 +76,12 @@ Sizes are Ollama library download sizes; KV cache and the OS need the rest. `qwe
 2. Models, per Mac (see "Two Macs" below for the second Mac):
    `deploy/local/ollama-setup.sh m1-max-64` - pulls and preloads the profile's models and starts
    Ollama with the right context length, keep-alive and KV-cache settings, bound to `127.0.0.1`.[^setup]
-3. `make env` (creates `.env` and generates `NEO4J_PASSWORD` and the Langfuse secrets), then set the
+3. `make env` (creates `.env` and generates `NEO4J_PASSWORD` and the SigNoz and Langfuse secrets), then set the
    profile(s) in `.env`.[^env]
-4. `make up`, or `podman compose up -d neo4j otel-collector langfuse-web langfuse-worker` - Neo4j on
-   `127.0.0.1:7687`, traces in Langfuse at http://localhost:3000 (log in with `LANGFUSE_USER_EMAIL` /
-   `LANGFUSE_USER_PASSWORD` from `.env`), metrics at http://localhost:8889/metrics. Add Jaeger with
+4. `make up`, or `podman compose up -d neo4j otel-collector signoz` - Neo4j on
+   `127.0.0.1:7687`, traces, metrics and logs in SigNoz at http://localhost:8080 (log in with `SIGNOZ_USER_EMAIL` /
+   `SIGNOZ_USER_PASSWORD` from `.env`), raw metrics at http://localhost:8889/metrics. Infrastructure metrics
+   cover the Podman VM, not the Mac. Add Langfuse (evaluation) or Jaeger with `make up LANGFUSE=1` /
    `make up JAEGER=1` ([Observability](observability.md#backends)).
 5. Run Nexo either natively (`uv sync`, then `nexo ...` in the activated `.venv`) or in a container:
    `podman compose --profile app run --rm nexo ingest /corpus/memo.md` with documents in `./corpus`.
@@ -93,8 +94,8 @@ Sizes are Ollama library download sizes; KV cache and the OS need the rest. `qwe
 3. Models: `deploy/local/ollama-setup.sh m1-max-64`.
 4. `cp deploy/local/local.env.example .env`, set the profile(s) and `NEO4J_PASSWORD`.
 5. Telemetry (optional): leave `OTEL_EXPORTER_OTLP_ENDPOINT` empty to rely on logs only, or run just
-   the collector and Langfuse containers (`make env`, then
-   `podman compose up -d otel-collector langfuse-web langfuse-worker`).
+   the collector and SigNoz containers (`make env`, then
+   `podman compose up -d otel-collector signoz`).
 6. `brew install uv && uv sync && source .venv/bin/activate`, then `nexo ...` (uv installs Python 3.12).
 
 # Two Macs

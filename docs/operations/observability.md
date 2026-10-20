@@ -23,6 +23,9 @@ sources:
   - id: addons
     resource: ../../deploy/otel-addons/
     title: Collector add-on pipelines
+  - id: signoz
+    resource: ../references/signoz.md
+    title: SigNoz
   - id: langfuse
     resource: ../references/langfuse.md
     title: Langfuse
@@ -59,8 +62,9 @@ Ingestion adds `ingest.document`, one `ingest.extract_triples` per chunk (each w
 When `OTEL_EXPORTER_OTLP_ENDPOINT` is set, a MeterProvider exports OTLP metrics. The GenAI
 instrumentation records `gen_ai.client.operation.duration` and `gen_ai.client.token.usage` per vLLM
 call; Strands adds agent and tool metrics. The GenAI metric names are still in development and are
-expected to change upstream. The collector exposes them on `127.0.0.1:8889`; the LGTM add-on stores
-them (Prometheus), so they can be charted, including `nexo eval` scores.
+expected to change upstream. The collector exposes them on `127.0.0.1:8889`; SigNoz stores
+them, so they can be charted, including `nexo eval` scores. The collector also reports host and
+container metrics (see Backends).
 
 # Content capture
 
@@ -82,35 +86,44 @@ evaluation rows are logged with a structured `result` field.[^logging]
 
 Opt-in: `OTEL_LOGS_EXPORTER=otlp` also sends records to the collector with the same trace ids. The
 `result` field is left out unless content capture is on, and OpenTelemetry's own records are never
-exported. Without the LGTM add-on the collector drops them; with it, Loki stores them and Grafana
-links each line to its trace in Tempo.
+exported. SigNoz stores them and links each line to its trace. The setting defaults to `none` in code; the
+local template sets `otlp`.
 
 # Backends
 
 The application exports OTLP to the collector; the collector chooses the backends
-([ADR-0014](../decisions/adr-0014-langfuse-default-trace-backend.md)).
+([ADR-0015](../decisions/adr-0015-signoz-default-observability.md)).
 
 | Backend | How | Where |
 |---|---|---|
-| Langfuse (default) | `make up`; OTLP/HTTP to `/api/public/otel`, Basic auth with the `nexo` project keys, `x-langfuse-ingestion-version: 4`[^collector] | http://localhost:3000; log in with `LANGFUSE_USER_EMAIL` / `LANGFUSE_USER_PASSWORD` from `.env` |
+| SigNoz (default) | `make up`; the collector exports traces, metrics and logs over OTLP gRPC to `signoz-ingester`[^collector] | http://localhost:8080; log in with `SIGNOZ_USER_EMAIL` / `SIGNOZ_USER_PASSWORD` from `.env`[^signoz] |
+| Langfuse (add-on) | `make up LANGFUSE=1`; pipeline from `deploy/otel-addons/langfuse.yaml`: OTLP/HTTP to `/api/public/otel`, Basic auth with the `nexo` project keys, `x-langfuse-ingestion-version: 4`[^collector] | http://localhost:3000; log in with `LANGFUSE_USER_EMAIL` / `LANGFUSE_USER_PASSWORD` from `.env` |
 | Jaeger (add-on) | `make up JAEGER=1`; pipeline `traces/jaeger`[^addons] | http://localhost:16686 |
 | LangSmith (add-on) | `make up LANGSMITH=1` with `LANGSMITH_API_KEY` and `LANGSMITH_PROJECT` in `.env`; pipeline `traces/langsmith` | LangSmith project |
-| Grafana LGTM (add-on) | `make up LGTM=1`; pipelines `traces/lgtm`, `metrics/lgtm`, `logs/lgtm`: Tempo, Prometheus and Loki in `grafana/otel-lgtm` | http://localhost:3001 |
-| Prometheus metrics | always (not stored without LGTM) | http://127.0.0.1:8889/metrics |
+| Prometheus metrics | always | http://127.0.0.1:8889/metrics |
 
 Add-ons can be combined. Each one runs the same content-stripping processors as the main pipeline; a
 disabled add-on loads `deploy/otel-addons/none.yaml`. Do not enable `LANGSMITH_TRACING` in the
 application, or traces are duplicated.
 
-In Langfuse, GenAI spans appear as GENERATION observations (model, token usage), embeddings as
+Host and container metrics: the collector's `host_metrics` receiver (CPU, load, memory, paging and
+disk from the container's `/proc`, which reports the host's; root filesystem usage from a read-only
+`/hostfs` mount) and `docker_stats` receiver (per-container CPU, memory, network and I/O, from the
+container engine's socket) feed SigNoz as an infrastructure view, with `host.name` set to the machine's
+name by `make up`. On macOS the host is the Podman VM, not the Mac, and Ollama runs outside it. The
+collector runs as root in its container to read the socket (with rootless Podman, the unprivileged
+socket owner), with SELinux labeling off for that container so Podman's VM lets it connect.
+
+With `LANGFUSE=1`, in Langfuse, GenAI spans appear as GENERATION observations (model, token usage), embeddings as
 EMBEDDING and the rest as SPAN. Langfuse v4's read API is `/api/public/v2/observations`.[^langfuse]
 
 Without containers, leave `OTEL_EXPORTER_OTLP_ENDPOINT` empty (logs only), or run just the collector
-and Langfuse containers.
+and SigNoz containers.
 
 [^telemetry]: Telemetry setup
 [^logging]: Logging setup
 [^semconv]: OpenTelemetry GenAI semantic conventions
 [^collector]: Collector configuration
 [^addons]: Collector add-on pipelines
+[^signoz]: SigNoz
 [^langfuse]: Langfuse

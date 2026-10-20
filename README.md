@@ -56,8 +56,8 @@ bundle: architecture, components, operations, decisions and references.
 
 ```bash
 cp .env.example .env                                   # fill in the vLLM secrets
-make env                                               # generates Neo4j and Langfuse secrets
-make up                                                # Neo4j, OTel collector, Langfuse
+make env                                               # generates Neo4j and SigNoz secrets
+make up                                                # Neo4j, OTel collector, SigNoz
 docker compose -f docker-compose.yml -f docker-compose.gpu.yml up -d   # vLLM: 4x80GB GPUs
 uv sync && source .venv/bin/activate                  # Python 3.12 + deps from uv.lock
 nexo ingest corpus/memo.md --doc-type memo --effective-date 2025-06-30
@@ -65,8 +65,8 @@ nexo ask "How is Acme Holdings connected to Gamma Clinics?"   # prints thread_id
 nexo review <thread_id> --approve --reviewer you@corp
 ```
 
-Traces: http://localhost:3000 (Langfuse; log in with `LANGFUSE_USER_EMAIL` / `LANGFUSE_USER_PASSWORD` from
-`.env`); metrics: http://localhost:8889/metrics. Telemetry follows the
+Traces, metrics and logs: http://localhost:8080 (SigNoz; log in with `SIGNOZ_USER_EMAIL` / `SIGNOZ_USER_PASSWORD` from
+`.env`); raw metrics: http://localhost:8889/metrics. Telemetry follows the
 [OpenTelemetry GenAI conventions](docs/references/opentelemetry-genai-conventions.md) with message content off by default
 ([Observability](docs/operations/observability.md)). Logs go to stdout with trace ids (`LOG_FORMAT=json` for log
 pipelines). Relation ontology example: `deploy/ontology.example.json`. Neo4j Enterprise least-privilege reader:
@@ -97,7 +97,7 @@ deploy/local/ollama-setup.sh m1-max-64 heavy  # on the M1 Max
 deploy/local/ollama-setup.sh                  # on the M5 Pro (reads LOCAL_PROFILE/REMOTE_PROFILE)
 ssh -N -L 11435:127.0.0.1:11434 you@m1-max.local
 
-make env up                                        # Podman path: secrets, Neo4j, collector, Langfuse
+make env up                                        # Podman path: secrets, Neo4j, collector, SigNoz
 nexo models --check                                # each role's model and server, checked
 NEXO_LIVE=1 pytest -m live -v                      # exercise the real models
 ```
@@ -134,18 +134,20 @@ make test-live     # the real models, once they run
 ## Observability
 
 Nexo emits vendor-neutral OpenTelemetry. The collector strips message content and sends traces to a
-self-hosted [Langfuse](docs/references/langfuse.md) (http://localhost:3000), which shows LLM calls as
-generations with token usage ([ADR-0014](docs/decisions/adr-0014-langfuse-default-trace-backend.md)).
-Two opt-in add-ons, each its own collector pipeline behind the same content stripping:
+self-hosted [SigNoz](docs/references/signoz.md) (http://localhost:8080): traces, service map, metrics,
+logs, dashboards and alerts in one place, plus host and container metrics
+([ADR-0015](docs/decisions/adr-0015-signoz-default-observability.md)).
+Opt-in add-ons, each its own collector pipeline behind the same content stripping:
 
 | Add-on | Start | Notes |
 | --- | --- | --- |
+| Langfuse | `make up LANGFUSE=1` | LLM evaluation and fine-tuning work (datasets, experiments, scores); UI on http://localhost:3000. |
 | Jaeger | `make up JAEGER=1` | Span UI on http://localhost:16686. |
 | LangSmith | `make up LANGSMITH=1` | Needs `LANGSMITH_API_KEY` and `LANGSMITH_PROJECT` in `.env`. |
-| Grafana LGTM | `make up LGTM=1` | Traces, stored metrics and logs in one Grafana on http://localhost:3001; set `OTEL_LOGS_EXPORTER=otlp` to send logs. |
 
-Add-ons can be combined. Which to use when: [FAQ](docs/operations/faq.md). Without `make`: `OTEL_JAEGER=jaeger docker compose up -d neo4j otel-collector
-langfuse-web langfuse-worker jaeger`, and `OTEL_LANGSMITH=langsmith` for LangSmith.
+Add-ons can be combined. Which to use when: [FAQ](docs/operations/faq.md). Without `make`: `OTEL_JAEGER=jaeger docker compose up -d neo4j otel-collector signoz jaeger`;
+`OTEL_LANGSMITH=langsmith` for LangSmith; `OTEL_LANGFUSE=langfuse` with `--profile langfuse` and the
+`langfuse-web langfuse-worker` services for Langfuse.
 
 LangSmith also offers Studio for local graph debugging (`langgraph dev`) and evaluation tooling
 (datasets, experiments, `openevals` judges); see [the reference](docs/references/langsmith.md). No PHI
@@ -179,7 +181,8 @@ RAG on AWS:
 Observability, evaluation and documentation:
 - [OpenTelemetry GenAI semantic conventions](https://github.com/open-telemetry/semantic-conventions-genai) and
   [OpenTelemetry Python GenAI instrumentations](https://github.com/open-telemetry/opentelemetry-python-genai)
-- [Langfuse self-hosting](https://langfuse.com/self-hosting) - default trace backend, with
+- [SigNoz](https://signoz.io/docs/) - default observability backend
+- [Langfuse self-hosting](https://langfuse.com/self-hosting) - evaluation add-on, with
   [SeaweedFS](https://github.com/seaweedfs/seaweedfs) for its S3 storage
 - [LangSmith documentation](https://docs.langchain.com/langsmith)
 - [Model Context Protocol](https://modelcontextprotocol.io/) and its [Python SDK](https://github.com/modelcontextprotocol/python-sdk)

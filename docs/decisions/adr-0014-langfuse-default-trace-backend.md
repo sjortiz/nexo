@@ -4,7 +4,7 @@ title: "ADR-0014: Langfuse as the default trace backend"
 description: Self-host Langfuse as the default trace backend; Jaeger and LangSmith become opt-in collector add-ons; SeaweedFS instead of the archived MinIO.
 tags: [adr, observability, langfuse, opentelemetry]
 status: draft
-decision_status: accepted
+decision_status: superseded
 generated: { by: claude-code/claude-opus-5-5, at: 2026-10-20T12:00:00Z }
 stale_after: 2027-01-20T00:00:00Z
 sources:
@@ -20,6 +20,8 @@ sources:
 ---
 
 # Context
+
+Superseded by [ADR-0015](adr-0015-signoz-default-observability.md): SigNoz is the default; Langfuse is an opt-in add-on for evaluation.
 
 Jaeger showed Nexo's spans but had no view of LLM calls (generations, token usage).
 [ADR-0011](adr-0011-langsmith-adoption.md) proposed LangSmith as a second backend, but self-hosting it

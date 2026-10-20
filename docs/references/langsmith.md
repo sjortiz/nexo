@@ -38,7 +38,7 @@ sources:
 
 | Part | What it gives | Overlap with Nexo |
 |---|---|---|
-| Observability | Trace UI; ingests OpenTelemetry at `https://api.smith.langchain.com/otel` (headers `x-api-key`, `Langsmith-Project`) and maps `gen_ai.*` attributes.[^otel] | Opt-in add-on: `make up LANGSMITH=1` adds a `traces/langsmith` collector pipeline behind the content stripping. Langfuse is the default backend. |
+| Observability | Trace UI; ingests OpenTelemetry at `https://api.smith.langchain.com/otel` (headers `x-api-key`, `Langsmith-Project`) and maps `gen_ai.*` attributes.[^otel] | Opt-in add-on: `make up LANGSMITH=1` adds a `traces/langsmith` collector pipeline behind the content stripping. SigNoz is the default backend. |
 | Evaluation | Datasets, `evaluate()` / `aevaluate()`, custom code evaluators, `evaluate_comparative` for pairwise, experiment comparison UI.[^eval][^pairwise] `openevals` ships LLM-as-judge prompts (groundedness, helpfulness, retrieval relevance) usable with a vLLM judge.[^openevals] | Replaces the hand-written eval loop, reporting and generic judges in `evaluation.py`. |
 | Feedback and annotation queues | `create_feedback` on runs; review queues that add examples to datasets.[^queues] | Complements, not replaces, the compliance interrupt: approvals can be copied as feedback. |
 | Prompt Hub | Versioned prompts pulled at runtime. | Nexo keeps prompts in git (reviewed, no runtime dependency). |
