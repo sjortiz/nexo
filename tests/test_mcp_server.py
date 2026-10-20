@@ -613,7 +613,7 @@ P1, P2, P3 = ("chk_" + d * 16 for d in "123")
 
 def ends(*ranks: tuple[str, int | None]) -> list[dict[str, Any]]:
     """Build endpoint rows (key and rank) as the endpoint lookup returns them."""
-    return [{"key": key, "sensitivity_rank": rank} for key, rank in ranks]
+    return [{"entity": {"key": key, "sensitivity_rank": rank}} for key, rank in ranks]
 
 
 def paths_server(settings, chunk_store, endpoints, paths):

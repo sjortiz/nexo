@@ -60,8 +60,7 @@ Graph rows are pointers: read the text with nexo_get_chunks before stating a fac
 
 # Both ends of nexo_find_paths, so an unknown or hidden key never reaches the path query.
 _ENDPOINTS = (
-    "MATCH (e:Entity) WHERE e.key IN $keys "
-    "RETURN e.key AS key, e.sensitivity_rank AS sensitivity_rank"
+    "MATCH (e:Entity) WHERE e.key IN $keys RETURN e {.key, .sensitivity_rank} AS entity"
 )
 
 
@@ -366,12 +365,12 @@ def build_mcp_server(  # pylint: disable=too-many-locals,too-many-statements  # 
             {"gen_ai.tool.name": "nexo_find_paths", **caller},
         ):
             keys = [from_key, to_key]
-            ends = read(_ENDPOINTS, {"keys": keys}).rows
+            ends = redact_above_clearance(
+                read(_ENDPOINTS, {"keys": keys}).rows, clearance.rank
+            )
             # Above clearance reads as unknown so the entity's existence stays hidden.
             visible = {
-                row["key"]
-                for row in ends
-                if (row["sensitivity_rank"] or 0) <= clearance.rank
+                row["entity"]["key"] for row in ends if "redacted" not in row["entity"]
             }
             if not all(k in visible for k in keys):
                 raise ToolError(
