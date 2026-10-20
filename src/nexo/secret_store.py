@@ -4,7 +4,8 @@
               you (0600 in a 0700 directory); every checkout of a stack on the machine shares
               it. Pointed at a file or directory your platform mounts (a Kubernetes Secret,
               the Secrets Store CSI driver, a file CI writes), it is read-only.
-    keychain  the OS keychain through keyring (macOS Keychain, Linux Secret Service), opt-in.
+    keychain  the OS keychain through keyring (macOS Keychain, Linux Secret Service), opt-in:
+              the `keychain` extra (uv sync --extra keychain); nothing else imports keyring.
     sops      a SOPS-encrypted dotenv file (age, PGP or cloud KMS keys), opt-in.
     vault     HashiCorp Vault or OpenBao, KV version 2, opt-in.
 
@@ -15,6 +16,7 @@
 from __future__ import annotations
 
 import configparser
+import importlib
 import json
 import os
 import subprocess
@@ -25,10 +27,6 @@ from abc import ABC, abstractmethod
 from collections.abc import Callable, Iterable, Mapping
 from pathlib import Path
 from typing import Any
-
-import keyring
-import keyring.backends.fail
-import keyring.errors
 
 PROVIDERS = ("file", "keychain", "sops", "vault")
 
@@ -158,24 +156,44 @@ class FileStore(SecretStore):
             parser.write(handle)
 
 
+def system_keychain() -> Any:
+    """This machine's keychain through keyring, imported only here (the optional extra)."""
+    try:
+        keyring = importlib.import_module("keyring")
+        fail = importlib.import_module("keyring.backends.fail")
+    except ImportError as exc:
+        raise SecretStoreError(
+            "secrets.provider keychain needs the keychain extra: uv sync --extra keychain"
+        ) from exc
+    backend = keyring.get_keyring()
+    if isinstance(backend, fail.Keyring):
+        raise SecretStoreError("no keychain on this machine: use secrets.provider file")
+    return backend
+
+
 class KeychainStore(SecretStore):
     """The OS keychain, one entry per key under the service "nexo/<stack>" (local use)."""
 
     # A locked keychain can wait for an unlock prompt nobody answers.
     timeout_s = 10.0
 
-    def __init__(self, stack: str):
+    def __init__(self, stack: str, backend: Any = None):
+        """backend: anything with keyring's get/set_password (tests pass a fake)."""
         self.service = f"nexo/{stack}"
         self.label = f"keychain ({self.service})"
+        self.backend = backend if backend is not None else system_keychain()
 
     def _call(self, func: Callable[[], Any]) -> Any:
         """Run one keychain call in a daemon thread, so a stuck call cannot block Nexo."""
         outcome: dict[str, Any] = {}
 
         def target() -> None:
+            # Relays whatever the backend raised (keyring's types need keyring imported) to
+            # the caller below, as ThreadPoolExecutor does; its threads would block exit.
             try:
                 outcome["value"] = func()
-            except keyring.errors.KeyringError as exc:
+            # pylint: disable-next=broad-exception-caught
+            except Exception as exc:
                 outcome["error"] = exc
 
         thread = threading.Thread(target=target, daemon=True)
@@ -192,7 +210,9 @@ class KeychainStore(SecretStore):
 
     def get(self, keys: Iterable[str]) -> dict[str, str]:
         found = {
-            key: self._call(lambda key=key: keyring.get_password(self.service, key))
+            key: self._call(
+                lambda key=key: self.backend.get_password(self.service, key)
+            )
             for key in keys
         }
         return {key: value for key, value in found.items() if value}
@@ -200,7 +220,7 @@ class KeychainStore(SecretStore):
     def put(self, values: Mapping[str, str]) -> None:
         for key, value in values.items():
             self._call(
-                lambda key=key, value=value: keyring.set_password(
+                lambda key=key, value=value: self.backend.set_password(
                     self.service, key, value
                 )
             )
@@ -327,6 +347,4 @@ def store_from_options(options: Mapping[str, str]) -> SecretStore:
         raise SecretStoreError(
             f"unknown secrets provider {provider!r}; use one of {PROVIDERS}"
         )
-    if isinstance(keyring.get_keyring(), keyring.backends.fail.Keyring):
-        raise SecretStoreError("no keychain on this machine: use secrets.provider file")
     return KeychainStore(stack)

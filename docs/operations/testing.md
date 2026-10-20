@@ -30,7 +30,7 @@ sources:
 | `tests/test_makefile.py` | `make` | Every documented target still dry-runs and its scripts exist. |
 | `tests/test_aio.py` | nothing | `run_sync` works with and without a running event loop (notebooks) and keeps the caller's context. |
 | `tests/test_model_roles.py` | nothing | Per-role endpoints and fallbacks, reasoning effort only for JSON roles, env templates use only real settings. |
-| `tests/test_secret_store.py::test_real_keychain_round_trip` | a desktop keychain, `NEXO_KEYCHAIN_TEST=1` | A temporary entry in this machine's real keychain, written and removed. Local only: tests and CI otherwise use an in-memory keychain, and `PYTHON_KEYRING_BACKEND` makes any real call fail fast. |
+| `tests/test_secret_store.py::test_real_keychain_round_trip` | a desktop keychain, the `keychain` extra (`make install-keychain`), `NEXO_KEYCHAIN_TEST=1` | A temporary entry in this machine's real keychain, written and removed. Local only: `keyring` is an optional extra, so the suite and CI run without it; the keychain provider's logic is tested with an injected fake. |
 | `tests/test_live_models.py` | model servers, `NEXO_LIVE=1` | Real models: schema-valid extraction and routing, embeddings ranking (English and Spanish), agent tool calls, GenAI spans. |
 | `tests/test_mcp_server.py` | nothing | Every MCP tool over the real protocol (in-process and `nexo mcp` over stdio), clearance, parameterized lookups, rejected writes, JSON-only stdout. |
 | `tests/test_claude_skill.py` | nothing | The skill's frontmatter, tool list and phases, and `.mcp.json`, in sync with the MCP server. |

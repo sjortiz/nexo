@@ -36,7 +36,7 @@ specs and `kubectl describe`, `/proc/<pid>/environ`, child processes and crash d
   |---|---|---|
   | `file` | `~/.config/nexo/config`: one `[stack]` section, 0600 in a 0700 directory, written by `nexo setup` | Default on a single machine |
   | `file` + `path` | A file or a directory of per-key files mounted by the platform (Kubernetes Secret volume, Secrets Store CSI driver, a file CI writes); read-only, any permissions | Clusters and CI |
-  | `keychain` | The OS keychain (macOS Keychain, Linux Secret Service), entries `nexo/<stack>` | Opt-in |
+  | `keychain` | The OS keychain (macOS Keychain, Linux Secret Service), entries `nexo/<stack>`; needs the `keychain` extra, which nothing else imports | Opt-in, local machines only: tests and CI run without `keyring` installed |
   | `sops` | A SOPS-encrypted file (age, PGP or cloud KMS keys); plain text only in memory | Opt-in |
   | `vault` | HashiCorp Vault or OpenBao, KV version 2 | Opt-in |
 

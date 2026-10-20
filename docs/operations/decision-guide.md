@@ -152,7 +152,7 @@ Set with `spec.secrets.provider` in `nexo.yaml`. None of them copies a secrets f
 | Several checkouts, one machine | Share the file | Share the mount | Share the entries | Share the file | Share the secret |
 | Several machines | Each machine makes its own; nothing is copied | Each mounts from your secret manager | Each machine's own keychain | The encrypted file travels with the repo; keys stay with people | One Vault for all |
 | Reaches Nexo as | In-process reads | In-process reads, never environment variables | In-process reads | In-process reads | In-process reads |
-| Needs | Nothing | A mount | A desktop keychain | `sops` and a `.sops.yaml` creation rule | `VAULT_ADDR`, `VAULT_TOKEN` |
+| Needs | Nothing | A mount | A desktop keychain and the `keychain` extra (`make install-keychain`) | `sops` and a `.sops.yaml` creation rule | `VAULT_ADDR`, `VAULT_TOKEN` |
 | Choose it when | One machine (the usual case) | A cluster or CI | You prefer the OS keychain | A team sharing one setup through git | You already run Vault or OpenBao |
 
 On a cluster, mount secrets as files and point `secrets.file.path` (or `NEXO_SECRETS_FILE`) at them;

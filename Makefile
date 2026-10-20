@@ -30,7 +30,7 @@ NEO4J_TEST_PORT     ?= 7688
 NEO4J_TEST_PASSWORD ?= nexo-test-pass
 
 .DEFAULT_GOAL := help
-.PHONY: help install install-notebook env models up down check render lock compose-file \
+.PHONY: help install install-notebook install-keychain env models up down check render lock compose-file \
         ingest ask mcp graph app \
         lint format test neo4j-test test-neo4j neo4j-test-down test-live ci \
         walkthrough site serve-site notebook clean
@@ -45,6 +45,9 @@ install: ## Install Python, Nexo and the dev tools into .venv with uv (from uv.l
 
 install-notebook: ## Also install Jupyter, for the walkthrough notebook
 	uv sync --extra notebook
+
+install-keychain: ## Also install keyring, for secrets.provider keychain (local machines)
+	uv sync --extra keychain
 
 env: ## Write nexo.yaml from a preset (PRESET=mac-single) and create missing secrets in ~/.config/nexo/config
 	$(NEXO_SETUP) init $(if $(PRESET),--preset $(PRESET))
