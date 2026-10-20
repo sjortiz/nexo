@@ -11,26 +11,29 @@
 # "AHI") bought **Beta Labs**. The other is a clinic's supplier review saying **Gamma Clinics** buys
 # test kits from Beta Labs. The question: *how is Acme Holdings connected to Gamma Clinics?*
 #
-# **Run it yourself:** follow steps 1 to 6 of [Run it](index.html#quickstart) (models, Neo4j and
-# `.env`). Then open
+# **Run it yourself:** set up the stack as in [Run it](index.html#quickstart): `make env
+# PRESET=mac-single`, `make up`, then `make check`, which should report every model role `ok`. Then
+# `make install-notebook` and `make notebook` open
 # [`walkthrough.ipynb`](https://github.com/sjortiz/nexo/blob/main/examples/walkthrough.ipynb)
-# in Jupyter (`uv sync --extra notebook`, then `make notebook`), or run
-# `python examples/walkthrough.py`. The outputs below come from a real run of that notebook on an
-# Apple M5 Pro with the `m5-pro-24` profile. Models are not deterministic, so your wording will
-# differ.
+# in Jupyter, or run `python examples/walkthrough.py`. The outputs below come from a real run of
+# that notebook on an Apple M5 Pro with the `m5-pro-24` profile, Ollama and Neo4j. Models are not
+# deterministic, so your wording will differ.
 
 # %% [markdown]
 # ## Setup
 #
-# `Settings` reads the repository's `.env`, so the hardware profile picks the models. Three
-# overrides keep this run separate from your own data: its own chunk store file, an in-memory
-# checkpointer, and the example relation vocabulary. Message capture in traces is **off by
-# default**; it is turned on here so a later step can show the exact queries the agent wrote. This
-# cell also imports everything the later steps use.
+# `Settings` reads the files `make env` and `make up` wrote, so the hardware profile picks the
+# models. Generated passwords are not in those files: Nexo reads them from your private config file
+# (`~/.config/nexo/config`) and keeps them out of the environment. Three overrides keep this run
+# separate from your own data: its own chunk store file, an in-memory checkpointer, and the example
+# relation vocabulary. Message capture in traces is **off by default**; it is turned on here so a
+# later step can show the exact queries the agent wrote. This cell also imports everything the
+# later steps use.
 
 # %%
 import json
 import logging
+import os
 import sys
 from contextlib import ExitStack
 from datetime import date
@@ -91,8 +94,8 @@ def show(value):
 ROOT = next(
     p for p in (Path.cwd(), *Path.cwd().parents) if (p / "pyproject.toml").is_file()
 )
+os.chdir(ROOT)  # Settings finds .env and .nexo/render/nexo.env relative to here
 settings = Settings(
-    _env_file=ROOT / ".env",
     vector_store_path=ROOT / ".data/walkthrough/chunks.json",
     checkpoint_backend="memory",
     ontology_path=ROOT / "deploy/ontology.example.json",
@@ -112,9 +115,10 @@ show(
 )
 
 # %% [markdown]
-# Collect traces in memory, so later steps can look at what happened inside each call. With
-# `make up`, the same spans go through the OpenTelemetry collector to SigNoz, which runs
-# locally at http://localhost:8080; Langfuse (`LANGFUSE=1`), Jaeger and LangSmith are add-ons.
+# Collect traces in memory, so later steps can look at what happened inside each call. The same
+# spans also go through the OpenTelemetry collector that `make up` started to SigNoz, the default
+# backend, at http://localhost:8080. It shows traces, metrics and logs, plus host and container
+# metrics. Langfuse, Jaeger and LangSmith are optional add-ons (`make up LANGFUSE=1`).
 
 # %%
 spans = InMemorySpanExporter()
@@ -493,8 +497,8 @@ show(found)
 # run that paused for review in step 11.
 #
 # In SigNoz the same trace appears with each model call and its token counts, next to the metrics
-# and logs; with `LANGFUSE=1`, Langfuse shows the calls as generations and embeddings. Message
-# content stays out of both: the collector strips it unless you opt in.
+# and logs; with the Langfuse add-on, Langfuse shows the calls as generations and embeddings.
+# Message content stays out of both: the collector strips it unless you opt in.
 
 # %%
 finished = spans.get_finished_spans()
