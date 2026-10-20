@@ -117,7 +117,7 @@ services:
       CLICKHOUSE_CONFIG: /etc/clickhouse-server/config.yaml
     volumes:
       - signoz-clickhouse-data:/var/lib/clickhouse
-      - signoz-clickhouse-scripts:/var/lib/clickhouse/user_scripts:ro
+      - signoz-clickhouse-scripts:/var/lib/clickhouse/user_scripts:ro,z
       - ./deploy/signoz/clickhouse/config.yaml:/etc/clickhouse-server/config.yaml:ro
       - ./deploy/signoz/clickhouse/functions.yaml:/etc/clickhouse-server/functions.yaml:ro
     healthcheck:
@@ -149,7 +149,7 @@ services:
 
         mv histogram-quantile /var/lib/clickhouse/user_scripts/histogramQuantile'
     volumes:
-      - signoz-clickhouse-scripts:/var/lib/clickhouse/user_scripts
+      - signoz-clickhouse-scripts:/var/lib/clickhouse/user_scripts:z
     restart: on-failure
   signoz-keeper:
     image: docker.io/clickhouse/clickhouse-keeper:25.12.5

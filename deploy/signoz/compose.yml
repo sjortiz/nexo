@@ -75,7 +75,7 @@ services:
       CLICKHOUSE_CONFIG: /etc/clickhouse-server/config.yaml
     volumes:
       - signoz-clickhouse-data:/var/lib/clickhouse
-      - signoz-clickhouse-scripts:/var/lib/clickhouse/user_scripts:ro
+      - signoz-clickhouse-scripts:/var/lib/clickhouse/user_scripts:ro,z
       - ./clickhouse/config.yaml:/etc/clickhouse-server/config.yaml:ro
       - ./clickhouse/functions.yaml:/etc/clickhouse-server/functions.yaml:ro
     healthcheck:
@@ -98,7 +98,7 @@ services:
         wget -O histogram-quantile.tar.gz "https://github.com/SigNoz/signoz/releases/download/histogram-quantile%2F$${version}/histogram-quantile_$${node_os}_$${node_arch}.tar.gz"
         tar -xzf histogram-quantile.tar.gz
         mv histogram-quantile /var/lib/clickhouse/user_scripts/histogramQuantile
-    volumes: [signoz-clickhouse-scripts:/var/lib/clickhouse/user_scripts]
+    volumes: [signoz-clickhouse-scripts:/var/lib/clickhouse/user_scripts:z]
     restart: on-failure
 
   signoz-keeper:
