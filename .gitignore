@@ -7,3 +7,9 @@ __pycache__/
 .claude/worktrees/
 .claude/settings.local.json
 /corpus/
+
+# nexo setup: your setup file, its lock and the rendered stack (machine-specific)
+/nexo.yaml
+/nexo.lock
+/.nexo/
+examples/setups/*/nexo.lock

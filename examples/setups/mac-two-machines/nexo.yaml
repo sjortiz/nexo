@@ -1,0 +1,21 @@
+# Two Macs: this one runs Nexo, the stack and the light models (router, judge, embeddings);
+# the remote one serves the agent and extraction models through an SSH tunnel.
+#   remote Mac:  deploy/local/ollama-setup.sh m1-max-64 heavy
+#   this Mac:    ssh -N -L 11435:127.0.0.1:11434 you@remote-mac.local   (keep it open)
+#                make env && make up
+apiVersion: nexo/v1alpha1
+kind: Setup
+metadata:
+  name: nexo
+spec:
+  models:
+    provider: ollama
+    local:
+      profile: m5-pro-24
+    remote:
+      profile: m1-max-64
+      port: 11435  # the tunnel's local end
+  addons:
+    langfuse: { enabled: false }
+    jaeger: { enabled: false }
+    hostMetrics: { enabled: true }

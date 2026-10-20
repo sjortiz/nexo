@@ -1,0 +1,15 @@
+# Linux with NVIDIA GPUs: vLLM serves Llama 3.3 70B (4x 80 GB) and bge-m3 in the stack.
+# Set HF_TOKEN in .env (gated model), then:  make env && make up
+apiVersion: nexo/v1alpha1
+kind: Setup
+metadata:
+  name: nexo
+spec:
+  models:
+    provider: vllm
+    vllm:
+      gpus: 4
+      model: meta-llama/Llama-3.3-70B-Instruct
+      embedding: BAAI/bge-m3
+  addons:
+    hostMetrics: { enabled: true }

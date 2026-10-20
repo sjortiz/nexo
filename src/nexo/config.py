@@ -33,8 +33,12 @@ class ModelEndpoint:
 class Settings(BaseSettings):
     """All runtime settings, read from the environment or `.env`."""
 
+    # .nexo/render/nexo.env (written by `nexo setup` from nexo.yaml) is read after .env,
+    # so the setup file wins; real environment variables win over both.
     model_config = SettingsConfigDict(
-        env_file=".env", env_file_encoding="utf-8", extra="ignore"
+        env_file=(".env", ".nexo/render/nexo.env"),
+        env_file_encoding="utf-8",
+        extra="ignore",
     )
 
     # --- Default chat model (any OpenAI-compatible server: vLLM, Ollama, ...) --

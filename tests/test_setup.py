@@ -1,0 +1,312 @@
+"""`nexo setup`: setup file -> lock -> rendered stack, from the real fragments in deploy/."""
+
+from __future__ import annotations
+
+import re
+import shutil
+import stat
+import subprocess
+from pathlib import Path
+
+import pytest
+import yaml
+
+from nexo.config import Settings
+from nexo.local_profiles import plan
+from nexo.setup.check import memory_budget
+from nexo.setup.components import COMPONENTS, MEMORY_GB, default_images
+from nexo.setup.envfile import ensure_secrets, read_env
+from nexo.setup.lock import lock
+from nexo.setup.render import RENDER_DIR, Host, render
+from nexo.setup.schema import SetupError, load_casting
+
+ROOT = Path(__file__).resolve().parent.parent
+PRESETS = ROOT / "examples/setups"
+MAC = Host(os="macos", engine="podman", socket="/run/podman.sock", hostname="studio")
+LINUX = Host(os="linux", engine="docker", socket="/var/run/docker.sock", hostname="box")
+STACK = {
+    "neo4j",
+    "otel-collector",
+    "nexo",
+    "signoz",
+    "signoz-ingester",
+    "signoz-clickhouse",
+}
+
+
+@pytest.fixture(name="workdir")
+def _workdir(tmp_path: Path) -> Path:
+    """A checkout-like folder: the repo's deploy/ fragments, its own .nexo and .env."""
+    (tmp_path / "deploy").symlink_to(ROOT / "deploy")
+    return tmp_path
+
+
+def _setup(workdir: Path, preset: str, edit=None) -> Path:
+    data = yaml.safe_load((PRESETS / preset / "nexo.yaml").read_text())
+    if edit:
+        edit(data)
+    path = workdir / "nexo.yaml"
+    path.write_text(yaml.safe_dump(data))
+    return path
+
+
+def _render(workdir: Path, path: Path, host: Host = MAC, addons=frozenset()):
+    casting = load_casting(path)
+    out = render(
+        casting, lock(casting, path, workdir), workdir, host, frozenset(addons)
+    )
+    return (
+        yaml.safe_load((out / "compose.yaml").read_text()),
+        yaml.safe_load((out / "otel-collector.yaml").read_text()),
+        read_env(out / "nexo.env"),
+    )
+
+
+@pytest.mark.parametrize(
+    "preset, services, env",
+    [
+        ("mac-single", set(), {"LOCAL_PROFILE": "m5-pro-24"}),
+        (
+            "mac-two-machines",
+            set(),
+            {
+                "REMOTE_PROFILE": "m1-max-64",
+                "REMOTE_BASE_URL": "http://localhost:11435/v1",
+            },
+        ),
+        ("linux-cpu", set(), {"LOCAL_PROFILE": "cpu-64"}),
+        ("linux-gpu", set(), {"LOCAL_PROFILE": "gpu-24"}),
+        (
+            "linux-vllm",
+            {"vllm-inference-service", "vllm-embedding-service"},
+            {
+                "VLLM_BASE_URL": "http://localhost:8000/v1",
+                "EMBEDDING_MODEL": "BAAI/bge-m3",
+            },
+        ),
+    ],
+)
+def test_each_preset_renders_its_stack_and_settings(workdir, preset, services, env):
+    """Core stack plus the preset's model servers; nexo.env carries its model settings."""
+    compose, collector, rendered_env = _render(workdir, _setup(workdir, preset))
+    names = set(compose["services"])
+    assert STACK | services <= names
+    assert not {"langfuse-web", "jaeger"} & names  # add-ons stay off
+    assert ("vllm-inference-service" in names) == bool(services)
+    assert env.items() <= rendered_env.items()
+    assert rendered_env["OTEL_EXPORTER_OTLP_ENDPOINT"] == "http://localhost:4318"
+    assert set(collector["service"]["pipelines"]) == {
+        "traces",
+        "metrics",
+        "logs",
+        "metrics/infra",
+    }
+    assert compose["name"] == "nexo"
+
+
+def test_an_addon_brings_its_services_pipeline_and_required_keys(workdir):
+    """--addon langfuse (make up LANGFUSE=1) renders Langfuse; without it nothing of it remains."""
+    path = _setup(workdir, "mac-single")
+    compose, collector, _ = _render(workdir, path, addons={"langfuse"})
+    assert {"langfuse-web", "langfuse-worker"} <= set(compose["services"])
+    assert "traces/langfuse" in collector["service"]["pipelines"]
+    assert collector["service"]["extensions"] == ["basicauth/langfuse"]
+    collector_env = compose["services"]["otel-collector"]["environment"]
+    assert collector_env["LANGFUSE_SECRET_KEY"].startswith("${LANGFUSE_SECRET_KEY:?")
+
+    compose, collector, _ = _render(workdir, path)
+    assert not any(name.startswith("langfuse") for name in compose["services"])
+    assert "traces/langfuse" not in collector["service"]["pipelines"]
+    assert "LANGFUSE" not in yaml.safe_dump(compose)
+
+
+def test_host_decides_how_the_nexo_container_reaches_host_services(workdir):
+    """macOS goes through the engine's gateway; Linux shares the host network."""
+    path = _setup(workdir, "mac-two-machines")
+    compose, _, _ = _render(workdir, path, MAC)
+    app = compose["services"]["nexo"]
+    assert (
+        app["environment"]["REMOTE_BASE_URL"]
+        == "http://host.containers.internal:11435/v1"
+    )
+    assert "network_mode" not in app
+    compose, _, _ = _render(workdir, path, LINUX)
+    assert compose["services"]["nexo"]["network_mode"] == "host"
+    assert "environment" not in compose["services"]["nexo"]
+
+
+def test_lock_keeps_pins_until_upgrade(workdir):
+    """Editing nexo.yaml keeps earlier pins; the file's image wins; --upgrade resets."""
+    path = _setup(workdir, "mac-single")
+    casting = load_casting(path)
+    first = lock(casting, path, workdir)
+    default = default_images(ROOT, "neo4j")["neo4j"]
+    assert first["images"]["neo4j"]["neo4j"] == default
+    lock_path = workdir / "nexo.lock"
+    lock_path.write_text(lock_path.read_text().replace(default, "neo4j:5.0-old"))
+
+    edited = _setup(
+        workdir,
+        "mac-single",
+        lambda d: d["spec"]["addons"].update(jaeger={"enabled": True}),
+    )
+    second = lock(load_casting(edited), edited, workdir)
+    assert second["enabled"]["jaeger"] is True
+    assert second["images"]["neo4j"]["neo4j"] == "neo4j:5.0-old"
+
+    pinned = _setup(
+        workdir,
+        "mac-single",
+        lambda d: d["spec"].update(components={"neo4j": {"image": "neo4j:6"}}),
+    )
+    assert (
+        lock(load_casting(pinned), pinned, workdir)["images"]["neo4j"]["neo4j"]
+        == "neo4j:6"
+    )
+    reset = _setup(workdir, "mac-single")
+    upgraded = lock(load_casting(reset), reset, workdir, upgrade=True)
+    assert upgraded["images"]["neo4j"]["neo4j"] == default
+
+
+@pytest.mark.parametrize(
+    "edit, message",
+    [
+        (lambda d: d["spec"]["addons"].update(grafana={"enabled": True}), "grafana"),
+        (lambda d: d["spec"]["models"]["local"].update(profile="m1-huge"), "m1-huge"),
+        (lambda d: d["spec"]["models"].pop("local"), "models.local"),
+        (
+            lambda d: d["spec"].update(components={"signoz": {"enabled": False}}),
+            "cannot be disabled",
+        ),
+        (lambda d: d.update(apiVersion="v1"), "apiVersion"),
+    ],
+)
+def test_invalid_setup_files_are_rejected_naming_the_problem(workdir, edit, message):
+    """A typo or impossible combination stops before anything renders."""
+    with pytest.raises(SetupError, match=message):
+        load_casting(_setup(workdir, "mac-single", edit))
+
+
+def test_patches_change_rendered_files_and_bad_ones_fail(workdir):
+    """RFC 6902 operations apply last; a failing `test` or unknown target is an error."""
+    limit = {"op": "add", "path": "/services/neo4j/mem_limit", "value": "2g"}
+    path = _setup(
+        workdir,
+        "mac-single",
+        lambda d: d["spec"].update(
+            patches=[{"target": "compose.yaml", "operations": [limit]}]
+        ),
+    )
+    compose, _, _ = _render(workdir, path)
+    assert compose["services"]["neo4j"]["mem_limit"] == "2g"
+
+    for patch in (
+        {
+            "target": "compose.yaml",
+            "operations": [{"op": "test", "path": "/name", "value": "x"}],
+        },
+        {"target": "nexo.env", "operations": []},
+    ):
+        bad = _setup(
+            workdir, "mac-single", lambda d, p=patch: d["spec"].update(patches=[p])
+        )
+        with pytest.raises(SetupError, match="patch"):
+            _render(workdir, bad)
+
+
+def test_collector_config_override_is_validated(workdir):
+    """components.collector.config merges in; a pipeline naming a missing exporter fails."""
+    broken = {"service": {"pipelines": {"traces": {"exporters": ["otlp/nowhere"]}}}}
+    path = _setup(
+        workdir,
+        "mac-single",
+        lambda d: d["spec"].update(components={"collector": {"config": broken}}),
+    )
+    with pytest.raises(SetupError, match="otlp/nowhere"):
+        _render(workdir, path)
+
+
+def test_secrets_are_generated_for_enabled_components_only_and_kept(workdir):
+    """make env: fills empty keys, keeps existing values, never writes disabled add-ons' keys."""
+    env = workdir / ".env"
+    env.write_text("NEO4J_PASSWORD=keep-me\nSIGNOZ_JWT_SECRET=\n")
+    generated = ensure_secrets(env, workdir, {"neo4j", "signoz"})
+    values = read_env(env)
+    assert values["NEO4J_PASSWORD"] == "keep-me"
+    assert set(generated) == set(COMPONENTS["signoz"].secrets)
+    assert all(values[key] for key in COMPONENTS["signoz"].secrets)
+    assert not any(key.startswith("LANGFUSE") for key in values)
+    assert stat.S_IMODE(env.stat().st_mode) == 0o600
+    assert not ensure_secrets(env, workdir, {"neo4j", "signoz"})
+
+
+def test_every_required_variable_in_a_fragment_is_generated_or_declared():
+    """A ${VAR:?} the stack needs is either generated by make env or listed as user-provided."""
+    declared = {k for c in COMPONENTS.values() for k in (*c.secrets, *c.required)}
+    for component in COMPONENTS.values():
+        if component.compose:
+            text = (ROOT / component.compose).read_text()
+            required = set(re.findall(r"\$\{(\w+):\?", text))
+            assert required <= declared, (component.name, required - declared)
+
+
+def test_memory_budget_counts_only_models_this_machine_serves(workdir):
+    """Two machines: the local Mac pays for the light models, not the remote's agent model."""
+    budgets = {}
+    for preset in ("mac-single", "mac-two-machines"):
+        path = _setup(workdir, preset)
+        casting = load_casting(path)
+        locked = lock(casting, path, workdir)
+        on = {name for name, enabled in locked["enabled"].items() if enabled}
+        budgets[preset] = memory_budget(casting, locked, on)
+    assert budgets["mac-single"]["neo4j"] == MEMORY_GB["neo4j"]
+    assert budgets["mac-single"]["models"] == plan("m5-pro-24").weights_gb
+    # The remote Mac's agent and extraction models are not counted here.
+    assert (
+        budgets["mac-two-machines"]["models"] == plan("m5-pro-24", "light").weights_gb
+    )
+
+
+def test_settings_read_the_rendered_env_after_dot_env(workdir, monkeypatch):
+    """nexo.yaml wins over .env; a real environment variable wins over both."""
+    monkeypatch.chdir(workdir)
+    for key in ("LOCAL_PROFILE", "AGENT_MODEL"):
+        monkeypatch.delenv(key, raising=False)
+    (workdir / ".env").write_text("LOCAL_PROFILE=m1-max-64\nAGENT_MODEL=from-dot-env\n")
+    (workdir / RENDER_DIR).mkdir(parents=True)
+    (workdir / RENDER_DIR / "nexo.env").write_text("LOCAL_PROFILE=m5-pro-24\n")
+    settings = Settings()
+    assert settings.local_profile == "m5-pro-24"
+    assert settings.agent_model == "from-dot-env"
+    monkeypatch.setenv("LOCAL_PROFILE", "m1-pro-16")
+    assert Settings().local_profile == "m1-pro-16"
+
+
+ENGINE = next((e for e in ("docker", "podman") if shutil.which(e)), None)
+
+
+@pytest.mark.skipif(ENGINE is None, reason="no container engine")
+@pytest.mark.parametrize("preset", sorted(p.name for p in PRESETS.iterdir()))
+def test_rendered_compose_files_are_valid_compose(workdir, preset):
+    """The engine's own compose accepts every preset's render (with every add-on on)."""
+    path = _setup(workdir, preset)
+    _render(workdir, path, addons={"langfuse", "jaeger", "langsmith"})
+    keys = {k for c in COMPONENTS.values() for k in (*c.secrets, *c.required)}
+    (workdir / ".env").write_text("".join(f"{k}=x\n" for k in keys))
+    result = subprocess.run(
+        [
+            ENGINE,
+            "compose",
+            "-f",
+            str(workdir / RENDER_DIR / "compose.yaml"),
+            "--env-file",
+            str(workdir / ".env"),
+            "config",
+            "-q",
+        ],
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr

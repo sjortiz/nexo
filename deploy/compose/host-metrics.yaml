@@ -1,0 +1,13 @@
+# Host metrics add-on (addons.hostMetrics), merged into the collector service. Root in the
+# container to read the engine's socket (rootless Podman: the user that owns it); SELinux
+# labels off, or the Podman VM denies the socket. On macOS the host is the Podman VM.
+# ${CONTAINER_SOCKET} and ${NEXO_HOST} are filled in by `nexo setup render`.
+services:
+  otel-collector:
+    user: "0"
+    security_opt: ["label=disable"]
+    environment:
+      OTEL_RESOURCE_ATTRIBUTES: host.name=${NEXO_HOST}
+    volumes:
+      - /:/hostfs:ro
+      - ${CONTAINER_SOCKET:-/var/run/docker.sock}:/var/run/docker.sock:ro

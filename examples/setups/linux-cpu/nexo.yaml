@@ -1,0 +1,14 @@
+# Linux without a GPU: Ollama on the CPU (works, slowly). The nexo container uses the
+# host network to reach Ollama on 127.0.0.1.
+#   make env && make up
+apiVersion: nexo/v1alpha1
+kind: Setup
+metadata:
+  name: nexo
+spec:
+  models:
+    provider: ollama
+    local:
+      profile: cpu-64  # cpu-<RAM GB>
+  addons:
+    hostMetrics: { enabled: true }

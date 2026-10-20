@@ -1,0 +1,5 @@
+# Jaeger add-on (addons.jaeger): span timings; the collector sends it traces.
+services:
+  jaeger:
+    image: jaegertracing/all-in-one:1.62.0
+    ports: ["127.0.0.1:16686:16686"]
