@@ -108,6 +108,37 @@ class Telemetry(_Strict):
     logs: Literal["otlp", "none"] = "otlp"
 
 
+class Sops(_Strict):
+    """A SOPS-encrypted dotenv file, relative to the checkout; keys from .sops.yaml rules."""
+
+    file: str = "secrets/nexo.sops.env"
+
+
+class Vault(_Strict):
+    """HashiCorp Vault or OpenBao, KV version 2."""
+
+    address: str | None = None  # default: $VAULT_ADDR
+    mount: str = "secret"
+    path: str | None = None  # default: nexo/<metadata.name>
+    token_env: str = Field(default="VAULT_TOKEN", alias="tokenEnv")
+
+
+class Secrets(_Strict):
+    """Where generated secrets live: the OS keychain unless you opt out or opt in."""
+
+    provider: Literal["keychain", "env", "sops", "vault"] = "keychain"
+    sops: Sops | None = None
+    vault: Vault | None = None
+
+    @model_validator(mode="after")
+    def _defaults_for_provider(self) -> Secrets:
+        if self.provider == "sops" and self.sops is None:
+            self.sops = Sops()
+        if self.provider == "vault" and self.vault is None:
+            self.vault = Vault()
+        return self
+
+
 class Patch(_Strict):
     """RFC 6902 operations on one rendered file (relative to the render folder)."""
 
@@ -123,6 +154,7 @@ class Spec(_Strict):
     components: dict[Literal[CORE], Component] = Field(default_factory=dict)
     addons: dict[Literal[ADDONS], Component] = Field(default_factory=dict)
     telemetry: Telemetry = Field(default_factory=Telemetry)
+    secrets: Secrets = Field(default_factory=Secrets)
     patches: list[Patch] = Field(default_factory=list)
 
     @model_validator(mode="after")

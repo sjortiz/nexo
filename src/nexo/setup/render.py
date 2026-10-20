@@ -279,6 +279,26 @@ def validate_collector(config: dict[str, Any]) -> None:
         )
 
 
+def secrets_options(casting: Casting) -> dict[str, str]:
+    """NEXO_STACK and NEXO_SECRETS_*: which store holds this stack's secrets (no values)."""
+    secrets = casting.spec.secrets
+    options = {
+        "NEXO_STACK": casting.metadata.name,
+        "NEXO_SECRETS_PROVIDER": secrets.provider,
+    }
+    if secrets.sops is not None:
+        options["NEXO_SECRETS_SOPS_FILE"] = secrets.sops.file
+    if secrets.vault is not None:
+        vault = secrets.vault
+        options |= {
+            "NEXO_SECRETS_VAULT_ADDR": vault.address or "",
+            "NEXO_SECRETS_VAULT_MOUNT": vault.mount,
+            "NEXO_SECRETS_VAULT_PATH": vault.path or f"nexo/{casting.metadata.name}",
+            "NEXO_SECRETS_VAULT_TOKEN_ENV": vault.token_env,
+        }
+    return options
+
+
 def build_env(casting: Casting) -> dict[str, str]:
     """Settings Nexo reads after .env (so the setup file wins); endpoints as the host sees them."""
     spec = casting.spec
@@ -287,6 +307,7 @@ def build_env(casting: Casting) -> dict[str, str]:
         "OTEL_EXPORTER_OTLP_ENDPOINT": "http://localhost:4318",
         "OTEL_LOGS_EXPORTER": spec.telemetry.logs,
     }
+    env |= secrets_options(casting)
     models = spec.models
     # Always set (blank when unused): a LOCAL_PROFILE left in .env would otherwise send
     # every role to Ollama under vLLM, or REMOTE_PROFILE split a single machine.
