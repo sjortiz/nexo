@@ -11,7 +11,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Literal
 
-from pydantic import Field, SecretStr, model_validator
+from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from nexo.local_profiles import needs_reasoning_off, plan
@@ -188,6 +188,12 @@ class Settings(BaseSettings):
     local_base_url: str = "http://localhost:11434/v1"
     remote_profile: str | None = None
     remote_base_url: str = "http://localhost:11435/v1"
+
+    @field_validator("local_profile", "remote_profile", mode="before")
+    @classmethod
+    def _blank_is_unset(cls, value: str | None) -> str | None:
+        # `nexo setup` writes REMOTE_PROFILE= to override a stale .env; blank means unset.
+        return value or None
 
     @model_validator(mode="after")
     def _apply_local_profiles(self) -> Settings:

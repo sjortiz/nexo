@@ -177,6 +177,8 @@ authentication, SSH provides it.
 | `nexo.yaml: ...` error naming a field | A typo or an impossible combination | Fix that field; the presets show valid files. |
 | `FAIL secrets: set in .env: HF_TOKEN` | A key only you can provide | Add it to `.env`. |
 | `FAIL profile: ... is for 64 GB; this machine has 24 GB` | The profile names more memory than the machine has | Set the profile for this machine; `FORCE=1` to go ahead anyway. |
+| `FAIL host: rendered for linux; this machine runs macos` | A Linux preset on a Mac (or the reverse) | Use a preset for this OS, or set `target.host`; `FORCE=1` to render anyway. |
+| `FAIL gpu` | A `gpu-*` profile without `nvidia-smi`/`rocm-smi`, or vLLM without NVIDIA GPUs usable by containers | Install the driver tools; for vLLM the NVIDIA Container Toolkit (Docker) or a CDI spec (Podman). |
 | `FAIL memory` | Models plus containers need more than 85% of this machine's memory | A smaller profile, fewer add-ons, or `FORCE=1`. |
 | `FAIL podman vm` | The enabled containers need more than 90% of the Podman VM | `podman machine set --memory 10240`, turn off an add-on, or `FORCE=1`. |
 | `unreachable ... Connection refused` on 11434 | Ollama is not running | `make up` (or `make models`), or start the service. |

@@ -5,6 +5,8 @@ kind: Setup
 metadata:
   name: nexo
 spec:
+  target:
+    host: linux  # renders host networking for the nexo container
   models:
     provider: vllm
     vllm:
