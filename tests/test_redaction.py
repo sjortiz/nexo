@@ -18,6 +18,7 @@ from nexo.agents.models import AgentOutput, InvestigationScope
 from nexo.agents.redaction import ChunkRedactor
 from nexo.agents.tools import InvestigationContext, build_investigation_tools
 from nexo.orchestration.compliance import run_compliance_checks
+from nexo.storage.neo4j_chunk_store import _record
 from nexo.storage.schemas import Sensitivity
 from nexo.storage.sensitive_data import Detection, NoopDetector, RegexDetector
 from nexo.llm import build_embeddings
@@ -350,3 +351,12 @@ def test_agent_reads_the_masked_chunk_through_its_tools(settings, chunk_store):
     sent = json.dumps(client.requests[1]["messages"])
     assert "Investor relations contact: [EMAIL]" in sent and EMAIL not in sent
     assert output.citations == [chunk.chunk_id] and output.withheld_chunk_ids == []
+
+
+def test_neo4j_chunk_node_keeps_the_declared_level():
+    """Reading a (:Chunk) back must not drop the floor, or every chunk would look legacy."""
+    chunk = _leadership(floor=Sensitivity.PII)
+    props = chunk.model_dump(mode="json")
+    assert _record(props).declared_sensitivity is Sensitivity.PII
+    del props["declared_sensitivity"]  # a node written before the field existed
+    assert _record(props).declared_sensitivity is None

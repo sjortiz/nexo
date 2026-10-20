@@ -53,6 +53,7 @@ _RECORD_FIELDS = (
     "source_uri",
     "effective_date",
     "sensitivity",
+    "declared_sensitivity",
     "ingested_at",
     "schema_version",
 )
