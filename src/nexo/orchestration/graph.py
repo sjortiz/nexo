@@ -27,6 +27,7 @@ from langgraph.func import task
 from langgraph.graph import END, START, StateGraph
 from langgraph.graph.state import CompiledStateGraph
 from langgraph.types import RetryPolicy, interrupt
+from opentelemetry.trace import Status, StatusCode
 from pydantic import ValidationError
 
 from nexo.agents.investigator import is_transient
@@ -84,15 +85,24 @@ def traced_node(
     @functools.wraps(fn)
     def wrapper(state: GraphState, config: RunnableConfig) -> dict[str, Any]:
         thread_id = (config.get("configurable") or {}).get("thread_id")
+        # Exceptions are recorded below, not by the span: a review pause raises
+        # GraphInterrupt carrying the review packet (question, draft answer), which
+        # must not become an exception event on the trace.
         with traced_span(
             f"langgraph.node {name}",
             {"langgraph.node": name, "gen_ai.conversation.id": thread_id},
+            record_exception=False,
+            set_status_on_exception=False,
         ) as span:
             try:
                 update = fn(state, config)
             except GraphBubbleUp:
                 # A human-in-the-loop pause is control flow, not a failure.
                 span.set_attribute("langgraph.interrupted", True)
+                raise
+            except Exception as exc:
+                span.record_exception(exc)
+                span.set_status(Status(StatusCode.ERROR, type(exc).__name__))
                 raise
             changed = sorted(update)
             span.set_attribute("langgraph.state_update.keys", changed)

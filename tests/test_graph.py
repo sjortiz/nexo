@@ -15,11 +15,16 @@ from langchain_core.language_models.fake_chat_models import GenericFakeChatModel
 from langchain_core.messages import AIMessage
 from langchain_openai import ChatOpenAI
 from langgraph.checkpoint.memory import InMemorySaver
-from opentelemetry.trace import SpanKind
+from opentelemetry.trace import SpanKind, StatusCode
 
 from nexo.agents.models import AgentOutput, InvestigationScope
 from nexo.cli import main
-from nexo.orchestration.graph import GraphDependencies, build_graph, workflow_mermaid
+from nexo.orchestration.graph import (
+    GraphDependencies,
+    build_graph,
+    workflow_mermaid,
+    traced_node,
+)
 from nexo.service import RunResult, Runtime, open_checkpointer
 from nexo.storage.sensitive_data import RegexDetector
 from nexo.telemetry import get_tracer
@@ -380,3 +385,32 @@ def test_openai_instrumentation_emits_one_chat_span_per_vllm_call(settings, span
     assert not any(
         k.startswith("gen_ai.input.messages") for k in chat.attributes
     )  # content off by default
+
+
+def test_a_review_pause_is_not_an_exception_on_the_trace(settings, spans):
+    """The compliance pause carries the review packet: it must not become an exception event."""
+    question = "Patient Jane Roe: who treated her?"
+    runtime(settings, FakeInvestigator([grounded_output()])).start(question)
+    compliance = next(
+        s for s in spans.get_finished_spans() if s.name == "langgraph.node compliance"
+    )
+    assert compliance.attributes["langgraph.interrupted"] is True
+    assert compliance.status.status_code != StatusCode.ERROR
+    assert not [e for e in compliance.events if e.name == "exception"]
+    assert question not in str([dict(e.attributes or {}) for e in compliance.events])
+
+
+def test_a_failing_node_still_records_its_error(spans):
+    """Real failures keep their exception event and ERROR status."""
+
+    def broken(_state, _config):
+        raise RuntimeError("model server down")
+
+    node = traced_node("router", broken)
+    with pytest.raises(RuntimeError):
+        node({}, {"configurable": {"thread_id": "t"}})
+    span = next(
+        s for s in spans.get_finished_spans() if s.name == "langgraph.node router"
+    )
+    assert span.status.status_code == StatusCode.ERROR
+    assert [e for e in span.events if e.name == "exception"]
