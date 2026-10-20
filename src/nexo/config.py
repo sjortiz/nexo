@@ -310,9 +310,12 @@ class Settings(BaseSettings):
 
         for role in ("agent", "extraction", "router", "judge"):
             model, base_url = placement[role]
-            # Role disabled by the profile (e.g. no judge on a small Mac).
+            # Role disabled by the profile (e.g. no judge on a small Mac), unless a
+            # model is set for it: that one runs on the profile's server too.
             if model is None:
-                continue
+                if f"{role}_model" not in explicit:
+                    continue
+                model = getattr(self, f"{role}_model")
             default(f"{role}_model", model)
             default(f"{role}_base_url", base_url)
             # Ollama ignores the key; clients need one.

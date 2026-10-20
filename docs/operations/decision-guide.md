@@ -53,7 +53,8 @@ The profile's memory picks a tier: the largest one that fits. The same tiers app
 | Linux, 4x 80 GB NVIDIA | `linux-vllm` | Llama 3.3 70B (vLLM) | off until `models.roles.judge` is set | 32k | on the GPUs | A shared server; many users; the production path |
 
 `python3 src/nexo/local_profiles.py plan <profile>` prints the exact models. An explicit
-`models.roles` entry in `nexo.yaml` overrides any role, e.g. a larger agent model on a 24 GB Mac.
+`models.roles` entry in `nexo.yaml` overrides any role, e.g. a larger agent model on a 24 GB Mac, or a
+judge where the profile has none or a stronger one elsewhere ([Judge scores](evaluation.md#judge-scores)).
 
 # 2. One machine or two
 
@@ -61,7 +62,7 @@ The profile's memory picks a tier: the largest one that fits. The same tiers app
 |---|---|---|
 | Agent and extraction | This machine's tier (9B on 24 GB) | The bigger machine's tier (35B-A3B on a 64 GB Mac) |
 | This machine serves | Every role | Router 4B, judge 8B, embeddings: 8.6 GB on a 24 GB Mac |
-| Judge for `nexo eval` | Only from 48 GB | Yes, on the light machine |
+| Judge for `nexo eval` | From 48 GB; below, name one ([Judge scores](evaluation.md#judge-scores)) | Yes, on the light machine |
 | Extra steps | None | `ollama-setup.sh <profile> heavy` on the big machine; an SSH tunnel kept open |
 | Fails when | The machine is out of memory | The tunnel or the big machine is down (`make check` names port 11435) |
 | Choose it when | One machine has the memory you need | The small machine is where you work and a bigger one sits idle |
