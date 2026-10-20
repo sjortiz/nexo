@@ -49,6 +49,30 @@ Enterprise, by database roles. [Compliance](compliance-checks.md) blocks approva
 on PHI or contain detected identifiers until the reviewer acknowledges it. This follows the
 healthcare guidance's emphasis on fine-grained access control and human review.[^aws-health]
 
+## Read-time redaction
+
+A chunk that is above the caller's clearance only because the detector found PII spans is shown with
+those spans masked by type (`[EMAIL]`, `[PHONE]`), under the same chunk id; a caller at or above its
+level gets the original. It applies to [fetch_vector_chunks](fetch-vector-chunks.md),
+[search_chunks](search-chunks.md) and the seed passages, in `agents/redaction.py`, whichever chunk store
+is used. Ingest keeps the text and the level; the detector runs again on the text at read time.
+
+A chunk is withheld whole instead when:
+
+- the document's declared level (`declared_sensitivity`) is above the caller's clearance, so the level
+  was not just the detected spans;
+- the detector finds a lower level than the chunk was stored at (or none), for example after switching
+  provider;
+- a span above clearance is PHI (MRN, Comprehend Medical entities): only `pii` spans are masked;
+- the masked text still triggers the detector.
+
+Chunks stored before `declared_sensitivity` existed have `None`; they are treated as classified by their
+spans alone until re-ingested. Search ranks the original text (the store indexes it), so the query is
+masked first; a partial value such as an email domain can still influence ranking. The model-facing
+chunk, the ledger and spans never hold the masked-out text; the ledger keeps the stored level, so
+[compliance](compliance-checks.md) still warns `pii_in_evidence`. A real detector adds a call per
+over-clearance candidate at read time, which matters for `comprehend_medical`. `nexo mcp` still withholds.
+
 See [ADR-0006](../decisions/adr-0006-sensitivity-and-caller-clearance.md).[^sensitive]
 
 [^sensitive]: Detectors

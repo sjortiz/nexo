@@ -33,6 +33,10 @@ access.
 - Enforce it where data leaves a store: chunk text is withheld above clearance, node maps are redacted,
   and Enterprise roles hide labeled nodes.[^tools]
 - Make PHI reliance and identifiers in answers blocking findings at review.
+- **Amended 2026-10-20:** chunk text above clearance is masked instead of withheld when the only reason
+  is detected PII spans; chunks carry `declared_sensitivity` so a declared level is never
+  mistaken for a detected one. Everything else stays withheld.
+  See [read-time redaction](../components/sensitive-data-detection.md#read-time-redaction).
 
 # Consequences
 

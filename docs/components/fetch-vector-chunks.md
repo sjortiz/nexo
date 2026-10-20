@@ -24,8 +24,10 @@ fetch_vector_chunks(chunk_ids: list[str]) -> str  # JSON
 2. Dedupes ids, separates malformed ones (`invalid_ids`) and caps the batch at
    `AGENT_MAX_CHUNKS_PER_CALL` (10); the rest are listed in `over_limit_not_fetched`.
 3. Loads records with `ChunkStore.get_by_ids`.
-4. Withholds any chunk the request's `ChunkFilter` rejects (above clearance, or outside the router's
-   doc-type/date scope). Withheld text never reaches the model.
+4. Withholds any chunk outside the router's doc-type/date scope or above clearance, except that a chunk
+   above clearance only because of detected PII spans is returned with them masked, such as
+   `[EMAIL]` ([read-time redaction](sensitive-data-detection.md#read-time-redaction)). Withheld text never
+   reaches the model.
 5. Records only chunks the model actually received in the evidence ledger (`fetched_sensitivity`).
    [Compliance](compliance-checks.md) treats any cited id outside that ledger as ungrounded.[^tools]
 
