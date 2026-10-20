@@ -1,6 +1,7 @@
 # Bundle Update Log
 
 ## 2026-10-20
+* **Update**: [Judge scores](operations/evaluation.md#judge-scores) on a small Mac: pull a judge, then `JUDGE_MODEL=... nexo eval` or `roles.judge` in `nexo.yaml`; a judge named for a profile that turns it off now runs on that profile's Ollama instead of the vLLM default.
 * **Update**: Chunk text and embeddings live on the graph's (:Chunk) nodes (`CHUNK_STORE=neo4j`), so every checkout of a stack sees them; review checkpoints move to `~/.local/share/nexo/<stack>/`; `nexo chunks import` migrates a JSON store ([ADR-0018](decisions/adr-0018-chunks-in-neo4j.md) supersedes ADR-0004).
 * **Update**: The investigator has a third tool, [search_chunks](components/search-chunks.md), and is told absence from the graph is not evidence of absence; tool results report calls left and the tool budget leaves a turn for the answer ([Investigator agent](components/investigator-agent.md)). `nexo eval` accepts `strategy`, `clearance` and `answer_contains` per case, and a golden set covers the sample documents ([Evaluation playbook](operations/evaluation.md)).
 * **Update**: Traces say who asked and which question: `user.id`, `session.id` and a keyed hash of the question on request and MCP spans; the question's text is opt-in (`telemetry.queryText`); review pauses no longer export the question and draft answer as an exception ([Observability](operations/observability.md#which-user-and-which-question), ADR-0009 amended).
