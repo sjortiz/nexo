@@ -13,9 +13,12 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from neo4j import GraphDatabase
+from neo4j.exceptions import AuthError, DriverError, Neo4jError
+
 from nexo.local_profiles import MODEL_SIZES_GB, parse_profile
-from nexo.setup.components import MEMORY_GB
 from nexo.secret_store import SecretStore, SecretStoreError
+from nexo.setup.components import MEMORY_GB
 from nexo.setup.envfile import generated_keys, missing_required, read_env
 from nexo.setup.render import Host
 from nexo.setup.schema import Casting
@@ -23,6 +26,7 @@ from nexo.setup.schema import Casting
 # Share of memory the setup may use: the rest is for the system and your apps.
 MEMORY_SHARE, VM_SHARE = 0.85, 0.9
 CDI_DIRS = ("/etc/cdi", "/var/run/cdi")
+NEO4J_BOLT = "bolt://localhost:7687"
 # Findings that stop check and up unless --force: the machine may still cope.
 FORCEABLE = {"profile", "memory", "podman vm", "host", "gpu"}
 
@@ -139,6 +143,46 @@ def memory_budget(
     return budget
 
 
+def neo4j_login(uri: str, user: str, password: str) -> str | None:
+    """None when the login works; "refused" or "unreachable" otherwise (no secret shown)."""
+    try:
+        with GraphDatabase.driver(
+            uri, auth=(user, password), connection_timeout=5
+        ) as driver:
+            driver.verify_connectivity()
+    except AuthError:
+        return "refused"
+    except (Neo4jError, DriverError, OSError):
+        return "unreachable"
+    return None
+
+
+def neo4j_finding(store: SecretStore, host: Host, stack: str) -> Finding | None:
+    """A running Neo4j accepts the password the provider holds (its healthcheck is HTTP only)."""
+    env_path = Path.cwd() / ".env"
+    dot_env = read_env(env_path)
+    password = store.get(["NEO4J_PASSWORD"]).get("NEO4J_PASSWORD") or (
+        "" if store.writable else dot_env.get("NEO4J_PASSWORD", "")
+    )
+    if not password:
+        return None  # up creates it
+    result = neo4j_login(NEO4J_BOLT, dot_env.get("NEO4J_USER") or "neo4j", password)
+    if result == "unreachable":
+        return None  # not running yet
+    if result is None:
+        return Finding("neo4j", True, f"login ok at {NEO4J_BOLT}")
+    return Finding("neo4j", False, stale_neo4j_hint(store, host, stack))
+
+
+def stale_neo4j_hint(store: SecretStore, host: Host, stack: str) -> str:
+    """Why Neo4j refused the provider's password, and the two ways out."""
+    return (
+        f"Neo4j refused the password from {store.label}: its data volume was created with"
+        f" other secrets. Put that password back in {store.label}, or delete the volume"
+        f" (its data goes): {host.engine} volume rm {stack}_neo4j-data"
+    )
+
+
 def secrets_finding(store: SecretStore, on: set[str], env_path: Path) -> Finding:
     """The provider answers, and nothing up cannot create itself is missing."""
     needed = generated_keys(on)
@@ -170,6 +214,8 @@ def preflight(
         ),
         secrets_finding(store, on, Path.cwd() / ".env"),
     ]
+    if "neo4j" in on and (neo4j := neo4j_finding(store, host, lock["name"])):
+        findings.append(neo4j)
     models = casting.spec.models
     if models.provider == "ollama":
         ollama = shutil.which("ollama")

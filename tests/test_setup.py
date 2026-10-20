@@ -437,6 +437,8 @@ def _fake_up(workdir, monkeypatch):
         ),
     )
     monkeypatch.setattr(commands.time, "sleep", lambda _s: None)
+    login: dict[str, str | None] = {"result": None}
+    monkeypatch.setattr(commands, "neo4j_login", lambda *_a: login["result"])
     monkeypatch.setattr(commands, "detect_host", lambda _casting: MAC)
     findings: list[Finding] = []
     monkeypatch.setattr(commands, "preflight", lambda *_args: findings)
@@ -447,6 +449,7 @@ def _fake_up(workdir, monkeypatch):
         return cli.main(argv + (["--force"] if force else []))
 
     up.output = output
+    up.login = login
     return up, seen, findings
 
 
@@ -689,3 +692,52 @@ def test_parse_ps_skips_podman_compose_banners():
     assert len(parse_ps("\n".join([banner, "", *lines]))) == 3
     assert len(parse_ps(banner + "\n[" + ",".join(lines) + "]\n")) == 3
     assert not parse_ps(banner)
+
+
+def test_up_fails_when_neo4j_refuses_the_providers_password(fake_up, capfd):
+    """A neo4j-data volume made with other secrets: up returns 1 and names the fix."""
+    up, _, _ = fake_up
+    up.login["result"] = "refused"
+    assert up() == 1
+    captured = capfd.readouterr()
+    assert "Neo4j refused the password" in captured.err + captured.out
+    assert "volume rm nexo_neo4j-data" in captured.err + captured.out
+    up.login["result"] = None
+    assert up() == 0
+
+
+def test_neo4j_finding(monkeypatch):
+    """check: a refused login fails; a Neo4j that is not running is not checked."""
+    store = KeychainStore("nexo")
+    store.put({"NEO4J_PASSWORD": "pw"})
+    for result, expected in (("refused", False), (None, True), ("unreachable", None)):
+        monkeypatch.setattr(check, "neo4j_login", lambda *_a, r=result: r)
+        finding = check.neo4j_finding(store, MAC, "nexo")
+        assert (finding.ok if finding else None) == expected, result
+
+
+def test_neo4j_login_reports_a_closed_port_as_unreachable():
+    """Nothing on the port: unreachable (not refused), quickly."""
+    assert check.neo4j_login("bolt://127.0.0.1:1", "neo4j", "x") == "unreachable"
+
+
+def test_neo4j_login_tells_a_refused_password_from_an_absent_server(monkeypatch):
+    """The driver's AuthError is "refused"; the password never appears in the result."""
+
+    class Refusing:
+        """Stands in for neo4j's driver: every login is refused."""
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_exc):
+            return False
+
+        def verify_connectivity(self):
+            """Refuse, as Neo4j does for a wrong password."""
+            raise check.AuthError(
+                "The client is unauthorized due to authentication failure."
+            )
+
+    monkeypatch.setattr(check.GraphDatabase, "driver", lambda *_a, **_k: Refusing())
+    assert check.neo4j_login("bolt://localhost:7687", "neo4j", "s3cret") == "refused"
