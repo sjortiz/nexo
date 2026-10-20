@@ -232,7 +232,9 @@
   <section id="quickstart" aria-labelledby="quickstart-title">
     <div class="wrap">
       <h2 id="quickstart-title">Quickstart</h2>
-      <p class="section-lede">Local models on one machine with Ollama. For GPU servers, two machines, or Linux, see the
+      <p class="section-lede">Local models on one machine with Ollama. How the pieces connect:
+        <a href="https://github.com/sjortiz/nexo/blob/main/docs/operations/local-setup.md">how local setup works</a>.
+        For two machines or Linux, see the
         <a href="https://github.com/sjortiz/nexo/blob/main/docs/operations/local-apple-silicon.md">Apple Silicon</a> and
         <a href="https://github.com/sjortiz/nexo/blob/main/docs/operations/local-linux.md">Linux</a> playbooks.</p>
       <div class="two">
@@ -242,7 +244,8 @@
 python3 -m venv .venv && .venv/bin/pip install -e ".[dev]"
 cp deploy/local/local.env.example .env   # set LOCAL_PROFILE, NEO4J_PASSWORD
 deploy/local/ollama-setup.sh m1-max-64   # pulls and preloads the models
-podman compose up -d neo4j otel-collector jaeger</code></pre>
+podman compose up -d neo4j otel-collector jaeger
+nexo models --check                      # every role's model, reachable?</code></pre>
         </div>
         <div>
           <h3 class="sub">Ask</h3>

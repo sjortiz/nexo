@@ -15,6 +15,9 @@ sources:
     title: Model clients
 ---
 
+Local models (Ollama, profiles, SSH tunnel): run `nexo models --check` and see
+[How local setup works](local-setup.md#when-it-does-not-work).
+
 # Agent
 
 | Symptom | Cause | Fix |

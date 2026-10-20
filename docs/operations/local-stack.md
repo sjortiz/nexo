@@ -1,7 +1,7 @@
 ---
 type: Playbook
-title: Local stack
-description: Bring up Neo4j, vLLM, tracing and the CLI with Docker Compose.
+title: Compose stack with vLLM
+description: Bring up Neo4j, vLLM on GPUs, tracing and the CLI with Docker Compose.
 resource: ../../docker-compose.yml
 tags: [operations, deployment, docker, vllm]
 status: draft

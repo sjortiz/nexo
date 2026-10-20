@@ -1,7 +1,8 @@
 # Run
 
 * [Configuration reference](configuration.md) - Every environment variable, with defaults and effects.
-* [Local stack](local-stack.md) - Bring up Neo4j, vLLM, tracing and the CLI with Docker Compose.
+* [Compose stack with vLLM](local-stack.md) - Bring up Neo4j, vLLM on GPUs, tracing and the CLI with Docker Compose.
+* [How local setup works](local-setup.md) - Model roles, the profile catalog, who listens where, and `nexo models --check`.
 * [Local on Apple Silicon](local-apple-silicon.md) - Ollama on one or two Macs, model roles split across machines.
 * [Local on Linux](local-linux.md) - Ollama on a GPU or CPU, Podman with host networking or native; Linux as the model machine for a Mac.
 * [Use from Claude Code](claude-code.md) - The nexo MCP server and the nexo-knowledge skill.

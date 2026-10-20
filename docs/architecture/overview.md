@@ -66,7 +66,7 @@ guidance:[^aws-health]
 | OTEL collector | Trace and metric export ([Observability](../operations/observability.md)) | `OTEL_EXPORTER_OTLP_ENDPOINT` |
 
 Full settings: [Configuration reference](../operations/configuration.md). How to run it all:
-[Local stack](../operations/local-stack.md).[^readme]
+[Compose stack with vLLM](../operations/local-stack.md).[^readme]
 
 [^readme]: Project README
 [^aws-health]: AWS guidance, RAG for healthcare use cases

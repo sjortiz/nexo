@@ -38,6 +38,9 @@ sources:
 | Native path | Neo4j from Neo4j's Debian repository; Jaeger release binary. |
 | Production vLLM on NVIDIA (`--profile gpu`) | Linux is the target platform; GPU passthrough is not tested by this project. |
 
+How the pieces fit together, and how to check them with `nexo models --check`:
+[How local setup works](local-setup.md).
+
 # Profiles
 
 | Machine | Profile | Notes |
@@ -89,6 +92,7 @@ A Linux GPU box can serve the agent and extraction models while a Mac runs Nexo:
 1. Linux: `deploy/local/ollama-setup.sh gpu-48 heavy` (and apply the printed settings).
 2. Mac: `.env` with `LOCAL_PROFILE=m5-pro-24`, `REMOTE_PROFILE=gpu-48`; then
    `ssh -N -L 11435:127.0.0.1:11434 you@gpu-box` and `deploy/local/ollama-setup.sh`.
+3. Mac: `nexo models --check` should show agent and extraction on `localhost:11435`, all `ok`.
 
 # Production GPU path (vLLM)
 

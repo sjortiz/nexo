@@ -30,6 +30,7 @@ sources:
 
 # Choose
 
+How the pieces fit together (roles, the profile catalog, ports): [How local setup works](local-setup.md).
 Two independent choices:
 
 | | **Podman path** | **Native path** |
@@ -52,9 +53,9 @@ host's `127.0.0.1` (verified with Podman 6.1 on macOS).[^compose]
 # Hardware profiles
 
 A profile is `<chip>-<memory GB>`: `m1-pro-16`, `m5-pro-24`, `m1-max-32`, `m1-max-64`, `m2-ultra-192`.
-Memory picks the largest tier that fits; the chip is informational. Nexo (settings) and the setup
-script read the same catalog, so the models pulled are the models Nexo asks for. Any role setting set
-explicitly (`AGENT_MODEL`, `EMBEDDING_MODEL`, ...) wins over the profile.[^profiles]
+Memory picks the largest tier that fits; the chip is informational. The setup script and Nexo read
+the same catalog, and explicit settings win over it: see
+[one catalog, two readers](local-setup.md#one-catalog-two-readers).[^profiles]
 
 | Tier | One Mac (`single`) | Agent Mac (`heavy`) | Nexo Mac (`light`) | Context |
 |---|---|---|---|---|
@@ -118,7 +119,8 @@ Never bind Ollama to `0.0.0.0` on a shared network: it has no authentication.
 
 # Verify
 
-`NEXO_LIVE=1 pytest -m live -v` checks the real models: schema-valid JSON from the extraction and router
+`nexo models --check` confirms each role's server answers and serves its model
+([what failures mean](local-setup.md#when-it-does-not-work)). `NEXO_LIVE=1 pytest -m live -v` checks the real models: schema-valid JSON from the extraction and router
 models, embeddings that rank related text (English and Spanish) above unrelated text, and an agent model
 that calls its tools over the OpenAI protocol.[^live] `ollama ps` on each Mac should list the profile's
 models at 100% GPU.
@@ -127,7 +129,8 @@ models at 100% GPU.
 
 - **Context length.** Below about 23 GiB of GPU memory Ollama defaults to a 4096-token context and
   truncates longer prompts silently; the setup script sets `OLLAMA_CONTEXT_LENGTH` from the profile.
-  If Ollama is already running (e.g. the menu-bar app), the script stops: quit it first.
+  If Ollama already runs (e.g. the menu-bar app), the script prints the settings instead: apply them
+  with `launchctl setenv KEY VALUE` and reopen the app.
 - **GPU memory limit.** If a model does not fit, raise macOS's GPU wired-memory limit until reboot with
   `sudo sysctl iogpu.wired_limit_mb=<MB>`, or pick a smaller profile.
 - **Speed.** Expect tens of tokens per second; profiles raise `LLM_TIMEOUT_S` (300) and

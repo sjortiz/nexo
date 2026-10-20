@@ -93,10 +93,12 @@ deploy/local/ollama-setup.sh                  # on the M5 Pro (reads LOCAL_PROFI
 ssh -N -L 11435:127.0.0.1:11434 you@m1-max.local
 
 podman compose up -d neo4j otel-collector jaeger   # Podman path (or: brew install neo4j)
-NEXO_LIVE=1 pytest -m live -v                      # verify the models before use
+nexo models --check                                # each role's model and server, checked
+NEXO_LIVE=1 pytest -m live -v                      # exercise the real models
 ```
 
-Details: [Local on Apple Silicon](docs/operations/local-apple-silicon.md) and
+How it fits together (roles, the profile catalog, ports): [How local setup works](docs/operations/local-setup.md).
+Step by step: [Local on Apple Silicon](docs/operations/local-apple-silicon.md) and
 [Local on Linux](docs/operations/local-linux.md) (Podman needs `-f docker-compose.linux.yml` for the Nexo
 container there).
 
