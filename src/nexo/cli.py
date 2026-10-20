@@ -416,9 +416,10 @@ def _mcp(args: argparse.Namespace) -> int:
             if settings.mcp_review_tools
             else None
         )
-        # The same read-time masking as the agent, with or without the review tools.
+        # The same read-time masking as the agent, with or without the review
+        # tools (with them, build_mcp_server uses the runtime's redactor).
         redactor = (
-            runtime.redactor
+            None
             if runtime is not None
             else ChunkRedactor(
                 build_detector(
