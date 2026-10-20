@@ -1,11 +1,10 @@
 """Where Nexo's generated secrets live: a provider, never a file you copy between machines.
 
-    keychain  (default) the OS keychain through keyring: macOS Keychain, Linux Secret Service.
-              One entry per key under "nexo/<stack>", so every checkout of a stack agrees.
-              Where no keychain is set up, ~/.config/nexo/config: one [stack] section of
-              default credentials for this machine, readable only by you.
-    env       the environment: Kubernetes Secrets, External Secrets Operator, CI, `op run`,
-              Vault Agent... Nexo reads them and never writes them.
+    file      (default) ~/.config/nexo/config: one [stack] section per stack, readable only by
+              you (0600 in a 0700 directory); every checkout of a stack on the machine shares
+              it. Pointed at a file or directory your platform mounts (a Kubernetes Secret,
+              the Secrets Store CSI driver, a file CI writes), it is read-only.
+    keychain  the OS keychain through keyring (macOS Keychain, Linux Secret Service), opt-in.
     sops      a SOPS-encrypted dotenv file (age, PGP or cloud KMS keys), opt-in.
     vault     HashiCorp Vault or OpenBao, KV version 2, opt-in.
 
@@ -29,7 +28,7 @@ import keyring
 import keyring.backends.fail
 import keyring.errors
 
-PROVIDERS = ("keychain", "env", "sops", "vault")
+PROVIDERS = ("file", "keychain", "sops", "vault")
 
 
 class SecretStoreError(RuntimeError):
@@ -74,33 +73,76 @@ class SecretStore(ABC):
         """Store values, keeping the others."""
 
 
-class ConfigFileStore(SecretStore):
-    """~/.config/nexo/config: a [stack] section per stack, like ~/.aws/credentials.
+def default_secrets_file() -> Path:
+    """The machine's own secrets file, written by `nexo setup`."""
+    return config_dir() / "config"
 
-    Default credentials for one machine when no keychain is set up. Only its owner can read
-    it (directory 0700, file 0600); it is never meant to leave the machine.
+
+class FileStore(SecretStore):
+    """An INI file with a [stack] section, or a directory with one file per key.
+
+    The default, ~/.config/nexo/config, is this machine's own (like ~/.aws/credentials):
+    `nexo setup` writes it, owner-only. Any other path is mounted by your platform (a
+    Kubernetes Secret volume, the Secrets Store CSI driver, a file CI writes): read-only,
+    with whatever permissions the platform sets.
     """
 
-    def __init__(self, stack: str):
-        self.path = config_dir() / "config"
+    def __init__(self, path: Path, stack: str):
+        self.path = path
         self.stack = stack
-        self.label = f"{self.path} [{stack}]"
+        self.writable = path == default_secrets_file()
+        self.label = f"{path} [{stack}]" if not path.is_dir() else f"{path}/"
 
     def _read(self) -> configparser.ConfigParser:
         parser = configparser.ConfigParser(interpolation=None)
         parser.optionxform = str  # keep NEO4J_PASSWORD as written
-        if self.path.exists():
-            parser.read(self.path, encoding="utf-8")
+        try:
+            if self.path.exists():
+                parser.read_string(self.path.read_text(encoding="utf-8"))
+        except (OSError, configparser.Error) as exc:
+            raise SecretStoreError(
+                f"cannot read {self.path}: {type(exc).__name__}"
+            ) from exc
         return parser
 
     def get(self, keys: Iterable[str]) -> dict[str, str]:
+        if not self.path.exists():
+            if self.writable:
+                return {}  # nexo setup creates it
+            raise SecretStoreError(
+                f"secrets file {self.path} not found (is it mounted?)"
+            )
+        # One file per key, as a Kubernetes Secret volume or the CSI driver mounts them.
+        if self.path.is_dir():
+            return self._read_directory(keys)
         parser = self._read()
         if not parser.has_section(self.stack):
             return {}
         section = parser[self.stack]
         return {key: section[key] for key in keys if section.get(key)}
 
+    def _read_directory(self, keys: Iterable[str]) -> dict[str, str]:
+        found = {}
+        for key in keys:
+            entry = self.path / key
+            try:
+                value = (
+                    entry.read_text(encoding="utf-8").strip() if entry.is_file() else ""
+                )
+            except OSError as exc:
+                raise SecretStoreError(
+                    f"cannot read {entry}: {type(exc).__name__}"
+                ) from exc
+            if value:
+                found[key] = value
+        return found
+
     def put(self, values: Mapping[str, str]) -> None:
+        if not self.writable:
+            raise SecretStoreError(
+                f"{self.label} is mounted read-only: add {', '.join(sorted(values))}"
+                " where your platform manages its secrets"
+            )
         parser = self._read()
         if not parser.has_section(self.stack):
             parser.add_section(self.stack)
@@ -134,23 +176,6 @@ class KeychainStore(SecretStore):
                 keyring.set_password(self.service, key, value)
         except keyring.errors.KeyringError as exc:
             raise SecretStoreError(f"{self.label}: {type(exc).__name__}") from exc
-
-
-class EnvStore(SecretStore):
-    """Values injected by whatever manages secrets (Kubernetes, CI, op run); read-only."""
-
-    label = "the environment"
-    writable = False
-
-    def get(self, keys: Iterable[str]) -> dict[str, str]:
-        return {key: os.environ[key] for key in keys if os.environ.get(key)}
-
-    def put(self, values: Mapping[str, str]) -> None:
-        raise SecretStoreError(
-            "provider env is read-only: provide "
-            + ", ".join(sorted(values))
-            + " through your secret manager or environment"
-        )
 
 
 class SopsStore(SecretStore):
@@ -254,9 +279,10 @@ class VaultStore(SecretStore):
 def store_from_options(options: Mapping[str, str]) -> SecretStore:
     """The store NEXO_SECRETS_* options describe (rendered into nexo.env by `nexo setup`)."""
     stack = options.get("NEXO_STACK") or "nexo"
-    provider = options.get("NEXO_SECRETS_PROVIDER") or "keychain"
-    if provider == "env":
-        return EnvStore()
+    provider = options.get("NEXO_SECRETS_PROVIDER") or "file"
+    if provider == "file":
+        path = options.get("NEXO_SECRETS_FILE")
+        return FileStore(Path(path) if path else default_secrets_file(), stack)
     if provider == "sops":
         return SopsStore(Path(options.get("NEXO_SECRETS_SOPS_FILE") or "nexo.sops.env"))
     if provider == "vault":
@@ -274,5 +300,5 @@ def store_from_options(options: Mapping[str, str]) -> SecretStore:
             f"unknown secrets provider {provider!r}; use one of {PROVIDERS}"
         )
     if isinstance(keyring.get_keyring(), keyring.backends.fail.Keyring):
-        return ConfigFileStore(stack)  # no keychain set up here
+        raise SecretStoreError("no keychain on this machine: use secrets.provider file")
     return KeychainStore(stack)

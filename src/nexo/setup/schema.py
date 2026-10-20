@@ -108,6 +108,12 @@ class Telemetry(_Strict):
     logs: Literal["otlp", "none"] = "otlp"
 
 
+class FileSecrets(_Strict):
+    """A secrets file or a directory of per-key files mounted by your platform (read-only)."""
+
+    path: str | None = None  # default: ~/.config/nexo/config, written by nexo setup
+
+
 class Sops(_Strict):
     """A SOPS-encrypted dotenv file, relative to the checkout; keys from .sops.yaml rules."""
 
@@ -124,9 +130,10 @@ class Vault(_Strict):
 
 
 class Secrets(_Strict):
-    """Where generated secrets live: the OS keychain unless you opt out or opt in."""
+    """Where generated secrets live: ~/.config/nexo/config unless you opt in to another."""
 
-    provider: Literal["keychain", "env", "sops", "vault"] = "keychain"
+    provider: Literal["file", "keychain", "sops", "vault"] = "file"
+    file: FileSecrets | None = None
     sops: Sops | None = None
     vault: Vault | None = None
 

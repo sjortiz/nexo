@@ -204,7 +204,6 @@ services:
       - path: ./deploy/rendered/nexo.env
         required: true
     environment:
-      NEXO_SECRETS_PROVIDER: env
       NEO4J_PASSWORD: ${NEO4J_PASSWORD}
       OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4318
       NEO4J_URI: neo4j://neo4j:7687
