@@ -23,6 +23,7 @@ from langgraph.types import Command
 from pydantic import BaseModel
 
 from nexo.agents.investigator import Investigator
+from nexo.agents.redaction import ChunkRedactor
 from nexo.config import Settings
 from nexo.llm import build_chat_model, build_embeddings, build_strands_model
 from nexo.orchestration.graph import GraphDependencies, build_graph
@@ -31,9 +32,10 @@ from nexo.storage.graph_store import GraphStore
 from nexo.storage.ingest import ExtractionAids, IngestionTargets, KnowledgeGraphIngestor
 from nexo.storage.ontology import Ontology
 from nexo.storage.resolution import EntityResolver, ResolutionLimits
-from nexo.storage.sensitive_data import build_detector
+from nexo.storage.schemas import ChunkRecord, Sensitivity
+from nexo.storage.sensitive_data import NoopDetector, build_detector
 from nexo.storage.neo4j_chunk_store import Neo4jChunkStore
-from nexo.storage.vector_store import ChunkStore, LocalChunkStore
+from nexo.storage.vector_store import ChunkFilter, ChunkStore, LocalChunkStore
 from nexo.telemetry import (
     caller_attributes,
     query_attributes,
@@ -42,6 +44,7 @@ from nexo.telemetry import (
 )
 
 WORKFLOW_NAME = "nexo-investigation"
+_INTERRUPT_CHANNEL = "__interrupt__"  # where LangGraph stores a pending interrupt
 
 
 class RunResult(BaseModel):
@@ -92,6 +95,11 @@ class Runtime:
     graph: CompiledStateGraph
     settings: Settings
     callbacks: list[Any] = field(default_factory=list)
+    # review_passages reads cited chunks through the store and masks them with the redactor.
+    chunks: ChunkStore | None = None
+    redactor: ChunkRedactor = field(
+        default_factory=lambda: ChunkRedactor(NoopDetector())
+    )
 
     def start(
         self,
@@ -126,6 +134,65 @@ class Runtime:
     def status(self, thread_id: str) -> RunResult:
         """Return the thread's current result without running anything."""
         return self._result(thread_id, self._pending(thread_id))
+
+    def pending_reviews(self, limit: int = 50) -> list[RunResult]:
+        """Threads paused at the compliance interrupt, newest first.
+
+        Each result carries the same review packet `status()` returns. Only the newest
+        checkpoint of each thread counts, so a thread that was reviewed since it paused
+        is not listed. The scan stops once `limit` paused threads are found.
+        """
+        saver = self.graph.checkpointer
+        if not isinstance(saver, BaseCheckpointSaver) or limit < 1:
+            return []
+        # SQLite and Postgres list newest first across threads; the in-memory saver does not.
+        ordered = not isinstance(saver, InMemorySaver)
+        seen: set[str] = set()
+        found: list[tuple[str, str]] = []  # (checkpoint timestamp, thread id)
+        for item in saver.list(None):
+            thread_id = item.config["configurable"]["thread_id"]
+            if item.config["configurable"].get("checkpoint_ns") or thread_id in seen:
+                continue
+            seen.add(thread_id)
+            if any(
+                channel == _INTERRUPT_CHANNEL
+                for _, channel, _ in item.pending_writes or []
+            ):
+                found.append((item.checkpoint["ts"], thread_id))
+                if ordered and len(found) >= limit:
+                    break
+        found.sort(reverse=True)
+        results = []
+        for _, thread_id in found:
+            pending = self._pending(thread_id)
+            if pending is not None:  # the packet is the source of truth, not the scan
+                results.append(self._result(thread_id, pending))
+        return results[:limit]
+
+    def review_passages(
+        self, thread_id: str, clearance: Sensitivity | str
+    ) -> list[dict[str, Any]]:
+        """The cited chunks of a paused review, read as a caller with this clearance.
+
+        One dict per citation, in citation order: `chunk_id`, `source`, `text`,
+        `classification` and `status` (`shown`, `withheld` or `not_found`). `text` is
+        None unless the status is `shown`; above the clearance it is masked by the
+        ChunkRedactor (`[EMAIL]`, `[PHONE]`) when only detected personal details make
+        the chunk sensitive, and otherwise withheld. Raises ValueError for a thread that is not
+        awaiting review, and when the runtime has no chunk store.
+        """
+        pending = self._pending(thread_id)
+        if pending is None:
+            raise ValueError(f"thread {thread_id} is not awaiting review")
+        if self.chunks is None:
+            raise ValueError("this runtime has no chunk store")
+        scope = ChunkFilter(max_sensitivity=Sensitivity(clearance))
+        ids = list(dict.fromkeys(pending.get("citations") or []))
+        records = {r.chunk_id: r for r in self.chunks.get_by_ids(ids)}
+        return [
+            _passage(chunk_id, records.get(chunk_id), scope, self.redactor)
+            for chunk_id in ids
+        ]
 
     def _config(self, thread_id: str) -> dict[str, Any]:
         return {
@@ -189,6 +256,33 @@ class Runtime:
         )
 
 
+def _passage(
+    chunk_id: str,
+    record: ChunkRecord | None,
+    scope: ChunkFilter,
+    redactor: ChunkRedactor,
+) -> dict[str, Any]:
+    """One review passage: as stored, masked by the redactor, or withheld."""
+    if record is None:
+        return {
+            "chunk_id": chunk_id,
+            "source": None,
+            "text": None,
+            "classification": None,
+            "status": "not_found",
+        }
+    shown = redactor.visible(record, scope)
+    return {
+        "chunk_id": chunk_id,
+        "source": " > ".join(
+            p for p in [record.title or record.source_id, *record.section_path] if p
+        ),
+        "text": shown.text if shown else None,
+        "classification": record.sensitivity.value,
+        "status": "shown" if shown else "withheld",
+    }
+
+
 def chunk_store_from_settings(
     settings: Settings, graph_store: GraphStore | None = None
 ) -> ChunkStore:
@@ -232,9 +326,8 @@ def open_runtime(settings: Settings) -> Iterator[Runtime]:
         checkpointer = stack.enter_context(open_checkpointer(settings))
         graph_store = GraphStore.from_settings(settings, read_only=True)
         stack.callback(graph_store.close)
-        investigator = build_investigator(
-            settings, graph_store, chunk_store_from_settings(settings, graph_store)
-        )
+        chunk_store = chunk_store_from_settings(settings, graph_store)
+        investigator = build_investigator(settings, graph_store, chunk_store)
         deps = GraphDependencies(
             settings=settings,
             investigator=investigator,
@@ -243,7 +336,12 @@ def open_runtime(settings: Settings) -> Iterator[Runtime]:
             ),
             router_llm=build_chat_model(settings, role="router"),
         )
-        yield Runtime(graph=build_graph(deps, checkpointer), settings=settings)
+        yield Runtime(
+            graph=build_graph(deps, checkpointer),
+            settings=settings,
+            chunks=chunk_store,
+            redactor=ChunkRedactor(deps.detector),
+        )
 
 
 @contextmanager

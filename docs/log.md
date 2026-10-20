@@ -1,6 +1,7 @@
 # Bundle Update Log
 
 ## 2026-10-20
+* **Update**: Review has a shared core: `Runtime.pending_reviews()` lists paused threads and `Runtime.review_passages()` reads the cited chunks for a clearance, masked by the redactor ([Human review](operations/human-review.md), [ADR-0019](decisions/adr-0019-review-surfaces.md)).
 * **Update**: [Judge scores](operations/evaluation.md#judge-scores) on a small Mac: pull a judge, then `JUDGE_MODEL=... nexo eval` or `roles.judge` in `nexo.yaml`; a judge named for a profile that turns it off now runs on that profile's Ollama instead of the vLLM default.
 * **Update**: Chunk text and embeddings live on the graph's (:Chunk) nodes (`CHUNK_STORE=neo4j`), so every checkout of a stack sees them; review checkpoints move to `~/.local/share/nexo/<stack>/`; `nexo chunks import` migrates a JSON store ([ADR-0018](decisions/adr-0018-chunks-in-neo4j.md) supersedes ADR-0004).
 * **Update**: Chunks above a caller's clearance only because of detected PII spans are shown with those spans masked (`[EMAIL]`), not withheld; PHI, declared levels and unexplained levels stay withheld ([read-time redaction](components/sensitive-data-detection.md#read-time-redaction), ADR-0006 amended). Chunks record `declared_sensitivity`; the golden Delta case runs at `internal` ([Evaluation playbook](operations/evaluation.md)).
