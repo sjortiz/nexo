@@ -5,7 +5,7 @@ description: Offline suite, Neo4j integration tests, OKF conformance and mutatio
 resource: ../../tests/
 tags: [operations, testing, quality]
 status: draft
-generated: { by: claude-code/claude-opus-5-5, at: 2026-10-19T20:14:37Z }
+generated: { by: claude-code/claude-sonnet-5-5, at: 2026-10-20T22:00:00Z }
 sources:
   - id: tests
     resource: ../../tests/
@@ -30,6 +30,8 @@ sources:
 | `tests/test_makefile.py` | `make` | Every documented target still dry-runs and its scripts exist. |
 | `tests/test_aio.py` | nothing | `run_sync` works with and without a running event loop (notebooks) and keeps the caller's context. |
 | `tests/test_model_roles.py` | nothing | Per-role endpoints and fallbacks, reasoning effort only for JSON roles, env templates use only real settings. |
+| `tests/test_setup.py` | nothing | `nexo setup`: schema validation, lock pins, the render from the real fragments, preflight checks and `--force`, add-on removal on `up`, the Neo4j login check, presets, the generated `docker-compose.yml`. |
+| `tests/test_service_wiring.py` | nothing | The composition root builds each component from its own model role. |
 | `tests/test_secret_store.py::test_real_keychain_round_trip` | a desktop keychain, the `keychain` extra (`make install-keychain`), `NEXO_KEYCHAIN_TEST=1` | A temporary entry in this machine's real keychain, written and removed. Local only: `keyring` is an optional extra, so the suite and CI run without it; the keychain provider's logic is tested with an injected fake. |
 | `tests/test_live_models.py` | model servers, `NEXO_LIVE=1` | Real models: schema-valid extraction and routing, embeddings ranking (English and Spanish), agent tool calls, GenAI spans. |
 | `tests/test_mcp_server.py` | nothing | Every MCP tool over the real protocol (in-process and `nexo mcp` over stdio), clearance, parameterized lookups, rejected writes, JSON-only stdout. |
