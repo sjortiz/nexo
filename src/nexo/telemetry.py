@@ -67,7 +67,11 @@ _INSTALLED: dict[str, Any] = {}
 
 
 class OtelLogHandler(LoggingHandler):
-    """Export log records over OTLP, keeping answer payloads out unless content capture is on."""
+    """Export log records over OTLP, keeping answer payloads out unless content capture is on.
+
+    A record's `content` (the texts service.content_gate released for a run) is
+    exported as one attribute per text; the gate has already decided.
+    """
 
     def __init__(self, logger_provider: LoggerProvider, capture_content: bool) -> None:
         super().__init__(logger_provider=logger_provider)
@@ -76,12 +80,17 @@ class OtelLogHandler(LoggingHandler):
     def emit(self, record: logging.LogRecord) -> None:
         if record.name.startswith("opentelemetry"):
             return  # the exporter's own logs would feed back into the export
-        if hasattr(record, "result"):
+        if hasattr(record, "result") or hasattr(record, "content"):
             record = copy.copy(record)  # other handlers still see the original
+        if hasattr(record, "result"):
             if self._capture_content:
                 record.result = json.dumps(record.result, default=str)
             else:
                 del record.result
+        if hasattr(record, "content"):
+            content = record.content or {}
+            del record.content
+            record.__dict__.update({k: str(v) for k, v in content.items()})
         super().emit(record)
 
 

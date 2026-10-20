@@ -280,6 +280,35 @@ def review_finding(casting: Casting) -> Finding:
     return Finding("review", True, detail)
 
 
+def content_finding(casting: Casting) -> Finding:
+    """Which runs' questions and answers are logged (spec.telemetry.content, ADR-0009).
+
+    Like review_finding: nexo.env always carries the setting, so only the process
+    environment overrides it, and the content-capture switch there logs every run.
+    """
+    declared = casting.spec.telemetry.content
+    effective = os.environ.get("TELEMETRY_CONTENT_MAX_SENSITIVITY") or declared
+    if effective == "none":
+        detail = "none: no question or answer is logged"
+    else:
+        detail = (
+            f"{effective}: questions and answers of runs at or below {effective}"
+            " are logged; the rest are withheld"
+        )
+    if effective != declared:
+        detail += (
+            " (TELEMETRY_CONTENT_MAX_SENSITIVITY in the environment overrides"
+            f" spec.telemetry.content {declared})"
+        )
+    capture = os.environ.get("OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT")
+    if capture in ("span_only", "span_and_event"):
+        detail += (
+            f" (OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT={capture}"
+            " logs every run)"
+        )
+    return Finding("content", True, detail)
+
+
 def preflight(
     casting: Casting,
     lock: dict[str, Any],
@@ -296,6 +325,7 @@ def preflight(
         ),
         secrets_finding(store, on, Path.cwd() / ".env"),
         review_finding(casting),
+        content_finding(casting),
     ]
     bolt = casting.spec.ports.bolt
     if "neo4j" in on and (neo4j := neo4j_finding(store, host, lock["name"], bolt)):

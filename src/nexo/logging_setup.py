@@ -20,11 +20,13 @@ from opentelemetry.instrumentation.logging.handler import LoggingHandler
 
 from nexo.config import Settings
 
-# `result` is the command's stdout output; only the OTLP handler exports it.
+# `result` is the command's stdout output and `content` a run's gated question and
+# answer; only the OTLP handler exports them.
 _STANDARD_ATTRS = set(vars(logging.makeLogRecord({}))) | {
     "message",
     "asctime",
     "result",
+    "content",
 }
 
 

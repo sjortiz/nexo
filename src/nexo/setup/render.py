@@ -384,6 +384,8 @@ def build_env(casting: Casting) -> dict[str, str]:
         "OTEL_EXPORTER_OTLP_ENDPOINT": f"http://localhost:{spec.ports.otlp}",
         "OTEL_LOGS_EXPORTER": spec.telemetry.logs,
         "TRACE_QUERY_TEXT": "true" if spec.telemetry.query_text else "false",
+        # Always set, like REVIEW_POLICY: a stale value in .env must not widen what is logged.
+        "TELEMETRY_CONTENT_MAX_SENSITIVITY": spec.telemetry.content,
     }
     env |= secrets_options(casting)
     models = spec.models

@@ -9,8 +9,9 @@ from __future__ import annotations
 
 import importlib
 import json
+import logging
 import uuid
-from collections.abc import Iterator
+from collections.abc import Iterable, Iterator
 from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass, field
 from typing import Any
@@ -33,7 +34,11 @@ from nexo.storage.ingest import ExtractionAids, IngestionTargets, KnowledgeGraph
 from nexo.storage.ontology import Ontology
 from nexo.storage.resolution import EntityResolver, ResolutionLimits
 from nexo.storage.schemas import ChunkRecord, Sensitivity
-from nexo.storage.sensitive_data import NoopDetector, build_detector
+from nexo.storage.sensitive_data import (
+    NoopDetector,
+    SensitiveDataDetector,
+    build_detector,
+)
 from nexo.storage.neo4j_chunk_store import Neo4jChunkStore
 from nexo.storage.vector_store import ChunkFilter, ChunkStore, LocalChunkStore
 from nexo.telemetry import (
@@ -44,7 +49,10 @@ from nexo.telemetry import (
 )
 
 WORKFLOW_NAME = "nexo-investigation"
+CONTENT_EVENT = "nexo.content"
 _INTERRUPT_CHANNEL = "__interrupt__"  # where LangGraph stores a pending interrupt
+
+log = logging.getLogger("nexo.service")
 
 
 class RunResult(BaseModel):
@@ -103,6 +111,8 @@ class Runtime:
     redactor: ChunkRedactor = field(
         default_factory=lambda: ChunkRedactor(NoopDetector())
     )
+    # Classifies the question and answer for the content gate; None withholds them.
+    detector: SensitiveDataDetector | None = None
 
     def start(
         self,
@@ -237,6 +247,15 @@ class Runtime:
                     "nexo.approval_status": result.approval_status or "",
                 }
             )
+            values = self.graph.get_state(self._config(thread_id)).values
+            verdict, content = content_gate(self.settings, self.detector, values)
+            span.set_attribute(CONTENT_EVENT, verdict)
+            if content:
+                span.add_event(CONTENT_EVENT, content)
+            # Only the OTLP handler exports `content`; stderr gets the verdict.
+            log.info(
+                "thread %s: content: %s", thread_id, verdict, extra={"content": content}
+            )
             return result
 
     def _pending(self, thread_id: str) -> dict[str, Any] | None:
@@ -267,7 +286,8 @@ def _outcome(values: dict[str, Any], pending: dict[str, Any] | None) -> str | No
     the run had no releasable output); `approved by` / `rejected by` name whoever
     decided: a reviewer or the review policy. Free text (the reviewer's comment, the
     router's reason) stays out: the CLI logs this line, and logs are exported
-    (ADR-0009); the full result carries both.
+    (ADR-0009); the full result carries both, and the run's content record carries
+    them when its sensitivity allows (`content_gate`).
     """
     if pending is not None:
         return "awaiting review"
@@ -280,6 +300,66 @@ def _outcome(values: dict[str, Any], pending: dict[str, Any] | None) -> str | No
     if _system_rejected(status, review):
         return "rejected: no releasable output"
     return f"{status} by {review.get('reviewer') or 'unknown reviewer'}"
+
+
+def content_gate(
+    settings: Settings, detector: SensitiveDataDetector | None, values: dict[str, Any]
+) -> tuple[str, dict[str, str]]:
+    """Whether a run's question and answer may be exported, and the attributes that carry them.
+
+    Returns the verdict (`released (internal)`, `withheld (pii)`) and the texts to
+    export: the question, the released answer, the reviewer's comment and the router's
+    reason, or nothing when withheld. They are exported when the run's level (see
+    `run_sensitivity`) is at or below TELEMETRY_CONTENT_MAX_SENSITIVITY; content
+    capture exports them whatever the level. Fails closed: no detector, or one that
+    raises, withholds them (ADR-0009, amended).
+    """
+    texts = {
+        "nexo.content.question": values.get("user_query"),
+        "nexo.content.answer": values.get("final_response"),
+        "nexo.content.review_comment": (values.get("review") or {}).get("comment"),
+        "nexo.content.routing_reason": values.get("routing_reason"),
+    }
+    texts = {key: str(text) for key, text in texts.items() if text}
+    if settings.capture_content:
+        return "released (content capture on)", texts
+    limit = settings.telemetry_content_max_sensitivity
+    if limit == "none":
+        return "withheld (telemetry content none)", {}
+    if detector is None:
+        return "withheld (no detector)", {}
+    try:
+        level = run_sensitivity(values, detector, texts.values())
+    except Exception:  # pylint: disable=broad-exception-caught  # fail closed
+        log.warning("content withheld: the sensitive-data detector failed")
+        return "withheld (detector failed)", {}
+    if level.rank > Sensitivity(limit).rank:
+        return f"withheld ({level})", {}
+    return f"released ({level})", texts
+
+
+def run_sensitivity(
+    values: dict[str, Any], detector: SensitiveDataDetector, texts: Iterable[str]
+) -> Sensitivity:
+    """A run's level: the highest of the chunks its agent read and the detector's findings.
+
+    The chunks are the evidence ledger (`fetched_sensitivity`) that grounds citations;
+    the texts are what would be exported. A level Nexo does not rank counts as phi.
+    """
+    levels = [Sensitivity.PUBLIC]
+    for output in values.get("agent_outputs") or []:
+        fetched = output.get("fetched_sensitivity") or {}
+        levels += [_ranked(level) for level in fetched.values()]
+    for text in texts:
+        levels += [_ranked(d.sensitivity) for d in detector.detect(text)]
+    return max(levels, key=lambda level: level.rank)
+
+
+def _ranked(level: Any) -> Sensitivity:
+    try:
+        return Sensitivity(level)
+    except ValueError:
+        return Sensitivity.PHI
 
 
 def _system_rejected(status: str, review: dict[str, Any]) -> bool:
@@ -380,6 +460,7 @@ def open_runtime(settings: Settings) -> Iterator[Runtime]:
             settings=settings,
             chunks=chunk_store,
             redactor=ChunkRedactor(deps.detector),
+            detector=deps.detector,
         )
 
 
@@ -411,6 +492,7 @@ def open_review_runtime(settings: Settings, chunks: ChunkStore) -> Iterator[Runt
             settings=settings,
             chunks=chunks,
             redactor=ChunkRedactor(detector),
+            detector=detector,
         )
 
 

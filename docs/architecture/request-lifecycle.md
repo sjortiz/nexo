@@ -54,7 +54,9 @@ sources:
 `nexo ask`, `review` and `status` log it to stderr after a completed status (the JSON result goes to stdout), e.g.
 `thread 3f2a…: completed (rejected: no releasable output)`. Logs are exported, so `outcome` carries
 no free text: the reviewer's comment is in `review.comment` and the router's reason in
-`routing_reason`, which stay in the result and are exported only with content capture
+`routing_reason`, which stay in the result. They are exported with the question and answer only
+when the run's sensitivity allows it (`telemetry.content`, see
+[content logs](../operations/observability.md#question-and-answer-logs)) or with content capture
 ([ADR-0009](../decisions/adr-0009-opentelemetry-genai-conventions.md)). A reviewer may be named
 `system`; only `review.source: system` marks the compliance node's own rejection.
 

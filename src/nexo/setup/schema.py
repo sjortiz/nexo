@@ -109,6 +109,9 @@ class Telemetry(_Strict):
     logs: Literal["otlp", "none"] = "otlp"
     # The question's text on traces (self-hosted backends only; LangSmith never gets it).
     query_text: bool = Field(default=False, alias="queryText")
+    # The most sensitive run whose question and answer are logged: none, public, internal,
+    # pii or phi (TELEMETRY_CONTENT_MAX_SENSITIVITY).
+    content: Literal["none", "public", "internal", "pii", "phi"] = "internal"
 
 
 class FileSecrets(_Strict):

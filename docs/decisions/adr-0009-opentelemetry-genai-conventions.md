@@ -14,6 +14,9 @@ sources:
   - id: test
     resource: ../../tests/test_agent.py
     title: Content-capture test
+  - id: gate
+    resource: ../../tests/test_content_logs.py
+    title: Content-gate tests
 ---
 
 # Context
@@ -37,6 +40,15 @@ content into span events.
   question's text is a separate, narrower opt-in than content capture (`telemetry.queryText`), kept only
   for self-hosted backends. Review pauses are no longer recorded as exceptions, which exported the
   question and the draft answer.
+- **Amended 2026-10-20 (#50):** the maintainer decided operators need actual question and answer logs,
+  at least for runs that touch nothing sensitive. `telemetry.content` in `nexo.yaml`
+  (`TELEMETRY_CONTENT_MAX_SENSITIVITY`: `none`, `public`, `internal`, `pii`, `phi`; default `internal`)
+  is the most sensitive run whose question, released answer, reviewer comment and router reason are
+  exported, in an OTLP log record and a `nexo.content` event on the request span. A run's level is
+  the highest of the chunks its agent read (`fetched_sensitivity`) and the detector's finding on those
+  texts; an unranked level counts as `phi`. Above the setting the record says `content: withheld
+  (<level>)` and carries no text; a detector that fails, or none, withholds too. `none` keeps the
+  earlier behaviour; content capture still exports everything. The LangSmith add-on drops the event.[^gate]
 
 # Options considered
 
@@ -54,3 +66,4 @@ content into span events.
 
 [^semconv]: OpenTelemetry GenAI semantic conventions
 [^test]: Content-capture test
+[^gate]: Content-gate tests

@@ -95,7 +95,9 @@ def runtime(settings, investigator, router_replies=None, checkpointer=None) -> R
         router_llm=router,
     )
     return Runtime(
-        graph=build_graph(deps, checkpointer or InMemorySaver()), settings=settings
+        graph=build_graph(deps, checkpointer or InMemorySaver()),
+        settings=settings,
+        detector=deps.detector,
     )
 
 
@@ -531,7 +533,13 @@ def test_openai_instrumentation_emits_one_chat_span_per_vllm_call(settings, span
 def test_the_request_span_says_who_asked_and_which_question(settings, spans):
     """user.id, session.id and the question's hash on the workflow span; never its text."""
     question = "How is Acme Holdings connected to Gamma Clinics?"
-    keyed = settings.model_copy(update={"query_hash_key": SecretStr("k1")})
+    # With content logging off: the gated content event is covered in test_content_logs.
+    keyed = settings.model_copy(
+        update={
+            "query_hash_key": SecretStr("k1"),
+            "telemetry_content_max_sensitivity": "none",
+        }
+    )
     rt = runtime(keyed, FakeInvestigator([grounded_output()]))
     started = rt.start(question, thread_id="t-id", user="ana")
     rt.review(started.thread_id, {"approval_status": "approved", "reviewer": "rev"})

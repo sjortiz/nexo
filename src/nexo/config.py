@@ -253,6 +253,14 @@ class Settings(BaseSettings):
     nexo_user: str | None = None
     query_hash_key: SecretStr | None = None
     trace_query_text: bool = False
+    # The most sensitive run whose question and released answer (and the reviewer's
+    # comment, the router's reason) are exported in the OTLP log record and on the request
+    # span (ADR-0009, amended): a run's level is the highest of the chunks its agent read
+    # and the detector's finding on those texts. none exports no content; content capture
+    # above exports everything. nexo.yaml sets it (telemetry.content).
+    telemetry_content_max_sensitivity: Literal[
+        "none", "public", "internal", "pii", "phi"
+    ] = "internal"
 
     # --- Agent Inbox add-on (nexo review-inbox; both bind 127.0.0.1) ----------------
     review_inbox_port: int = Field(default=2024, ge=1, le=65535)  # the adapter
