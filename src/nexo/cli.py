@@ -1,4 +1,4 @@
-"""Command line entry point: ingest, ask, review, status, eval."""
+"""Command line entry point: ingest, ask, review, status, eval, models."""
 
 from __future__ import annotations
 
@@ -158,6 +158,24 @@ def _graph(args: argparse.Namespace) -> int:
     return 0
 
 
+def _models(args: argparse.Namespace) -> int:
+    """Which model and server each role uses, after profiles and explicit settings."""
+    from nexo.llm import check_model_servers, resolved_models
+
+    settings = get_settings()
+    rows = resolved_models(settings)
+    if args.check:
+        rows = check_model_servers(settings, rows)
+    failed = [row["role"] for row in rows if row.get("check", "ok") != "ok"]
+    profiles = f"LOCAL_PROFILE={settings.local_profile or '-'} REMOTE_PROFILE={settings.remote_profile or '-'}"
+    result = {"local_profile": settings.local_profile, "remote_profile": settings.remote_profile, "roles": rows}
+    if failed:
+        log.error("models (%s): check failed for %s", profiles, ", ".join(failed), extra={"result": result})
+        return 1
+    log.info("models (%s)%s", profiles, ": all reachable" if args.check else "", extra={"result": result})
+    return 0
+
+
 def _mcp(args: argparse.Namespace) -> int:
     """Serve the knowledge graph and chunk store as read-only MCP tools."""
     from nexo.llm import build_embeddings
@@ -227,6 +245,10 @@ def main(argv: list[str] | None = None) -> int:
     graph = sub.add_parser("graph", help="Mermaid diagram of the LangGraph workflow")
     graph.add_argument("--output", help="write the diagram to this file (e.g. workflow.mmd)")
     graph.set_defaults(handler=_graph)
+
+    models = sub.add_parser("models", help="show the model and server each role uses")
+    models.add_argument("--check", action="store_true", help="ask each server whether it serves the model")
+    models.set_defaults(handler=_models)
 
     serve = sub.add_parser("mcp", help="serve the knowledge graph as read-only MCP tools")
     serve.add_argument("--transport", choices=["stdio", "streamable-http"], default="stdio")

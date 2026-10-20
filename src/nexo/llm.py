@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 import re
+import urllib.request
 from collections.abc import Sequence
 from typing import TYPE_CHECKING, TypeVar
 
@@ -134,3 +135,52 @@ def invoke_structured(
                 ),
             ]
     raise StructuredOutputError(f"{schema.__name__}: no valid output after {max_attempts} attempts") from last_error
+
+
+def resolved_models(settings: Settings) -> list[dict]:
+    """The model and server each role calls, after profiles and explicit settings. No secrets."""
+    rows = []
+    for role in ("agent", "extraction", "router"):
+        endpoint = settings.endpoint(role)
+        rows.append({"role": role, "model": endpoint.model, "base_url": endpoint.base_url,
+                     "reasoning_effort": endpoint.reasoning_effort})
+    if settings.judge_model:
+        endpoint = settings.endpoint("judge")
+        rows.append({"role": "judge", "model": endpoint.model, "base_url": endpoint.base_url,
+                     "reasoning_effort": endpoint.reasoning_effort})
+    else:
+        rows.append({"role": "judge", "model": None, "note": "off: nexo eval skips generation scores"})
+    if settings.embedding_provider == "fake":
+        rows.append({"role": "embedding", "model": None, "note": "fake: deterministic offline vectors"})
+    else:
+        rows.append({"role": "embedding", "model": settings.embedding_model, "base_url": settings.embedding_base_url})
+    return rows
+
+
+def check_model_servers(settings: Settings, rows: list[dict], *, timeout_s: float = 5.0) -> list[dict]:
+    """Mark each row with whether its server answers and lists its model (GET /models, OpenAI protocol)."""
+    listings: dict[str, set[str] | str] = {}
+    for row in rows:
+        if not row.get("model"):
+            continue
+        if row["base_url"] not in listings:
+            key = settings.embedding_api_key if row["role"] == "embedding" else settings.endpoint(row["role"]).api_key
+            listings[row["base_url"]] = _served_models(row["base_url"], key.get_secret_value(), timeout_s)
+        served = listings[row["base_url"]]
+        if isinstance(served, str):
+            row["check"] = f"unreachable: {served}"
+        elif row["model"] in served or f"{row['model']}:latest" in served:  # Ollama tags untagged pulls :latest
+            row["check"] = "ok"
+        else:
+            row["check"] = "model not served here"
+            row["served"] = sorted(served)
+    return rows
+
+
+def _served_models(base_url: str, api_key: str, timeout_s: float) -> set[str] | str:
+    request = urllib.request.Request(base_url.rstrip("/") + "/models", headers={"Authorization": f"Bearer {api_key}"})
+    try:
+        with urllib.request.urlopen(request, timeout=timeout_s) as response:
+            return {entry.get("id") for entry in json.load(response).get("data", [])}
+    except (OSError, ValueError) as exc:  # URLError/HTTPError/timeouts are OSError; bad JSON is ValueError
+        return f"{type(exc).__name__}: {exc}"
