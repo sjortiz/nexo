@@ -61,6 +61,8 @@ The model typically alternates:
 
 - [query_knowledge_graph](../components/query-knowledge-graph.md): read-only Cypher; returns rows plus
   every `chunk_id` it saw.
+- [find_paths and entity_neighbours](../components/graph-lookup-tools.md): fixed path and
+  neighbour lookups by entity key.
 - [fetch_vector_chunks](../components/fetch-vector-chunks.md): the exact text for those ids; this is the
   evidence it must cite.
 

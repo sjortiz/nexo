@@ -23,7 +23,7 @@ sources:
 
 # Role in Nexo
 
-The investigator is a Strands `Agent`: given a goal, the graph schema and three tools, the model decides
+The investigator is a Strands `Agent`: given a goal, the graph schema and its tools, the model decides
 which Cypher to run and which chunks to read until the evidence suffices. Nothing scripts the order or
 depth.[^docs] Pinned as `strands-agents[openai]>=1.61,<2`. Details:
 [Investigator agent](../components/investigator-agent.md).
