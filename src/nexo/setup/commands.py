@@ -29,7 +29,6 @@ from nexo.llm import build_embeddings, check_model_servers, resolved_models
 from nexo.secret_store import SecretStore, SecretStoreError, store_from_options
 from nexo.setup.check import (
     FORCEABLE,
-    NEO4J_BOLT,
     detect_host,
     neo4j_login,
     preflight,
@@ -147,14 +146,14 @@ def _wait_for_services(stack: _Stack) -> int:
         time.sleep(3)
 
 
-def _neo4j_accepts(stack: _Stack, store: SecretStore, name: str) -> int:
+def _neo4j_accepts(stack: _Stack, store: SecretStore, name: str, uri: str) -> int:
     """0 when Neo4j takes the provider's password; its healthcheck only probes HTTP."""
     password = stack.secrets.get("NEO4J_PASSWORD")
     if not password:
         return 0
     user = read_env(Path.cwd() / ".env").get("NEO4J_USER") or "neo4j"
     for _ in range(10):
-        result = neo4j_login(NEO4J_BOLT, user, password)
+        result = neo4j_login(uri, user, password)
         if result != "unreachable":
             break
         time.sleep(2)
@@ -163,7 +162,7 @@ def _neo4j_accepts(stack: _Stack, store: SecretStore, name: str) -> int:
     if result == "refused":
         log.error("%s", stale_neo4j_hint(store, stack.host, name))
     else:
-        log.error("Neo4j does not answer at %s", NEO4J_BOLT)
+        log.error("Neo4j does not answer at %s", uri)
     return 1
 
 
@@ -331,6 +330,7 @@ def _up(args: argparse.Namespace) -> int:
     on = enabled_set(lock, _addons(args))
     store = store_for(casting)
     stack = _Stack(host, ensure_secrets(Path.cwd() / ".env", Path.cwd(), on, store))
+    ports = casting.spec.ports
     render(casting, lock, Path.cwd(), host, _addons(args))
     if not _report(casting, lock, on, host, args.force):
         return 1
@@ -340,11 +340,11 @@ def _up(args: argparse.Namespace) -> int:
     if code := (
         _compose(stack, UP)
         or _wait_for_services(stack)
-        or _neo4j_accepts(stack, store, lock["name"])
+        or _neo4j_accepts(stack, store, lock["name"], ports.bolt)
     ):
         return code
     for name in sorted(on & UIS.keys()):
-        log.info("%s: %s", name, UIS[name])
+        log.info("%s: http://localhost:%s", name, getattr(ports, UIS[name]))
     return 0
 
 

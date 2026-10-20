@@ -20,8 +20,8 @@ import jsonpatch
 import yaml
 
 from nexo.setup.components import COMPONENTS, load_fragment, merge_compose, merge_patch
-from nexo.setup.lock import VLLM_EMBEDDING_URL, VLLM_URL, resolve
-from nexo.setup.schema import Casting, SetupError
+from nexo.setup.lock import resolve, vllm_urls
+from nexo.setup.schema import Casting, Ports, SetupError
 
 COLLECTOR_BASE = "deploy/otel-collector.yaml"
 QUERY_TEXT = "nexo.query.text"
@@ -49,6 +49,25 @@ ORDER = (
     "app",
 )
 COLLECTOR_ADDONS = ("hostMetrics", "langfuse", "jaeger", "langsmith")
+# Each port a fragment publishes, by service and container port: the spec.ports field
+# that sets its host port.
+PUBLISHED = {
+    ("neo4j", 7474): "neo4j_http",
+    ("neo4j", 7687): "neo4j_bolt",
+    ("otel-collector", 4318): "otlp",
+    ("otel-collector", 8889): "metrics",
+    ("signoz", 8080): "signoz",
+    ("langfuse-web", 3000): "langfuse",
+    ("langfuse-storage", 8333): "langfuse_storage",
+    ("jaeger", 16686): "jaeger",
+    ("vllm-inference-service", 8000): "vllm",
+    ("vllm-embedding-service", 8000): "vllm_embedding",
+}
+# URLs a service hands the browser, so they name host ports.
+BROWSER_URLS = {
+    "NEXTAUTH_URL": "langfuse",
+    "LANGFUSE_S3_MEDIA_UPLOAD_ENDPOINT": "langfuse_storage",
+}
 
 
 class _Dumper(yaml.SafeDumper):
@@ -198,6 +217,28 @@ def _apply_environment(
         del services["otel-collector"]["environment"]
 
 
+def publish_ports(services: dict[str, Any], ports: Ports) -> None:
+    """Host ports from spec.ports, and the browser-facing URLs that name them."""
+    for name, service in services.items():
+        published = []
+        for mapping in service.get("ports", []):
+            address, container = mapping.rsplit(":", 1)
+            field_name = PUBLISHED.get((name, int(container)))
+            if field_name is None:
+                raise SetupError(f"{name} publishes {container}: no spec.ports field")
+            ip = address.rpartition(":")[
+                0
+            ]  # "127.0.0.1:7687" -> 127.0.0.1; "7687" -> ""
+            host_port = f"{getattr(ports, field_name)}:{container}"
+            published.append(f"{ip}:{host_port}" if ip else host_port)
+        if published:
+            service["ports"] = published
+        environment = service.get("environment", {})
+        for variable, field_name in BROWSER_URLS.items():
+            if str(environment.get(variable, "")).startswith("http://localhost:"):
+                environment[variable] = f"http://localhost:{getattr(ports, field_name)}"
+
+
 def build_compose(
     casting: Casting, lock: dict[str, Any], on: set[str], layout: Layout, host: Host
 ) -> dict[str, Any]:
@@ -211,6 +252,7 @@ def build_compose(
     compose["volumes"] = {name: spec or {} for name, spec in compose["volumes"].items()}
     services = compose["services"]
     _apply_environment(services, casting, on)
+    publish_ports(services, casting.spec.ports)
     services["otel-collector"].setdefault("volumes", []).insert(
         0, f"{layout.path(out / 'otel-collector.yaml')}:/etc/otelcol/config.yaml:ro"
     )
@@ -336,8 +378,8 @@ def build_env(casting: Casting) -> dict[str, str]:
     """Settings Nexo reads after .env (so the setup file wins); endpoints as the host sees them."""
     spec = casting.spec
     env = {
-        "NEO4J_URI": "bolt://localhost:7687",
-        "OTEL_EXPORTER_OTLP_ENDPOINT": "http://localhost:4318",
+        "NEO4J_URI": spec.ports.bolt,
+        "OTEL_EXPORTER_OTLP_ENDPOINT": f"http://localhost:{spec.ports.otlp}",
         "OTEL_LOGS_EXPORTER": spec.telemetry.logs,
         "TRACE_QUERY_TEXT": "true" if spec.telemetry.query_text else "false",
     }
@@ -353,10 +395,11 @@ def build_env(casting: Casting) -> dict[str, str]:
             env["REMOTE_PROFILE"] = models.remote.profile
             env["REMOTE_BASE_URL"] = f"http://localhost:{models.remote.port}/v1"
     elif models.provider == "vllm":
+        chat, embedding = vllm_urls(spec.ports)
         env |= {
-            "VLLM_BASE_URL": VLLM_URL,
+            "VLLM_BASE_URL": chat,
             "VLLM_MODEL": models.vllm.model,
-            "EMBEDDING_BASE_URL": VLLM_EMBEDDING_URL,
+            "EMBEDDING_BASE_URL": embedding,
             "EMBEDDING_MODEL": models.vllm.embedding,
         }
     for role, override in models.roles.items():
