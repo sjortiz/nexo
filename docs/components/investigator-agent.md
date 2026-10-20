@@ -22,8 +22,8 @@ sources:
   connect, directly and through multi-hop paths), the graph data model with the relation patterns
   present, example queries (alias lookup, bounded paths that skip lexical edges, neighbourhoods,
   timelines, neighbouring chunks), and how to judge evidence. It never lists steps.
-- **Two tools.** [query_knowledge_graph](query-knowledge-graph.md) and
-  [fetch_vector_chunks](fetch-vector-chunks.md), built per investigation as closures over an
+- **Three tools.** [query_knowledge_graph](query-knowledge-graph.md),
+  [fetch_vector_chunks](fetch-vector-chunks.md) and [search_chunks](search-chunks.md), built per investigation as closures over an
   `InvestigationContext` (budget, clearance, evidence ledger).
 - **Fresh agent per request.** Strands agents hold conversation state; one is built per investigation,
   while the vLLM model client is shared.
@@ -44,10 +44,11 @@ never calls a tool.[^llm]
 |---|---|---|---|
 | Loop turns | `AGENT_MAX_TURNS` | 12 | `stop_reason: limit_turns` |
 | Cumulative tokens | `AGENT_MAX_TOTAL_TOKENS` | 120000 | `stop_reason: limit_total_tokens` |
-| Tool calls | `AGENT_MAX_TOOL_CALLS` | 16 | tools return a "budget exhausted" error |
+| Tool calls | `AGENT_MAX_TOOL_CALLS`, at most `AGENT_MAX_TURNS` - 1 | 11 | tools return a "budget exhausted" error |
 | Wall clock | `AGENT_TIMEOUT_S` | 300 | investigation recorded as failed |
 
-A tripped turn or token limit becomes a `budget_exhausted` warning in [compliance](compliance-checks.md).
+Every tool result reports `tool_calls_left`, and the tool budget stops one turn before the turn limit,
+so the model is told to answer while it still can instead of needing a follow-up call. A tripped turn or token limit becomes a `budget_exhausted` warning in [compliance](compliance-checks.md).
 
 # Telemetry
 

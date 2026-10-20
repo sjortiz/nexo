@@ -1,6 +1,7 @@
 # Bundle Update Log
 
 ## 2026-10-20
+* **Update**: The investigator has a third tool, [search_chunks](components/search-chunks.md), and is told absence from the graph is not evidence of absence; tool results report calls left and the tool budget leaves a turn for the answer ([Investigator agent](components/investigator-agent.md)). `nexo eval` accepts `strategy`, `clearance` and `answer_contains` per case, and a golden set covers the sample documents ([Evaluation playbook](operations/evaluation.md)).
 * **Update**: Traces say who asked and which question: `user.id`, `session.id` and a keyed hash of the question on request and MCP spans; the question's text is opt-in (`telemetry.queryText`); review pauses no longer export the question and draft answer as an exception ([Observability](operations/observability.md#which-user-and-which-question), ADR-0009 amended).
 * **Update**: Docs checked against main: SigNoz login source corrected (the secrets provider, not `.env`), the SELinux `:z` scripts volume documented in the [SigNoz reference](references/signoz.md), [Troubleshooting](operations/troubleshooting.md) gains a local-stack and CI section, and [Testing](operations/testing.md) lists the setup and wiring suites.
 * **Update**: The keychain is an optional extra (`make install-keychain`): nothing imports `keyring` unless `secrets.provider: keychain` is chosen, so tests and CI run without it ([Testing](operations/testing.md)).
