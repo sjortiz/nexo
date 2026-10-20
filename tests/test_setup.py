@@ -11,9 +11,11 @@ from pathlib import Path
 import pytest
 import yaml
 
+from nexo import cli
 from nexo.config import Settings
 from nexo.local_profiles import plan
 from nexo.setup.check import memory_budget
+from nexo.setup import commands
 from nexo.setup.commands import model_lines
 from nexo.setup.components import COMPONENTS, MEMORY_GB, default_images
 from nexo.setup.envfile import ensure_secrets, read_env
@@ -353,3 +355,44 @@ def test_model_lines_report_off_roles_and_what_a_server_has():
     ok, text = lines[2]
     assert not ok
     assert "model not served here" in text and "bge-m3, qwen3.5:9b" in text
+
+
+def _recording_run(seen: list[list[str]], stdout=lambda _command: ""):
+    """A stand-in for subprocess.run: records each command, succeeds, prints stdout(command)."""
+
+    def run(command, **_kwargs):
+        seen.append(list(command))
+        return subprocess.CompletedProcess(
+            command, 0, stdout=stdout(command), stderr=""
+        )
+
+    return run
+
+
+@pytest.fixture(name="fake_up")
+def _fake_up(workdir, monkeypatch):
+    """`nexo setup up` in workdir with the engine, preflight and model start faked."""
+    seen: list[list[str]] = []
+    monkeypatch.chdir(workdir)
+    monkeypatch.setattr(commands.subprocess, "run", _recording_run(seen))
+    monkeypatch.setattr(commands, "detect_host", lambda _casting: MAC)
+    monkeypatch.setattr(commands, "preflight", lambda *_args: [])
+    _setup(workdir, "mac-single")
+
+    def up(*addons: str, force: bool = False) -> int:
+        argv = ["setup", "up", "--skip-models", *(f"--addon={a}" for a in addons)]
+        return cli.main(argv + (["--force"] if force else []))
+
+    return up, seen
+
+
+def test_a_plain_up_removes_add_ons_a_previous_run_enabled(workdir, fake_up):
+    """make up LANGFUSE=1, then make up: Langfuse is gone from the render and its containers go."""
+    up, seen = fake_up
+    assert up("langfuse") == 0
+    assert "langfuse-web" in (workdir / RENDER_DIR / "compose.yaml").read_text()
+    assert up() == 0
+    assert "langfuse-web" not in (workdir / RENDER_DIR / "compose.yaml").read_text()
+    compose_up = [c for c in seen if c[1:2] == ["compose"] and "up" in c]
+    assert len(compose_up) == 2
+    assert all("--remove-orphans" in c for c in compose_up)

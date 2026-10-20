@@ -38,6 +38,8 @@ from nexo.setup.schema import ADDONS, Casting, SetupError, load_casting
 log = logging.getLogger(__name__)
 PRESETS = "examples/setups"
 BLOCKING = {"engine", "secrets", "ollama"}
+# Containers of add-ons a previous run enabled are orphans of this render: remove them.
+UP = ["up", "-d", "--remove-orphans"]
 
 
 def _context(args: argparse.Namespace):
@@ -187,7 +189,7 @@ def _up(args: argparse.Namespace) -> int:
     if casting.spec.models.provider == "ollama" and not args.skip_models:
         if code := _start_models(casting):
             return code
-    if code := _compose(host, ["up", "-d"]):
+    if code := _compose(host, UP):
         return code
     for name in sorted(on & UIS.keys()):
         log.info("%s: %s", name, UIS[name])
