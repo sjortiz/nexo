@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import json
 import re
+from contextlib import nullcontext
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
+from unittest.mock import patch
 
 import httpx
 import openai
@@ -226,6 +228,58 @@ def test_agent_failure_is_audited_and_auto_rejected(settings):
     assert result.status == "completed" and result.approval_status == "rejected"
     state = _state(rt, "t9")
     assert "garbage" in state["agent_outputs"][0]["error"]
+
+
+def test_outcome_says_who_approved(settings):
+    """An approved thread names its reviewer; status stays the lifecycle state."""
+    rt = runtime(settings, FakeInvestigator([grounded_output()]))
+    assert rt.start("q", thread_id="o1").outcome == "awaiting review"
+    done = rt.review("o1", {"approval_status": "approved", "reviewer": "analyst@corp"})
+    assert done.status == "completed" and done.outcome == "approved by analyst@corp"
+    assert rt.status("o1").outcome == "approved by analyst@corp"
+
+
+def test_outcome_says_a_reviewer_rejected(settings):
+    """A person's rejection names the reviewer and their comment."""
+    rt = runtime(settings, FakeInvestigator([grounded_output()]))
+    rt.start("q", thread_id="o2")
+    done = rt.review(
+        "o2", {"approval_status": "rejected", "reviewer": "a", "comment": "unverified"}
+    )
+    assert done.status == "completed" and done.outcome == "rejected by a: unverified"
+
+
+@pytest.mark.parametrize(
+    "output", [AgentOutput(), RuntimeError("boom"), grounded_output(answer="")]
+)
+def test_outcome_shows_a_system_rejection(settings, output):
+    """No releasable output completes as rejected, and the outcome says so."""
+    result = runtime(settings, FakeInvestigator([output])).start("q", thread_id="o3")
+    assert result.status == "completed" and result.approval_status == "rejected"
+    assert result.outcome == "rejected: no releasable output"
+
+
+def test_outcome_shows_a_router_rejection(settings):
+    """A question the router refuses reads as rejected, with the router's reason."""
+    result = runtime(settings, FakeInvestigator([grounded_output()])).start(
+        "", thread_id="o4"
+    )
+    assert result.status == "completed" and result.approval_status == "not_required"
+    assert result.outcome == "rejected: empty query"
+
+
+def test_cli_summary_shows_the_outcome_of_a_completed_thread(settings, capsys):
+    """`nexo status` puts the outcome on the log line, so a rejection is not read as success."""
+    rt = runtime(settings, FakeInvestigator([AgentOutput()]))
+    rt.start("q", thread_id="o5")
+    with (
+        patch("nexo.cli.get_settings", lambda: settings),
+        patch("nexo.cli.open_runtime", lambda _settings: nullcontext(rt)),
+    ):
+        assert main(["status", "o5"]) == 0
+    assert "thread o5: completed (rejected: no releasable output)" in (
+        capsys.readouterr().err
+    )
 
 
 def test_transient_vllm_error_retries_investigation(settings):
