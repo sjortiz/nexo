@@ -27,7 +27,7 @@ from nexo.storage.graph_store import (
     UnsafeCypherError,
     validate_read_only_cypher,
 )
-from nexo.storage.schemas import CHUNK_ID_RE, ChunkRecord
+from nexo.storage.schemas import CHUNK_ID_RE, ChunkRecord, Sensitivity
 from nexo.storage.sensitive_data import NoopDetector
 from nexo.storage.vector_store import ChunkFilter
 
@@ -121,17 +121,48 @@ def collect_chunk_ids(value: Any, found: set[str]) -> None:
             collect_chunk_ids(item, found)
 
 
-def redact_above_clearance(value: Any, clearance_rank: int) -> Any:
-    """Redact node/relationship maps whose sensitivity_rank exceeds the caller's clearance.
+# Chunk text is served only by the chunk tools, through the redactor; graph
+# rows are for structure. Neo4jChunkStore keeps these on the (:Chunk) nodes.
+CHUNK_TEXT_KEYS = frozenset({"text", "search_text", "embedding"})
+_UNKNOWN_RANK = Sensitivity.PHI.rank
 
-    Only catches values projected as whole nodes; scalar projections
+
+def _rank(value: dict[str, Any]) -> int:
+    """The map's sensitivity rank; a level that cannot be read counts as phi.
+
+    Entities and edges carry `sensitivity_rank`, chunks and documents a
+    `sensitivity` level. MENTIONED_IN maps (a verbatim `surface`) carry neither,
+    so they count as phi.
+    """
+    rank = int(value.get("sensitivity_rank", 0) or 0)
+    level = value.get("sensitivity")
+    if level is not None:
+        try:
+            rank = max(rank, Sensitivity(level).rank)
+        except ValueError:
+            rank = _UNKNOWN_RANK
+    if "surface" in value and "sensitivity_rank" not in value:
+        rank = max(rank, _UNKNOWN_RANK)
+    return rank
+
+
+def redact_above_clearance(value: Any, clearance_rank: int) -> Any:
+    """Redact node/relationship maps above the caller's clearance; drop chunk text.
+
+    A map is redacted whole when its rank (see `_rank`) exceeds the clearance.
+    Chunk text, search text and embeddings are dropped from every map whatever
+    the clearance. Only catches values projected as maps; scalar projections
     (RETURN e.name) need database-side RBAC on the :PII/:PHI labels.
     """
     if isinstance(value, dict):
-        if int(value.get("sensitivity_rank", 0) or 0) > clearance_rank:
+        if _rank(value) > clearance_rank:
             return {"redacted": "above caller clearance"}
-        return {k: redact_above_clearance(v, clearance_rank) for k, v in value.items()}
-    if isinstance(value, list):
+        return {
+            k: redact_above_clearance(v, clearance_rank)
+            for k, v in value.items()
+            if k not in CHUNK_TEXT_KEYS
+        }
+    if isinstance(value, (list, tuple)):  # the driver returns relationships as tuples
         return [redact_above_clearance(v, clearance_rank) for v in value]
     return value
 

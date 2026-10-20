@@ -16,7 +16,7 @@ from nexo.storage.sensitive_data import (
     classify,
     redact,
 )
-from nexo.storage.vector_store import ChunkFilter, ChunkStore
+from nexo.storage.vector_store import ChunkFilter, ChunkStore, tokenize
 
 # Search asks the store for this many candidates per result wanted, because
 # chunks that cannot be shown still take a rank.
@@ -74,16 +74,29 @@ class ChunkRedactor:
         """Top-k chunks the caller may see, masked where needed.
 
         The store ranks the original text (its index holds it); masking happens
-        after ranking. The query is masked first, so a caller cannot probe for a
-        detected value such as an email address by searching for it.
+        after ranking. The query is masked first, so searching for a whole
+        detected value such as an email address finds nothing. A masked chunk is
+        returned only if the masked query matches its masked text (see
+        `_matches_masked`), so fragments of a masked value (an area code, the
+        local part of an address) do not find it either.
         """
         clearance = chunk_filter.max_sensitivity
         masked_query = redact(
             query, _merge(_above(self._detector.detect(query), clearance))
         )
+        terms = set(tokenize(masked_query))
         found = chunks.search(masked_query, k * OVERFETCH, self._widest(chunk_filter))
-        shown = (self.visible(r, chunk_filter) for r in found)
-        return [r for r in shown if r is not None][:k]
+        shown = []
+        for record in found:
+            view = self.visible(record, chunk_filter)
+            if view is None:
+                continue
+            if view.text != record.text and not _matches_masked(
+                terms, record.text, view.text
+            ):
+                continue
+            shown.append(view)
+        return shown[:k]
 
     @staticmethod
     def _widest(chunk_filter: ChunkFilter) -> ChunkFilter:
@@ -93,6 +106,20 @@ class ChunkRedactor:
 
 def _above(detections: list[Detection], clearance: Sensitivity) -> list[Detection]:
     return [d for d in detections if d.sensitivity.rank > clearance.rank]
+
+
+def _matches_masked(terms: set[str], original: str, masked: str) -> bool:
+    """True if the query matches the masked text without help from masked-out words.
+
+    Fails closed: at least one query term must be a word of the masked text (the
+    placeholders' own words, such as "email" from [EMAIL], do not count), and no
+    query term may be a word that masking removed. So a hit found only by its
+    embedding, which was computed over the original text, is dropped, and so is
+    one whose keyword match leans on a fragment of a masked value.
+    """
+    before = set(tokenize(original))
+    kept = set(tokenize(masked)) & before
+    return bool(terms & kept) and not terms & (before - kept)
 
 
 def _merge(detections: list[Detection]) -> list[Detection]:

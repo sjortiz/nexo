@@ -7,11 +7,14 @@ evidence with `nexo_get_chunks`. The skill in `.claude/skills/nexo-knowledge`
 tells Claude to use them in that order and cite every claim.
 
 The tools reuse the investigator's safeguards: the read-only Cypher guard and
-READ transactions, and one clearance (MCP_CLEARANCE): chunks above it are masked
+READ transactions, and one clearance (MCP_CLEARANCE). Chunks above it are masked
 by the same ChunkRedactor as the agent (detected PII replaced by [EMAIL] and the
-like) or withheld, and graph rows above it are redacted. The server has no
-per-user authentication: run it locally over stdio, or behind something that
-authenticates.
+like) or withheld; search returns a masked chunk only when the query matches its
+masked text. Graph rows are redacted when a map's rank (entities, edges) or level
+(chunks, documents) is above it, and never carry chunk text. Scalar projections
+(RETURN e.name) are not caught; on Neo4j Enterprise, database roles close that.
+The server has no per-user authentication: run it locally over stdio, or behind
+something that authenticates.
 """
 
 from __future__ import annotations
@@ -336,8 +339,8 @@ def build_mcp_server(  # pylint: disable=too-many-locals  # one closure per tool
         ],
     ) -> dict[str, Any]:
         """Run read-only Cypher for multi-hop questions the other tools do not
-        cover. Writes and procedure calls are rejected; nodes above clearance are
-        redacted."""
+        cover. Writes, procedure calls and reads of chunk text are rejected;
+        nodes above clearance are redacted. Read chunk text with nexo_get_chunks."""
         with traced_span(
             "execute_tool nexo_graph_query",
             {"gen_ai.tool.name": "nexo_graph_query", **caller},
