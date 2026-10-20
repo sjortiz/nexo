@@ -270,6 +270,30 @@ def test_extract_citations():
     ]
 
 
+def test_bare_hash_citation_resolves_to_the_one_chunk_read():
+    """A hash without chk_ counts when it starts exactly one chunk id read in the run."""
+    read = ["chk_714c2e550aacdb8f", "chk_" + "b" * 16]
+    assert extract_citations("X [chunk:714c2e550aacdb8f].", read) == [read[0]]
+    assert extract_citations("X [chunk:714c2e55, chk_714c2e550aacdb8f].", read) == [
+        read[0]
+    ]
+
+
+@pytest.mark.parametrize(
+    "cited",
+    [
+        "0123456789abcdef",  # not read in this run
+        "714c2e55",  # starts both chunk ids read in this run
+        "714c",  # too short to name a chunk
+    ],
+)
+def test_unknown_or_ambiguous_bare_hash_stays_uncited(cited):
+    """A bare hash that matches no chunk read, or more than one, is not a citation."""
+    read = ["chk_714c2e550aacdb8f", "chk_714c2e55ffffffff"]
+    assert not extract_citations(f"X [chunk:{cited}].", read)
+    assert not extract_citations("X [chunk:714c2e550aacdb8f].")  # nothing read
+
+
 # --- real Strands loop ------------------------------------------------------
 
 
@@ -537,6 +561,21 @@ def test_missing_or_uncited_answer_gets_one_follow_up(
     assert output.citations == [seed.chunk_id] and output.answer.startswith(
         "Beta Labs makes kits"
     )
+
+
+def test_bare_hash_citation_counts_without_a_follow_up(settings, chunk_store):
+    """An answer citing a seed's hash without chk_ is cited; no follow-up is asked."""
+    seed = make_chunk("kb", 0, "Beta Labs makes diagnostic kits.")
+    chunk_store.upsert([seed], [seed.text])
+    bare = seed.chunk_id.removeprefix("chk_")
+    client = ScriptedClient([_completion({"content": f"Kits [chunk:{bare}]."}, "stop")])
+    output = Investigator(
+        model=OpenAIModel(client=client, model_id="m", stream=False),
+        graph=FakeGraph(),
+        chunks=chunk_store,
+        settings=settings,
+    ).investigate("q", scope=InvestigationScope(strategy="hybrid"))
+    assert len(client.requests) == 1 and output.citations == [seed.chunk_id]
 
 
 def test_cited_answer_and_answer_without_evidence_get_no_follow_up(

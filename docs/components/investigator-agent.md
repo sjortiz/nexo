@@ -64,5 +64,9 @@ adds tool result counts. Message content is redacted unless capture is enabled
 `fetched_chunk_ids`, `fetched_sensitivity`, `withheld_chunk_ids`, `tool_calls` (tool, ok, detail,
 duration), `stop_reason`, `usage` and `error`.
 
+A citation written without the `chk_` prefix (`[chunk:714c2e550aacdb8f]`, or the hash cut to at
+least 8 characters) counts only when it starts exactly one chunk id the run received; an unknown or
+ambiguous hash stays uncited rather than guessed.[^investigator]
+
 [^investigator]: Investigator
 [^llm]: build_strands_model

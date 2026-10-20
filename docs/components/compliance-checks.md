@@ -20,7 +20,7 @@ sources:
 |---|---|---|
 | `investigation_failed` | block | The agent raised, timed out or produced no output. The run is auto-rejected with no human step. |
 | `empty_answer` | block | The agent returned no text (auto-rejected). |
-| `no_citations` | block | The answer cites no `[chunk:<id>]`. |
+| `no_citations` | block | The answer cites no `[chunk:<id>]` (a bare hash counts only if it names exactly one chunk the agent read). |
 | `ungrounded_citations` | block | A cited id was never returned to the agent; the citation is fabricated or guessed. |
 | `phi_in_evidence` | block | A cited chunk is classified `phi`; confirm minimum-necessary disclosure. |
 | `pii_in_evidence` | warn | A cited chunk is classified `pii` (and none is `phi`). |
