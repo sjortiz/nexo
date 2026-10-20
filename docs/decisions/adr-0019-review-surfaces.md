@@ -31,7 +31,7 @@ by the read-time redactor), and `review` records the decision. No surface owns r
 | Surface | Status | Why |
 |---|---|---|
 | Review over MCP | Supported default | The reviewer is already in an MCP client; the server asks the human to confirm, so the model cannot approve alone. |
-| LangChain Agent Inbox | Opt-in | An inbox UI for teams that already run one. |
+| LangChain Agent Inbox | Opt-in | An inbox UI for teams that already run one; a small adapter stands in for LangGraph Server, which is not open source, and every decision still goes through `review` ([how](../operations/agent-inbox.md)). |
 | Local web page | Demo only | Shows the flow without an MCP client; not hardened. |
 | `nexo review` | Always available | The fallback every other surface can print. |
 

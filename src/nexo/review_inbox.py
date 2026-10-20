@@ -66,7 +66,7 @@ def _passages_markdown(passages: list[dict[str, Any]], clearance: str) -> str:
             quoted = "\n".join(f"> {line}" for line in (p["text"] or "").splitlines())
             lines.append(f"{head} {p['source']} ({p['classification']})\n\n{quoted}")
         elif p["status"] == "withheld":
-            lines.append(f"{head} withheld: above clearance `{clearance}`")
+            lines.append(f"{head} withheld at your clearance (`{clearance}`)")
         else:
             lines.append(f"{head} not found")
     return "\n\n".join(lines)
@@ -315,148 +315,157 @@ def allowed_origins(inbox_port: int) -> frozenset[str]:
     return frozenset({f"http://127.0.0.1:{inbox_port}"})
 
 
+class _Handler(BaseHTTPRequestHandler):
+    """Routes for one adapter; make_handler binds adapter, origins and hosts."""
+
+    server_version = "nexo-review-inbox"
+    adapter: InboxAdapter
+    origins: frozenset[str]
+    hosts: frozenset[str]
+
+    def log_message(self, *args: Any) -> None:  # quiet: threads hold question ids
+        pass
+
+    # -- plumbing ------------------------------------------------------
+    def _cors(self) -> None:
+        origin = self.headers.get("Origin")
+        if origin in self.origins:
+            self.send_header("Access-Control-Allow-Origin", origin)
+            self.send_header("Vary", "Origin")
+
+    def _send(self, status: int, payload: Any) -> None:
+        data = json.dumps(payload).encode()
+        self.send_response(status)
+        self._cors()
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(data)))
+        self.end_headers()
+        self.wfile.write(data)
+
+    def _guard(self, *, write: bool) -> bool:
+        """Reject other hosts (DNS rebinding) and other origins (a web page's request)."""
+        origin = self.headers.get("Origin")
+        problem = None
+        if self.headers.get("Host") not in self.hosts:
+            problem = "unknown host"
+        elif origin is not None and origin not in self.origins:
+            problem = "origin not allowed"
+        elif write and origin is None:
+            problem = "origin required"
+        elif write and not (self.headers.get("Content-Type") or "").startswith(
+            "application/json"
+        ):
+            problem = "content type must be application/json"
+        if problem:
+            self._send(403, {"detail": problem})
+        return problem is None
+
+    def _body(self) -> dict[str, Any]:
+        length = int(self.headers.get("Content-Length") or 0)
+        if length > BODY_LIMIT:
+            raise InboxError(413, "request too large")
+        try:
+            body = json.loads(self.rfile.read(length) or b"{}")
+        except ValueError as exc:
+            raise InboxError(400, "body is not JSON") from exc
+        if not isinstance(body, dict):
+            raise InboxError(400, "body must be an object")
+        return body
+
+    def _run(self, write: bool, handle) -> None:
+        if not self._guard(write=write):
+            return
+        try:
+            handle()
+        except InboxError as exc:
+            self._send(exc.status, {"detail": exc.message})
+        except (TypeError, ValueError) as exc:
+            self._send(400, {"detail": f"bad request: {exc}"})
+
+    # -- routes --------------------------------------------------------
+    def do_OPTIONS(self) -> None:  # pylint: disable=invalid-name
+        """CORS preflight: answered only for the inbox's origin."""
+        if self.headers.get("Origin") not in self.origins or (
+            self.headers.get("Host") not in self.hosts
+        ):
+            self._send(403, {"detail": "origin not allowed"})
+            return
+        self.send_response(204)
+        self._cors()
+        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+        self.send_header(
+            "Access-Control-Allow-Headers", "content-type, x-api-key, x-request-id"
+        )
+        self.send_header("Access-Control-Max-Age", "600")
+        self.end_headers()
+
+    def do_GET(self) -> None:  # pylint: disable=invalid-name
+        """GET /ok, /info, /threads/{id}, /threads/{id}/state."""
+
+        def handle() -> None:
+            path = self.path.split("?")[0]
+            match = THREAD.match(path)
+            if path == "/ok":
+                self._send(200, {"ok": True})
+            elif path == "/info":
+                self._send(200, self.adapter.info())
+            elif match and match.group(2) is None:
+                self._send(200, self.adapter.get_thread(match.group(1)))
+            elif match and match.group(2) == "/state":
+                self._send(200, self.adapter.get_state(match.group(1)))
+            else:
+                raise InboxError(404, "not found")
+
+        self._run(False, handle)
+
+    def do_POST(self) -> None:  # pylint: disable=invalid-name
+        """POST /threads/search, /threads/{id}/runs[/stream]; /state is refused."""
+
+        def handle() -> None:
+            path = self.path.split("?")[0]
+            match = THREAD.match(path)
+            if path == "/threads/search":
+                self._send(200, self.adapter.search(self._body()))
+            elif match and match.group(2) == "/state":
+                self.adapter.refuse_state_update()
+            elif match and match.group(2) == "/runs":
+                self._send(200, self.adapter.decide(match.group(1), self._body()))
+            elif match and match.group(2) == "/runs/stream":
+                run = self.adapter.decide(match.group(1), self._body())
+                self._stream(run)
+            else:
+                raise InboxError(404, "not found")
+
+        self._run(True, handle)
+
+    def _stream(self, run: dict[str, Any]) -> None:
+        events = [
+            ("metadata", {"run_id": run["run_id"]}),
+            ("values", {}),
+            ("end", None),
+        ]
+        text = "".join(
+            f"event: {name}\ndata: {json.dumps(data)}\n\n" for name, data in events
+        )
+        data = text.encode()
+        self.send_response(200)
+        self._cors()
+        self.send_header("Content-Type", "text/event-stream")
+        self.send_header("Content-Length", str(len(data)))
+        self.end_headers()
+        self.wfile.write(data)
+
+
 def make_handler(
     adapter: InboxAdapter, origins: frozenset[str], port: int
 ) -> type[BaseHTTPRequestHandler]:
     """The request handler class for one adapter, origin list and listening port."""
-    hosts = {f"127.0.0.1:{port}", f"localhost:{port}"}
-
-    class Handler(BaseHTTPRequestHandler):  # pylint: disable=missing-class-docstring
-        server_version = "nexo-review-inbox"
-
-        def log_message(self, *args: Any) -> None:  # quiet: threads hold question ids
-            pass
-
-        # -- plumbing ------------------------------------------------------
-        def _cors(self) -> None:
-            origin = self.headers.get("Origin")
-            if origin in origins:
-                self.send_header("Access-Control-Allow-Origin", origin)
-                self.send_header("Vary", "Origin")
-
-        def _send(self, status: int, payload: Any) -> None:
-            data = json.dumps(payload).encode()
-            self.send_response(status)
-            self._cors()
-            self.send_header("Content-Type", "application/json")
-            self.send_header("Content-Length", str(len(data)))
-            self.end_headers()
-            self.wfile.write(data)
-
-        def _guard(self, *, write: bool) -> bool:
-            """Reject other hosts (DNS rebinding) and other origins (a web page's request)."""
-            origin = self.headers.get("Origin")
-            problem = None
-            if self.headers.get("Host") not in hosts:
-                problem = "unknown host"
-            elif origin is not None and origin not in origins:
-                problem = "origin not allowed"
-            elif write and origin is None:
-                problem = "origin required"
-            elif write and not (self.headers.get("Content-Type") or "").startswith(
-                "application/json"
-            ):
-                problem = "content type must be application/json"
-            if problem:
-                self._send(403, {"detail": problem})
-            return problem is None
-
-        def _body(self) -> dict[str, Any]:
-            length = int(self.headers.get("Content-Length") or 0)
-            if length > BODY_LIMIT:
-                raise InboxError(413, "request too large")
-            try:
-                body = json.loads(self.rfile.read(length) or b"{}")
-            except ValueError as exc:
-                raise InboxError(400, "body is not JSON") from exc
-            if not isinstance(body, dict):
-                raise InboxError(400, "body must be an object")
-            return body
-
-        def _run(self, write: bool, handle) -> None:
-            if not self._guard(write=write):
-                return
-            try:
-                handle()
-            except InboxError as exc:
-                self._send(exc.status, {"detail": exc.message})
-            except (TypeError, ValueError) as exc:
-                self._send(400, {"detail": f"bad request: {exc}"})
-
-        # -- routes --------------------------------------------------------
-        def do_OPTIONS(self) -> None:  # pylint: disable=invalid-name
-            """CORS preflight: answered only for the inbox's origin."""
-            if self.headers.get("Origin") not in origins or (
-                self.headers.get("Host") not in hosts
-            ):
-                self._send(403, {"detail": "origin not allowed"})
-                return
-            self.send_response(204)
-            self._cors()
-            self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-            self.send_header(
-                "Access-Control-Allow-Headers", "content-type, x-api-key, x-request-id"
-            )
-            self.send_header("Access-Control-Max-Age", "600")
-            self.end_headers()
-
-        def do_GET(self) -> None:  # pylint: disable=invalid-name
-            """GET /ok, /info, /threads/{id}, /threads/{id}/state."""
-
-            def handle() -> None:
-                path = self.path.split("?")[0]
-                match = THREAD.match(path)
-                if path == "/ok":
-                    self._send(200, {"ok": True})
-                elif path == "/info":
-                    self._send(200, adapter.info())
-                elif match and match.group(2) is None:
-                    self._send(200, adapter.get_thread(match.group(1)))
-                elif match and match.group(2) == "/state":
-                    self._send(200, adapter.get_state(match.group(1)))
-                else:
-                    raise InboxError(404, "not found")
-
-            self._run(False, handle)
-
-        def do_POST(self) -> None:  # pylint: disable=invalid-name
-            """POST /threads/search, /threads/{id}/runs[/stream]; /state is refused."""
-
-            def handle() -> None:
-                path = self.path.split("?")[0]
-                match = THREAD.match(path)
-                if path == "/threads/search":
-                    self._send(200, adapter.search(self._body()))
-                elif match and match.group(2) == "/state":
-                    adapter.refuse_state_update()
-                elif match and match.group(2) == "/runs":
-                    self._send(200, adapter.decide(match.group(1), self._body()))
-                elif match and match.group(2) == "/runs/stream":
-                    run = adapter.decide(match.group(1), self._body())
-                    self._stream(run)
-                else:
-                    raise InboxError(404, "not found")
-
-            self._run(True, handle)
-
-        def _stream(self, run: dict[str, Any]) -> None:
-            events = [
-                ("metadata", {"run_id": run["run_id"]}),
-                ("values", {}),
-                ("end", None),
-            ]
-            text = "".join(
-                f"event: {name}\ndata: {json.dumps(data)}\n\n" for name, data in events
-            )
-            data = text.encode()
-            self.send_response(200)
-            self._cors()
-            self.send_header("Content-Type", "text/event-stream")
-            self.send_header("Content-Length", str(len(data)))
-            self.end_headers()
-            self.wfile.write(data)
-
-    return Handler
+    hosts = frozenset({f"127.0.0.1:{port}", f"localhost:{port}"})
+    return type(
+        "Handler",
+        (_Handler,),
+        {"adapter": adapter, "origins": origins, "hosts": hosts},
+    )
 
 
 def build_server(
