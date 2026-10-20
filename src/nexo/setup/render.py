@@ -45,6 +45,7 @@ ORDER = (
     "hostMetrics",
     "langfuse",
     "jaeger",
+    "agentInbox",
     "vllm",
     "app",
 )
@@ -179,6 +180,26 @@ def _app_environment(casting: Casting, host: Host) -> dict[str, str]:
     return env
 
 
+def inbox_ports(casting: Casting) -> tuple[int, int]:
+    """(Agent Inbox page, review adapter) host ports: addons.agentInbox.config port, adapterPort.
+
+    Defaults until spec.ports (PR 13) exists; both are published on 127.0.0.1 only.
+    """
+    addon = casting.spec.addons.get("agentInbox")
+    config = addon.config if addon is not None else {}
+    ports = (config.get("port", 3030), config.get("adapterPort", 2024))
+    for key, port in zip(("port", "adapterPort"), ports):
+        if (
+            not isinstance(port, int)
+            or isinstance(port, bool)
+            or not 1 <= port <= 65535
+        ):
+            raise SetupError(f"addons.agentInbox.config.{key}: expected a port")
+    if ports[0] == ports[1]:
+        raise SetupError("addons.agentInbox.config: port and adapterPort must differ")
+    return ports
+
+
 def _apply_environment(
     services: dict[str, Any], casting: Casting, on: set[str]
 ) -> None:
@@ -191,6 +212,9 @@ def _apply_environment(
             main = services[component.main].setdefault("environment", {})
             main.update(overrides[name].env)
         collector.update(component.collector_env)
+    if "agentInbox" in on:
+        page = inbox_ports(casting)[0]
+        services["agent-inbox"]["ports"] = [f"127.0.0.1:{page}:3000"]
     if "langsmith" in on:
         langsmith = casting.spec.addons.get("langsmith")
         collector["LANGSMITH_PROJECT"] = (langsmith and langsmith.project) or "nexo"
@@ -359,6 +383,10 @@ def build_env(casting: Casting) -> dict[str, str]:
             "EMBEDDING_BASE_URL": VLLM_EMBEDDING_URL,
             "EMBEDDING_MODEL": models.vllm.embedding,
         }
+    inbox = spec.addons.get("agentInbox")
+    if inbox is not None and inbox.config:
+        page, adapter = inbox_ports(casting)
+        env |= {"AGENT_INBOX_PORT": str(page), "REVIEW_INBOX_PORT": str(adapter)}
     for role, override in models.roles.items():
         if override.model:
             env[f"{role.upper()}_MODEL"] = override.model
