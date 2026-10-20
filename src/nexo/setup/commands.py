@@ -74,9 +74,9 @@ def _compose(host: Host, args: list[str]) -> int:
     return subprocess.run(command, check=False).returncode
 
 
-def _captured(command: list[str]) -> str:
+def _captured(command: list[str], *, stderr: bool = True) -> str:
     result = subprocess.run(command, capture_output=True, text=True, check=False)
-    return (result.stdout or "") + (result.stderr or "")
+    return (result.stdout or "") + ((result.stderr or "") if stderr else "")
 
 
 def _explain(host: Host, failed: list[str]) -> None:
@@ -93,7 +93,9 @@ def _wait_for_services(host: Host) -> int:
     """Until every service runs (one-shot jobs may exit 0); 1 when one fails or hangs."""
     deadline = time.monotonic() + WAIT_S
     while True:
-        ps = _captured(_compose_command(host) + ["ps", "--all", "--format", "json"])
+        ps = _captured(
+            _compose_command(host) + ["ps", "--all", "--format", "json"], stderr=False
+        )
         failed, waiting = assess(parse_ps(ps))
         if failed:
             _explain(host, failed)

@@ -31,7 +31,7 @@ from nexo.setup.render import (
     render,
 )
 from nexo.setup.schema import SetupError, load_casting
-from nexo.setup.status import assess, stale_volume_hint
+from nexo.setup.status import assess, parse_ps, stale_volume_hint
 
 ROOT = Path(__file__).resolve().parent.parent
 PRESETS = ROOT / "examples/setups"
@@ -639,3 +639,15 @@ def test_validation_errors_carry_no_documentation_links(workdir):
         load_casting(path)
     assert "pydantic" not in str(raised.value) and "http" not in str(raised.value)
     assert "spec.addons.x" in str(raised.value)
+
+
+def test_parse_ps_skips_podman_compose_banners():
+    """podman compose prints its provider banner; the JSON lines around it still parse."""
+    banner = (
+        '>>>> Executing external compose provider "/usr/local/bin/docker-compose". '
+        "Please see podman-compose(1) for how to disable this message. <<<<"
+    )
+    lines = SIGNOZ_FAILED.splitlines()
+    assert len(parse_ps("\n".join([banner, "", *lines]))) == 3
+    assert len(parse_ps(banner + "\n[" + ",".join(lines) + "]\n")) == 3
+    assert not parse_ps(banner)
