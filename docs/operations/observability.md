@@ -99,18 +99,19 @@ The application exports OTLP to the collector; the collector chooses the backend
 | SigNoz (default) | `make up`; the collector exports traces, metrics and logs over OTLP gRPC to `signoz-ingester`[^collector] | http://localhost:8080; log in with `SIGNOZ_USER_EMAIL` / `SIGNOZ_USER_PASSWORD` from `.env`[^signoz] |
 | Langfuse (add-on) | `make up LANGFUSE=1`; pipeline from `deploy/otel-addons/langfuse.yaml`: OTLP/HTTP to `/api/public/otel`, Basic auth with the `nexo` project keys, `x-langfuse-ingestion-version: 4`[^collector] | http://localhost:3000; log in with `LANGFUSE_USER_EMAIL` / `LANGFUSE_USER_PASSWORD` from `.env` |
 | Jaeger (add-on) | `make up JAEGER=1`; pipeline `traces/jaeger`[^addons] | http://localhost:16686 |
-| LangSmith (add-on) | `make up LANGSMITH=1` with `LANGSMITH_API_KEY` and `LANGSMITH_PROJECT` in `.env`; pipeline `traces/langsmith` | LangSmith project |
+| LangSmith (add-on) | `make up LANGSMITH=1` (or `addons.langsmith` in `nexo.yaml`, with its `project`) and `LANGSMITH_API_KEY` in `.env`; pipeline `traces/langsmith` | LangSmith project |
 | Prometheus metrics | always | http://127.0.0.1:8889/metrics |
 
-Add-ons can be combined. Each one runs the same content-stripping processors as the main pipeline; a
-disabled add-on loads `deploy/otel-addons/none.yaml`. Do not enable `LANGSMITH_TRACING` in the
+Add-ons can be combined: `addons:` in `nexo.yaml`, or `LANGFUSE=1`, `JAEGER=1`, `LANGSMITH=1` for one
+run. Each one runs the same content-stripping processors as the main pipeline; `nexo setup` merges
+the enabled ones into the rendered collector config, and a disabled add-on is not rendered at all. Do not enable `LANGSMITH_TRACING` in the
 application, or traces are duplicated.
 
 Host and container metrics: the collector's `host_metrics` receiver (CPU, load, memory, paging and
 disk from the container's `/proc`, which reports the host's; root filesystem usage from a read-only
 `/hostfs` mount) and `docker_stats` receiver (per-container CPU, memory, network and I/O, from the
 container engine's socket) feed SigNoz as an infrastructure view, with `host.name` set to the machine's
-name by `make up`. On macOS the host is the Podman VM, not the Mac, and Ollama runs outside it. The
+name by `nexo setup`. On macOS the host is the Podman VM, not the Mac, and Ollama runs outside it. The
 collector runs as root in its container to read the socket (with rootless Podman, the unprivileged
 socket owner), with SELinux labeling off for that container so Podman's VM lets it connect.
 

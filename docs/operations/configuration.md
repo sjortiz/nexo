@@ -15,8 +15,9 @@ sources:
     title: Environment template
 ---
 
-Settings load from the environment or `.env` (names are case-insensitive). A test fails if a setting
-is missing from this page.[^config] Template: `.env.example`.[^env]
+Settings load from the environment, then `.nexo/render/nexo.env` (rendered from `nexo.yaml` by
+`nexo setup`), then `.env` (names are case-insensitive). A test fails if a setting is missing from
+this page.[^config] Template: `.env.example`.[^env]
 
 # Schema
 
@@ -47,9 +48,9 @@ hosts ([Local on Apple Silicon](local-apple-silicon.md)).
 
 | Variable | Default | Effect |
 |---|---|---|
-| `LOCAL_PROFILE` | unset | Profile of the machine running Nexo: `m1-max-64`, `m5-pro-24` (Apple), `gpu-24` (Linux GPU VRAM), `cpu-64` (RAM). Alone: this machine serves every role. |
+| `LOCAL_PROFILE` | unset | Profile of the machine running Nexo: `m1-max-64`, `m5-pro-24` (Apple), `gpu-24` (Linux GPU VRAM), `cpu-64` (RAM). Alone: this machine serves every role. Set by `nexo.yaml` (`models.local.profile`). |
 | `LOCAL_BASE_URL` | `http://localhost:11434/v1` | This machine's Ollama (from a container: `host.containers.internal` on macOS, `127.0.0.1` with host networking on Linux). |
-| `REMOTE_PROFILE` | unset | Profile of a second machine (Mac or Linux GPU box) that serves the agent and extraction models. Requires `LOCAL_PROFILE`. |
+| `REMOTE_PROFILE` | unset | Profile of a second machine (Mac or Linux GPU box) that serves the agent and extraction models. Requires `LOCAL_PROFILE`. Set by `nexo.yaml` (`models.remote.profile`). |
 | `REMOTE_BASE_URL` | `http://localhost:11435/v1` | The second Mac's Ollama, usually through an SSH tunnel. |
 
 **Embeddings**
@@ -140,7 +141,7 @@ hosts ([Local on Apple Silicon](local-apple-silicon.md)).
 | `OTEL_SERVICE_NAME` | `nexo` | `service.name` resource attribute. |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | unset | OTLP/HTTP base URL; unset disables export. |
 | `OTEL_CONSOLE_EXPORT` | `false` | Print spans to stdout. |
-| `OTEL_LOGS_EXPORTER` | `none` | `otlp` also sends log records to the collector, with trace ids; `result` payloads only with content capture on. Stored by SigNoz; the local template sets `otlp`. |
+| `OTEL_LOGS_EXPORTER` | `none` | `otlp` also sends log records to the collector, with trace ids; `result` payloads only with content capture on. Stored by SigNoz; `nexo.yaml` sets it (`telemetry.logs`, default `otlp`). |
 | `OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT` | `no_content` | `span_only` / `span_and_event` put prompts, outputs and agent Cypher on spans (may carry PII). Standard GenAI variable. |
 | `OTEL_SEMCONV_STABILITY_OPT_IN` | derived | Strands conventions and redaction; derived from content capture unless set. |
 | `OTEL_INSTRUMENT_OPENAI` | `true` | Official GenAI instrumentation of the openai SDK (one `chat {model}` span per vLLM call). |

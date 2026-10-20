@@ -1,16 +1,22 @@
 ---
 type: Playbook
 title: Compose stack with vLLM
-description: Bring up Neo4j, vLLM on GPUs, observability with SigNoz and the CLI with Docker Compose.
-resource: ../../docker-compose.yml
+description: Bring up Neo4j, vLLM on GPUs, observability with SigNoz and the CLI with nexo setup (the linux-vllm preset).
+resource: ../../examples/setups/linux-vllm/nexo.yaml
 tags: [operations, deployment, docker, vllm]
 status: draft
-generated: { by: claude-code/claude-opus-5-5, at: 2026-10-19T20:14:37Z }
+generated: { by: claude-code/claude-opus-5-5, at: 2026-10-20T16:00:00Z }
 stale_after: 2027-04-19T00:00:00Z
 sources:
-  - id: compose
-    resource: ../../docker-compose.yml
-    title: Docker Compose stack
+  - id: preset
+    resource: ../../examples/setups/linux-vllm/nexo.yaml
+    title: linux-vllm preset
+  - id: components
+    resource: ../../src/nexo/setup/components.py
+    title: Components and their fragments
+  - id: vllm
+    resource: ../../deploy/compose/vllm.yaml
+    title: vLLM compose fragment
   - id: otel
     resource: ../../deploy/otel-collector.yaml
     title: OTEL collector config
@@ -24,40 +30,42 @@ sources:
 
 # Services
 
-| Service | Where | Notes |
-|---|---|---|
-| `neo4j` | `docker-compose.yml` | `neo4j:5.26-community`, ports bound to `127.0.0.1`. |
-| `otel-collector` | `docker-compose.yml` | OTLP/HTTP on `127.0.0.1:4318`; strips content attributes and events; traces, metrics and logs to SigNoz, plus host and container metrics; metrics also on `127.0.0.1:8889` (Prometheus format). |
-| `signoz` | `deploy/signoz/compose.yml` (included) | SigNoz v0.146.0; UI on http://localhost:8080. |
-| `signoz-ingester`, `signoz-clickhouse`, `signoz-keeper`, `signoz-postgres`, plus two one-shot jobs | `deploy/signoz/compose.yml` | Ingester v0.144.14, ClickHouse and Keeper 25.12.5, Postgres 16; schema migrator and UDF install. |
-| `langfuse-web`, `langfuse-worker` | `deploy/langfuse/compose.yml`, profile `langfuse` | Add-on (`make up LANGFUSE=1`); Langfuse 4.64.0; UI on http://localhost:3000. |
-| `langfuse-postgres`, `langfuse-clickhouse`, `langfuse-redis`, `langfuse-storage` | `deploy/langfuse/compose.yml`, profile `langfuse` | Postgres 17, ClickHouse 25.12, Redis 7, SeaweedFS 4.48 (S3, on `127.0.0.1:9090`). |
-| `jaeger` | `docker-compose.yml`, profile `jaeger` | Add-on (`make up JAEGER=1`); UI on http://localhost:16686. |
-| `vllm-inference-service` | `docker-compose.gpu.yml` | Llama 3.3 70B, tensor-parallel 4 (4×80 GB GPUs), tool calling enabled. |
-| `vllm-embedding-service` | `docker-compose.gpu.yml` | BAAI/bge-m3 on 1 GPU. |
-| `nexo` | `docker-compose.yml`, profile `app` | The CLI image. |
+`nexo setup` renders one compose file with the services `nexo.yaml` turns on, from fragments under
+`deploy/` ([How local setup works](local-setup.md)).[^components]
 
-Compose refuses to start without `NEO4J_PASSWORD` and the SigNoz secrets (`make env` generates
-them), and with the GPU file also without `VLLM_IMAGE_TAG`, `VLLM_API_KEY`, `HF_TOKEN` and
-`EMBEDDING_API_KEY`, so an unpinned image or an empty secret never ships silently.[^compose] The vLLM services live in their own file because Compose checks required variables
-for every service it loads; local runs with Ollama do not need them.
+| Service | Fragment | Notes |
+|---|---|---|
+| `neo4j` | `deploy/compose/neo4j.yaml` | `neo4j:5.26-community`, ports bound to `127.0.0.1`. |
+| `otel-collector` | `deploy/compose/otel-collector.yaml` | OTLP/HTTP on `127.0.0.1:4318`; strips content attributes and events; traces, metrics and logs to SigNoz; metrics also on `127.0.0.1:8889` (Prometheus format). Host and container metrics with `addons.hostMetrics` (on by default). |
+| `signoz` | `deploy/signoz/compose.yml` | SigNoz v0.146.0; UI on http://localhost:8080. |
+| `signoz-ingester`, `signoz-clickhouse`, `signoz-keeper`, `signoz-postgres`, plus two one-shot jobs | `deploy/signoz/compose.yml` | Ingester v0.144.14, ClickHouse and Keeper 25.12.5, Postgres 16; schema migrator and UDF install. |
+| `langfuse-web`, `langfuse-worker` | `deploy/langfuse/compose.yml` | Add-on (`addons.langfuse`, or `make up LANGFUSE=1`); Langfuse 4.64.0; UI on http://localhost:3000. |
+| `langfuse-postgres`, `langfuse-clickhouse`, `langfuse-redis`, `langfuse-storage` | `deploy/langfuse/compose.yml` | Postgres 17, ClickHouse 25.12, Redis 7, SeaweedFS 4.48 (S3, on `127.0.0.1:9090`). |
+| `jaeger` | `deploy/compose/jaeger.yaml` | Add-on (`addons.jaeger`, or `make up JAEGER=1`); UI on http://localhost:16686. |
+| `vllm-inference-service` | `deploy/compose/vllm.yaml` | `models.provider: vllm`: Llama 3.3 70B, tensor-parallel 4 (4×80 GB GPUs), tool calling enabled; `127.0.0.1:8000`. |
+| `vllm-embedding-service` | `deploy/compose/vllm.yaml` | BAAI/bge-m3 on 1 GPU; `127.0.0.1:8001`. |
+| `nexo` | `deploy/compose/nexo.yaml` | The CLI image (`make app`); not started by `make up`. |
+
+The vLLM image is pinned in its fragment and recorded in `nexo.lock`; `models.vllm` sets the model
+and GPU count.[^vllm] Compose refuses to start without `NEO4J_PASSWORD`, the SigNoz secrets,
+`VLLM_API_KEY`, `EMBEDDING_API_KEY` and `HF_TOKEN`; `make env` generates all but `HF_TOKEN`, and
+`make check` names it when it is missing.
 
 # Steps
 
-1. `cp .env.example .env`, fill in the vLLM secrets and pin `VLLM_IMAGE_TAG` to a vLLM release; then
-   `make env` fills `NEO4J_PASSWORD`, the SigNoz secrets and the Langfuse secrets with random values (existing values are kept).
-2. `make up`, or `docker compose up -d neo4j otel-collector signoz`. Log in to
+1. `make env PRESET=linux-vllm`: `nexo.yaml` from the preset, `.env` with random secrets (existing
+   values are kept). Add `HF_TOKEN` (the model is gated) to `.env`.[^preset]
+2. `make check`, then `make up`: Neo4j, the collector, SigNoz and both vLLM services (the first start
+   downloads ~140 GB of weights; the health check allows 15 minutes). Log in to
    http://localhost:8080 with `SIGNOZ_USER_EMAIL` (default `admin@nexo.local`) and `SIGNOZ_USER_PASSWORD`.
-3. `docker compose -f docker-compose.yml -f docker-compose.gpu.yml up -d` (first start downloads ~140 GB of weights; the health check
-   allows 15 minutes).
-4. `uv sync` and run the CLI locally, or use the container:
-   `docker compose --profile app run --rm nexo ingest /corpus/memo.md --doc-type memo`
-   (`./corpus` is mounted read-only at `/corpus`).
-5. `nexo ask "..."`, then `nexo review <thread_id> --approve --reviewer <you>`.
+3. `uv sync` and run the CLI locally (`nexo.env` points it at `localhost:8000` and `:8001`), or use
+   the container: `make app ARGS="ingest /corpus/memo.md --doc-type memo"` (`./corpus` is mounted
+   read-only at `/corpus`).
+4. `nexo ask "..."`, then `nexo review <thread_id> --approve --reviewer <you>`.
 
-Without GPUs, point `VLLM_BASE_URL` at any OpenAI-compatible server with tool calling, and set
-`EMBEDDING_PROVIDER=fake` for a dry run. On a Mac, use a hardware profile with Ollama instead:
-[Local on Apple Silicon](local-apple-silicon.md).
+Without GPUs, use `provider: openai-compatible` with `models.roles` pointing at any OpenAI-compatible
+server with tool calling, and set `EMBEDDING_PROVIDER=fake` in `.env` for a dry run. On a Mac, use a
+hardware profile with Ollama instead: [Local on Apple Silicon](local-apple-silicon.md).
 
 # Tracing
 
@@ -67,17 +75,19 @@ before export, as a second line behind `OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSA
 then sends traces, metrics and logs to SigNoz.[^otel] SigNoz publishes only its UI, on `127.0.0.1`, with
 stats reporting off; the root user is provisioned from `.env`.[^signoz]
 
-Add-ons, opt-in and combinable, each a pipeline in `deploy/otel-addons/` with the same processors
-([ADR-0015](../decisions/adr-0015-signoz-default-observability.md)):
+Add-ons, opt-in and combinable, each a pipeline in `deploy/otel-addons/` with the same processors,
+merged into the rendered collector config ([ADR-0015](../decisions/adr-0015-signoz-default-observability.md)):
 
-- Langfuse (evaluation): `make up LANGFUSE=1`, or `OTEL_LANGFUSE=langfuse docker compose --profile langfuse up -d neo4j otel-collector signoz langfuse-web langfuse-worker`.
+- Langfuse (evaluation): `addons.langfuse.enabled: true`, or `make up LANGFUSE=1` for one run.
   Langfuse publishes only its UI and storage, on `127.0.0.1`, with usage telemetry off; a headless setup creates
   the `nexo` project, its API keys and the login (`LANGFUSE_USER_EMAIL` / `LANGFUSE_USER_PASSWORD`).[^langfuse]
-- Jaeger: `make up JAEGER=1`, or `OTEL_JAEGER=jaeger docker compose up -d neo4j otel-collector signoz jaeger`.
-- LangSmith: set `LANGSMITH_API_KEY` and `LANGSMITH_PROJECT` in `.env`, then `make up LANGSMITH=1`, or
-  `OTEL_LANGSMITH=langsmith` before the same `docker compose up`.
+- Jaeger: `addons.jaeger.enabled: true`, or `make up JAEGER=1`.
+- LangSmith: `LANGSMITH_API_KEY` in `.env` and `addons.langsmith` (`project`, default `nexo`), or
+  `make up LANGSMITH=1`.
 
-[^compose]: Docker Compose stack
+[^preset]: linux-vllm preset
+[^components]: Components and their fragments
+[^vllm]: vLLM compose fragment
 [^otel]: OTEL collector config
 [^signoz]: SigNoz compose file
 [^langfuse]: Langfuse compose file
