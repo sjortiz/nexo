@@ -7,12 +7,12 @@ Overview: [sjortiz.github.io/nexo](https://sjortiz.github.io/nexo/). Step by ste
 [Jupyter notebook](examples/walkthrough.ipynb).
 
 ```
-            ┌────────────── LangGraph StateGraph (checkpointed) ──────────────┐
+            ┌─────────────── LangGraph StateGraph (checkpointed) ──────────────┐
 request ──► │ router ──► investigator ─────────────► compliance ──interrupt──► │──► reviewer approves ──► answer
-            │   │          │ @task: Strands Agent        (pure checks)       │
-            │   ▼          │   ├─ query_knowledge_graph ──► Neo4j (READ tx)  │
-            │  END         │   └─ fetch_vector_chunks  ──► chunk store       │
-            └──────────────┴─────────────── vLLM (OpenAI API) ───────────────┘
+            │   │          │ @task: Strands Agent        (pure checks)         │
+            │   ▼          │   ├─ query_knowledge_graph ──► Neo4j (READ tx)    │
+            │  END         │   └─ fetch_vector_chunks  ──► chunk store         │
+            └──────────────┴──────────────── vLLM (OpenAI API) ────────────────┘
 ingest: document ─► heading-aware chunks ─► embeddings ─► chunk store
                                          └► vLLM triple extraction ─► evidence check ─► ontology ─► entity resolution
                                             ─► Neo4j: Document/Chunk lexical graph + entities (chunk_id on every node/edge)
