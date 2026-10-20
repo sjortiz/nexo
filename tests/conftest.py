@@ -58,9 +58,10 @@ def memory_keychain(tmp_path_factory, monkeypatch):
     backend = MemoryKeyring()
     previous = keyring.get_keyring()
     keyring.set_keyring(backend)
-    monkeypatch.setenv("NEXO_CONFIG_DIR", str(tmp_path_factory.mktemp("nexo-config")))
     for key in [k for k in os.environ if k.startswith("NEXO_")]:
         monkeypatch.delenv(key)
+    # After the cleanup above: every test gets its own ~/.config/nexo.
+    monkeypatch.setenv("NEXO_CONFIG_DIR", str(tmp_path_factory.mktemp("nexo-config")))
     yield backend
     keyring.set_keyring(previous)
 

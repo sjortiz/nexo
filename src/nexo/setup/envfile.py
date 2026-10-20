@@ -1,7 +1,7 @@
 """Secrets for the enabled components: kept in the secrets provider, never in a file to copy.
 
-`nexo setup` generates what is missing into the provider (the OS keychain by default) and
-hands the values to compose through the process environment. `.env` keeps personal
+`nexo setup` generates what is missing into the provider (~/.config/nexo/config by default)
+and hands the values to compose through the process environment (local only). `.env` keeps personal
 settings and keys only you can provide (HF_TOKEN, LANGSMITH_API_KEY); generated secrets
 found there from older setups move into the provider and are blanked in `.env`.
 """
@@ -75,13 +75,11 @@ def ensure_secrets(
     needed = generated_keys(components)
     dot_env = read_env(env_path)
     found = store.get(needed)
-    if not store.writable:  # opted out: the environment or .env provides them
-        found |= {key: dot_env[key] for key in needed if dot_env.get(key)}
+    if not store.writable:  # mounted by the platform: it provides every key
         missing = [key for key in needed if key not in found]
         if missing:
             raise SetupError(
-                f"secrets provider env: provide {', '.join(missing)} in the environment"
-                " (or .env)"
+                f"{store.label} is read-only and lacks {', '.join(missing)}"
             )
         return found
     moved = {k: dot_env[k] for k in needed if k not in found and dot_env.get(k)}

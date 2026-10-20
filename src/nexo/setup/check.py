@@ -161,9 +161,7 @@ def neo4j_finding(store: SecretStore, host: Host, stack: str) -> Finding | None:
     """A running Neo4j accepts the password the provider holds (its healthcheck is HTTP only)."""
     env_path = Path.cwd() / ".env"
     dot_env = read_env(env_path)
-    password = store.get(["NEO4J_PASSWORD"]).get("NEO4J_PASSWORD") or (
-        "" if store.writable else dot_env.get("NEO4J_PASSWORD", "")
-    )
+    password = store.get(["NEO4J_PASSWORD"]).get("NEO4J_PASSWORD")
     if not password:
         return None  # up creates it
     result = neo4j_login(NEO4J_BOLT, dot_env.get("NEO4J_USER") or "neo4j", password)
@@ -191,9 +189,8 @@ def secrets_finding(store: SecretStore, on: set[str], env_path: Path) -> Finding
     except SecretStoreError as exc:
         return Finding("secrets", False, str(exc))
     missing = missing_required(env_path, on)
-    if not store.writable:  # opted out: the environment or .env must provide them
-        dot_env = read_env(env_path)
-        missing += [k for k in needed if k not in found and not dot_env.get(k)]
+    if not store.writable:  # mounted by the platform: up cannot create them
+        missing += [k for k in needed if k not in found]
     detail = store.label + (f"; set: {', '.join(missing)}" if missing else "")
     return Finding("secrets", not missing, detail)
 

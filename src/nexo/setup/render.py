@@ -150,11 +150,15 @@ def _compose_fragment(
 
 
 def _app_secrets(casting: Casting) -> dict[str, str]:
-    """Generated secrets the nexo container reads, interpolated by compose from its environment."""
+    """Generated secrets the local nexo container reads, interpolated by compose.
+
+    Local only: on your own machine compose hands them over as environment variables. A
+    cluster mounts them as files instead (ADR-0017), never as environment variables.
+    """
     keys = ["NEO4J_PASSWORD"]
     if casting.spec.models.provider == "vllm":
         keys += ["VLLM_API_KEY", "EMBEDDING_API_KEY"]
-    return {"NEXO_SECRETS_PROVIDER": "env"} | {key: f"${{{key}}}" for key in keys}
+    return {key: f"${{{key}}}" for key in keys}
 
 
 def _app_environment(casting: Casting, host: Host) -> dict[str, str]:
@@ -297,6 +301,8 @@ def secrets_options(casting: Casting) -> dict[str, str]:
         "NEXO_STACK": casting.metadata.name,
         "NEXO_SECRETS_PROVIDER": secrets.provider,
     }
+    if secrets.file is not None and secrets.file.path:
+        options["NEXO_SECRETS_FILE"] = secrets.file.path
     if secrets.sops is not None:
         options["NEXO_SECRETS_SOPS_FILE"] = secrets.sops.file
     if secrets.vault is not None:

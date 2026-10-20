@@ -14,7 +14,7 @@ import yaml
 
 from nexo import cli
 from nexo.config import Settings
-from nexo.secret_store import EnvStore, KeychainStore
+from nexo.secret_store import FileStore, KeychainStore, store_from_options
 from nexo.local_profiles import plan
 from nexo.setup import check
 from nexo.setup.check import Finding, memory_budget
@@ -262,12 +262,12 @@ def test_collector_config_override_is_validated(workdir):
         _render(workdir, path)
 
 
-def test_secrets_live_in_the_provider_not_in_dot_env(workdir, memory_keychain, caplog):
-    """make env: an older .env value moves to the keychain (blanked there); the rest is made."""
+def test_secrets_live_in_the_provider_not_in_dot_env(workdir, caplog):
+    """make env: an older .env value moves to ~/.config/nexo/config (blanked there)."""
     caplog.set_level("INFO")
     env = workdir / ".env"
     env.write_text("NEO4J_PASSWORD=keep-me\nSIGNOZ_JWT_SECRET=\n")
-    store = KeychainStore("nexo")
+    store = store_from_options({"NEXO_STACK": "nexo"})
     values = ensure_secrets(env, workdir, {"neo4j", "signoz"}, store)
     assert (
         values["NEO4J_PASSWORD"] == "keep-me"
@@ -275,23 +275,21 @@ def test_secrets_live_in_the_provider_not_in_dot_env(workdir, memory_keychain, c
     assert set(values) == {"NEO4J_PASSWORD", *COMPONENTS["signoz"].secrets}
     assert store.get(values) == values
     assert read_env(env)["NEO4J_PASSWORD"] == ""  # no secret left in the checkout
-    assert not any(k.startswith("LANGFUSE") for _, k in memory_keychain.items)
+    assert "LANGFUSE" not in store.path.read_text()
     assert stat.S_IMODE(env.stat().st_mode) == 0o600
     assert ensure_secrets(env, workdir, {"neo4j", "signoz"}, store) == values
     assert not any(value in caplog.text for value in values.values())
 
 
-def test_env_provider_needs_every_secret_from_outside(workdir, monkeypatch):
-    """Opted out: nothing is generated; missing keys are named; .env or the environment count."""
-    env = workdir / ".env"
-    env.write_text("NEO4J_PASSWORD=from-dot-env\n")
-    with pytest.raises(SetupError, match="SIGNOZ_JWT_SECRET"):
-        ensure_secrets(env, workdir, {"neo4j", "signoz"}, EnvStore())
-    for key in COMPONENTS["signoz"].secrets:
-        monkeypatch.setenv(key, "from-k8s")
-    values = ensure_secrets(env, workdir, {"neo4j", "signoz"}, EnvStore())
-    assert values["NEO4J_PASSWORD"] == "from-dot-env"
-    assert values["SIGNOZ_JWT_SECRET"] == "from-k8s"
+def test_a_read_only_mount_must_hold_every_secret(workdir, tmp_path):
+    """Mounted by the platform: nothing is generated; missing keys are named."""
+    mounted = tmp_path / "mounted.ini"
+    mounted.write_text("[nexo]\nNEO4J_PASSWORD = from-csi\n")
+    store = FileStore(mounted, "nexo")
+    with pytest.raises(SetupError, match="read-only and lacks SIGNOZ"):
+        ensure_secrets(workdir / ".env", workdir, {"neo4j", "signoz"}, store)
+    values = ensure_secrets(workdir / ".env", workdir, {"neo4j"}, store)
+    assert values == {"NEO4J_PASSWORD": "from-csi"}
 
 
 def test_every_required_variable_in_a_fragment_is_generated_or_declared():
@@ -470,7 +468,8 @@ def test_compose_gets_secrets_through_its_environment_only(fake_up):
     up, seen, _ = fake_up
     assert up() == 0
     command = next(c for c in seen if c[1:2] == ["compose"] and "up" in c)
-    password = KeychainStore("nexo").get(["NEO4J_PASSWORD"])["NEO4J_PASSWORD"]
+    store = store_from_options({"NEXO_STACK": "nexo"})
+    password = store.get(["NEO4J_PASSWORD"])["NEO4J_PASSWORD"]
     assert command[-1]["NEO4J_PASSWORD"] == password
     assert not any(password in str(arg) for arg in command[:-1])
     rendered = (Path.cwd() / RENDER_DIR).glob("*")
