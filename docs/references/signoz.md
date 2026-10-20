@@ -5,8 +5,8 @@ description: Open-source observability platform, self-hosted as Nexo's default b
 resource: https://signoz.io/docs/
 tags: [reference, observability, signoz, opentelemetry]
 status: draft
-generated: { by: claude-code/claude-opus-5-5, at: 2026-10-20T18:00:00Z }
-stale_after: 2027-01-20T00:00:00Z
+generated: { by: claude-code/claude-sonnet-5-5, at: 2026-10-20T22:00:00Z }
+stale_after: 2027-04-20T00:00:00Z
 sources:
   - id: docs
     resource: https://signoz.io/docs/
@@ -60,6 +60,10 @@ Podman cannot read the host's mount table, so `root_path` is not used. `docker_s
 per-container CPU, memory, network and I/O from the container engine's socket. `nexo setup` renders the
 engine's socket path (Podman's rootless socket on macOS). The collector runs as root in its container,
 with SELinux labeling off, to read it.
+
+The ClickHouse scripts volume is mounted with `:z` (a shared SELinux label). Without it, rootless Podman
+on an SELinux host labels the volume per container: the second `make up` cannot replace the downloaded
+`histogramQuantile`, and ClickHouse cannot run it. Docker without SELinux ignores the flag.
 
 On macOS the host is the Podman VM, not the Mac, and Ollama runs outside it, so neither is covered.
 

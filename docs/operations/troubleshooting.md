@@ -4,8 +4,8 @@ title: Troubleshooting
 description: Symptoms, causes and fixes for common failures.
 tags: [operations, troubleshooting, oncall]
 status: draft
-generated: { by: claude-code/claude-opus-5-5, at: 2026-10-19T20:14:37Z }
-stale_after: 2027-04-19T00:00:00Z
+generated: { by: claude-code/claude-sonnet-5-5, at: 2026-10-20T22:00:00Z }
+stale_after: 2027-04-20T00:00:00Z
 sources:
   - id: compose
     resource: ../../deploy/compose/vllm.yaml
@@ -13,6 +13,12 @@ sources:
   - id: llm
     resource: ../../src/nexo/llm.py
     title: Model clients
+  - id: signoz
+    resource: ../../deploy/signoz/compose.yml
+    title: SigNoz compose file
+  - id: ci
+    resource: ../../.github/workflows/ci.yml
+    title: CI workflow
 ---
 
 Local models (Ollama, profiles, SSH tunnel): run `nexo models --check` and see
@@ -57,5 +63,21 @@ Local models (Ollama, profiles, SSH tunnel): run `nexo models --check` and see
 | `thread ... is not awaiting review` | Wrong thread id, already decided, or in-memory checkpointer restarted | Use `nexo status <thread_id>`; use `sqlite` or `postgres` checkpoints. |
 | Approval keeps returning `awaiting_review` | Blocking findings without acknowledgement | Add `--acknowledge-findings` after reading the findings. |
 
+# Local stack
+
+| Symptom | Cause | Fix |
+|---|---|---|
+| `signoz did not start` ... `refused the password`, or `FAIL neo4j: Neo4j refused the password` | A data volume made with other secrets (the store was regenerated) | Put the old value back in the store, or delete the named volume (its data goes) and `make up`. See [When it does not work](local-setup.md#when-it-does-not-work). |
+| `signoz-clickhouse-scripts` fails with `mv: ... Permission denied`, or ClickHouse says `histogramQuantile` is not executable (rootless Podman, SELinux) | The scripts volume was labelled for one container, so the next could not use it | Update: the volume is mounted with `:z`, which Podman relabels at each start.[^signoz] |
+| Models answer very slowly or time out after `FORCE=1` | The Mac is swapping: models and containers need more than the memory check allows (85% of RAM, 90% of the Podman VM) | Drop `FORCE=1`; use a smaller profile or fewer add-ons ([Choosing a setup](decision-guide.md#5-memory-for-each-combination)). |
+
+# CI
+
+| Symptom | Cause | Fix |
+|---|---|---|
+| The macOS check stays queued long after Linux finished | The hosted macOS queue, not your change | Wait; act only when a job fails.[^ci] |
+
 [^compose]: vLLM compose file
 [^llm]: Model clients
+[^signoz]: SigNoz compose file
+[^ci]: CI workflow
