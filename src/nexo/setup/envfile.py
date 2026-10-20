@@ -38,6 +38,7 @@ GENERATORS: dict[str, Callable[[], str]] = {
     "LANGFUSE_USER_PASSWORD": _hex(12),
     "LANGFUSE_ENCRYPTION_KEY": _hex(32),  # 64 hex characters, as Langfuse requires
     "LANGFUSE_NEXTAUTH_SECRET": _hex(32),
+    "QUERY_HASH_KEY": _hex(32),
 }
 
 
@@ -48,7 +49,9 @@ def read_env(path: Path) -> dict[str, str]:
 
 def generated_keys(components: Iterable[str]) -> list[str]:
     """The secrets `nexo setup` generates for these components, in a stable order."""
-    keys = ["NEO4J_PASSWORD"] + [k for c in components for k in COMPONENTS[c].secrets]
+    # QUERY_HASH_KEY: Nexo's own, for the question hash on traces.
+    keys = ["NEO4J_PASSWORD", "QUERY_HASH_KEY"]
+    keys += [k for c in components for k in COMPONENTS[c].secrets]
     return list(dict.fromkeys(keys))
 
 

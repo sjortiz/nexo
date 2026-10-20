@@ -21,11 +21,15 @@ LangSmith is optional and orthogonal: LANGSMITH_TRACING=true.
 from __future__ import annotations
 
 import copy
+import getpass
+import hashlib
+import hmac
 import json
 import logging
 import os
 import sys
 import threading
+import uuid
 from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
 from typing import Any
@@ -52,6 +56,10 @@ from opentelemetry.trace import Span
 from nexo.config import Settings
 
 TRACER_NAME = "nexo"
+# One per process: a CLI run or an MCP server (a Claude Code session).
+SESSION_ID = uuid.uuid4().hex
+QUERY_TEXT_MAX = 2000
+
 
 _setup_lock = threading.Lock()
 # The process-wide providers, once installed: "providers" -> (tracer, meter), "logs" -> logger.
@@ -189,6 +197,39 @@ def traced_span(
         name, attributes=clean_attributes(attributes or {}), **kwargs
     ) as span:
         yield span
+
+
+def caller_attributes(settings: Settings, user: str | None = None) -> dict[str, str]:
+    """Who asked: user.id (given, NEXO_USER or the login name) and this process's session."""
+    return {
+        "user.id": user or settings.nexo_user or _login_name(),
+        "session.id": SESSION_ID,
+    }
+
+
+def query_attributes(settings: Settings, query: str) -> dict[str, Any]:
+    """Which question: its length and a keyed hash always; its text only when opted in.
+
+    The hash (HMAC-SHA256 of the question, case and spacing folded) matches repeated
+    questions across traces without revealing them; the key never leaves the process.
+    """
+    attributes: dict[str, Any] = {"nexo.query.length": len(query)}
+    if settings.query_hash_key is not None:
+        key = settings.query_hash_key.get_secret_value().encode()
+        folded = " ".join(query.lower().split()).encode()
+        attributes["nexo.query.hash"] = hmac.new(
+            key, folded, hashlib.sha256
+        ).hexdigest()[:16]
+    if settings.trace_query_text:
+        attributes["nexo.query.text"] = query[:QUERY_TEXT_MAX]
+    return attributes
+
+
+def _login_name() -> str:
+    try:
+        return getpass.getuser()
+    except (OSError, KeyError):  # no login name (some containers)
+        return "unknown"
 
 
 def clean_attributes(attributes: Mapping[str, Any]) -> dict[str, Any]:

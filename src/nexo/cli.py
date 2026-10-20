@@ -82,7 +82,10 @@ def _ask(args: argparse.Namespace) -> int:
 
     with open_runtime(get_settings()) as runtime:
         result = runtime.start(
-            args.query, thread_id=args.thread_id, clearance=args.clearance
+            args.query,
+            thread_id=args.thread_id,
+            clearance=args.clearance,
+            user=args.user,
         )
         _emit(f"thread {result.thread_id}: {result.status}", result)
     return 0
@@ -284,6 +287,9 @@ def _add_document_commands(sub: argparse._SubParsersAction) -> None:
     ask.add_argument("query")
     ask.add_argument("--thread-id")
     ask.add_argument("--clearance", choices=["public", "internal", "pii", "phi"])
+    ask.add_argument(
+        "--user", help="who is asking, on the trace (default: NEXO_USER or login name)"
+    )
     ask.set_defaults(handler=_ask)
 
     review = sub.add_parser("review", help="approve or reject a paused investigation")

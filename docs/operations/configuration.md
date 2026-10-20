@@ -149,6 +149,9 @@ hosts ([Local on Apple Silicon](local-apple-silicon.md)).
 | `OTEL_SEMCONV_STABILITY_OPT_IN` | derived | Strands conventions and redaction; derived from content capture unless set. |
 | `OTEL_INSTRUMENT_OPENAI` | `true` | Official GenAI instrumentation of the openai SDK (one `chat {model}` span per vLLM call). |
 | `DEPLOYMENT_ENVIRONMENT` | `dev` | `deployment.environment.name` attribute. |
+| `NEXO_USER` | login name | `user.id` on request and MCP spans; `nexo ask --user` and a reviewer override it. |
+| `QUERY_HASH_KEY` | generated | Key for `nexo.query.hash` (HMAC of the question) on traces; generated into the secrets store by `make env`, never exported. Unset: no hash. |
+| `TRACE_QUERY_TEXT` | `false` | `true` puts the question on the request span (`nexo.query.text`); `nexo.yaml` sets it (`telemetry.queryText`). Self-hosted backends only: LangSmith never receives it. |
 
 **Logging**
 

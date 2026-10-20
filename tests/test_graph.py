@@ -17,6 +17,7 @@ from langchain_openai import ChatOpenAI
 from langgraph.checkpoint.memory import InMemorySaver
 from opentelemetry.trace import SpanKind, StatusCode
 
+from pydantic import SecretStr
 from nexo.agents.models import AgentOutput, InvestigationScope
 from nexo.cli import main
 from nexo.orchestration.graph import (
@@ -27,7 +28,7 @@ from nexo.orchestration.graph import (
 )
 from nexo.service import RunResult, Runtime, open_checkpointer
 from nexo.storage.sensitive_data import RegexDetector
-from nexo.telemetry import get_tracer
+from nexo.telemetry import SESSION_ID, get_tracer, query_attributes
 
 CHUNK = "chk_" + "a" * 16
 
@@ -385,6 +386,33 @@ def test_openai_instrumentation_emits_one_chat_span_per_vllm_call(settings, span
     assert not any(
         k.startswith("gen_ai.input.messages") for k in chat.attributes
     )  # content off by default
+
+
+def test_the_request_span_says_who_asked_and_which_question(settings, spans):
+    """user.id, session.id and the question's hash on the workflow span; never its text."""
+    question = "How is Acme Holdings connected to Gamma Clinics?"
+    keyed = settings.model_copy(update={"query_hash_key": SecretStr("k1")})
+    rt = runtime(keyed, FakeInvestigator([grounded_output()]))
+    started = rt.start(question, thread_id="t-id", user="ana")
+    rt.review(started.thread_id, {"approval_status": "approved", "reviewer": "rev"})
+    workflows = [
+        s
+        for s in spans.get_finished_spans()
+        if s.name == "invoke_workflow nexo-investigation"
+    ]
+    start, review = workflows
+    assert start.attributes["user.id"] == "ana"
+    assert start.attributes["session.id"] == SESSION_ID
+    assert (
+        start.attributes["nexo.query.hash"]
+        == query_attributes(keyed, question)["nexo.query.hash"]
+    )
+    assert review.attributes["user.id"] == "rev"  # the reviewer acts on the trace
+    exported = " ".join(
+        f"{dict(s.attributes)} {[dict(e.attributes or {}) for e in s.events]}"
+        for s in spans.get_finished_spans()
+    )
+    assert question not in exported and "k1" not in exported
 
 
 def test_a_review_pause_is_not_an_exception_on_the_trace(settings, spans):

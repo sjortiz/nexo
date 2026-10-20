@@ -40,7 +40,12 @@ class ModelEndpoint:
 log = logging.getLogger(__name__)
 RENDERED_ENV = ".nexo/render/nexo.env"
 # Settings that `nexo setup` generates and keeps in the secrets provider.
-STORED_SECRETS = ("NEO4J_PASSWORD", "VLLM_API_KEY", "EMBEDDING_API_KEY")
+STORED_SECRETS = (
+    "NEO4J_PASSWORD",
+    "VLLM_API_KEY",
+    "EMBEDDING_API_KEY",
+    "QUERY_HASH_KEY",
+)
 
 
 class _SecretStoreSource(PydanticBaseSettingsSource):
@@ -226,6 +231,13 @@ class Settings(BaseSettings):
     # official GenAI instrumentation: one `chat {model}` CLIENT span per call.
     otel_instrument_openai: bool = True
     deployment_environment: str = "dev"
+    # Which user and which question a trace belongs to (ADR-0009, amended). user.id is
+    # NEXO_USER, else the login name; the question's length and a keyed hash (the key is
+    # generated into the secrets store, never exported) are always on the request span;
+    # its text only with TRACE_QUERY_TEXT=true (telemetry.queryText in nexo.yaml).
+    nexo_user: str | None = None
+    query_hash_key: SecretStr | None = None
+    trace_query_text: bool = False
 
     # --- Logging -----------------------------------------------------------------
     log_level: str = "INFO"

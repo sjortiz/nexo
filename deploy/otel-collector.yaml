@@ -18,6 +18,7 @@ processors:
       - { key: gen_ai.prompt, action: delete }          # legacy
       - { key: gen_ai.completion, action: delete }      # legacy
       - { key: db.query.text, action: delete }
+      - { key: nexo.query.text, action: delete }  # kept with telemetry.queryText
   # Strands and older instrumentations put content in span events.
   filter/strip-content-events:
     error_mode: ignore

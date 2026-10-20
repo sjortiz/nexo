@@ -24,6 +24,7 @@ from nexo.setup.lock import VLLM_EMBEDDING_URL, VLLM_URL, resolve
 from nexo.setup.schema import Casting, SetupError
 
 COLLECTOR_BASE = "deploy/otel-collector.yaml"
+QUERY_TEXT = "nexo.query.text"
 RENDER_DIR = ".nexo/render"
 PORTABLE_PRESET = "examples/setups/mac-single/nexo.yaml"
 PORTABLE_DIR = "deploy/rendered"
@@ -265,9 +266,24 @@ def build_collector(casting: Casting, on: set[str], root: Path) -> dict[str, Any
             config = merge_compose(
                 config, load_fragment(root, COMPONENTS[name].collector)
             )
+    if casting.spec.telemetry.query_text:
+        config = _keep_query_text(config)
     override = casting.spec.components.get("collector")
     if override is not None and override.config:
         config = merge_patch(config, override.config)
+    return config
+
+
+def _keep_query_text(config: dict[str, Any]) -> dict[str, Any]:
+    """telemetry.queryText: self-hosted backends keep nexo.query.text; LangSmith never does."""
+    strip = config["processors"]["attributes/strip-content"]["actions"]
+    strip[:] = [a for a in strip if a.get("key") != QUERY_TEXT]
+    pipelines = config["service"]["pipelines"]
+    if "traces/langsmith" in pipelines:
+        config["processors"]["attributes/strip-query"] = {
+            "actions": [{"key": QUERY_TEXT, "action": "delete"}]
+        }
+        pipelines["traces/langsmith"]["processors"].insert(0, "attributes/strip-query")
     return config
 
 
@@ -323,6 +339,7 @@ def build_env(casting: Casting) -> dict[str, str]:
         "NEO4J_URI": "bolt://localhost:7687",
         "OTEL_EXPORTER_OTLP_ENDPOINT": "http://localhost:4318",
         "OTEL_LOGS_EXPORTER": spec.telemetry.logs,
+        "TRACE_QUERY_TEXT": "true" if spec.telemetry.query_text else "false",
     }
     env |= secrets_options(casting)
     models = spec.models

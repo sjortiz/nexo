@@ -32,7 +32,7 @@ from nexo.storage.graph_store import (
 )
 from nexo.storage.schemas import CHUNK_ID_RE, EntityType, Sensitivity
 from nexo.storage.vector_store import ChunkFilter, ChunkStore
-from nexo.telemetry import traced_span
+from nexo.telemetry import caller_attributes, query_attributes, traced_span
 
 logger = logging.getLogger(__name__)
 
@@ -87,6 +87,8 @@ def build_mcp_server(
     """Build the read-only MCP server; every result is filtered by the clearance."""
     clearance = Sensitivity(settings.mcp_clearance or settings.default_clearance)
     scope = ChunkFilter(max_sensitivity=clearance)
+    # Who is calling (NEXO_USER or the login name) and this server's session, on every span.
+    caller = caller_attributes(settings)
     server = MCPServer("nexo", title="Nexo knowledge graph", instructions=INSTRUCTIONS)
 
     def read(cypher: str, parameters: dict[str, Any] | None = None) -> ReadResult:
@@ -107,7 +109,9 @@ def build_mcp_server(
         """Start here: the documents in the knowledge graph, the relationship
         patterns between entity types (with counts and direction), and how to use
         the other tools."""
-        with traced_span("execute_tool nexo_index", {"gen_ai.tool.name": "nexo_index"}):
+        with traced_span(
+            "execute_tool nexo_index", {"gen_ai.tool.name": "nexo_index", **caller}
+        ):
             documents = read(
                 "MATCH (d:Document) OPTIONAL MATCH (c:Chunk)-[:PART_OF]->(d) "
                 "RETURN d.source_id AS source_id, d.title AS title, d.doc_type AS doc_type, "
@@ -145,7 +149,12 @@ def build_mcp_server(
         Returns snippets with chunk ids; read full text with nexo_get_chunks
         before citing."""
         with traced_span(
-            "execute_tool nexo_search", {"gen_ai.tool.name": "nexo_search"}
+            "execute_tool nexo_search",
+            {
+                "gen_ai.tool.name": "nexo_search",
+                **caller,
+                **query_attributes(settings, query),
+            },
         ):
             records = chunks.search(
                 query, k, scope.model_copy(update={"doc_types": doc_types or None})
@@ -172,7 +181,8 @@ def build_mcp_server(
         """Read the exact source text of chunks. This is the evidence to cite as
         [chunk:<chunk_id>]. Chunks above the server's clearance are withheld."""
         with traced_span(
-            "execute_tool nexo_get_chunks", {"gen_ai.tool.name": "nexo_get_chunks"}
+            "execute_tool nexo_get_chunks",
+            {"gen_ai.tool.name": "nexo_get_chunks", **caller},
         ):
             well_formed = [
                 c for c in dict.fromkeys(chunk_ids) if CHUNK_ID_RE.fullmatch(c)
@@ -221,7 +231,7 @@ def build_mcp_server(
             raise ToolError(f"unknown entity type {entity_type!r}")
         with traced_span(
             "execute_tool nexo_find_entities",
-            {"gen_ai.tool.name": "nexo_find_entities"},
+            {"gen_ai.tool.name": "nexo_find_entities", **caller},
         ):
             result = read(
                 "MATCH (e:Entity) WHERE ($type IS NULL OR e.type = $type) AND "
@@ -252,7 +262,8 @@ def build_mcp_server(
         """Relationships of one entity, in both directions, with certainty, date
         and the chunk ids that support each edge."""
         with traced_span(
-            "execute_tool nexo_neighbors", {"gen_ai.tool.name": "nexo_neighbors"}
+            "execute_tool nexo_neighbors",
+            {"gen_ai.tool.name": "nexo_neighbors", **caller},
         ):
             # Entity-to-Entity only: lexical edges (MENTIONED_IN, PART_OF, NEXT_CHUNK) never match.
             result = read(
@@ -296,7 +307,8 @@ def build_mcp_server(
         cover. Writes and procedure calls are rejected; nodes above clearance are
         redacted."""
         with traced_span(
-            "execute_tool nexo_graph_query", {"gen_ai.tool.name": "nexo_graph_query"}
+            "execute_tool nexo_graph_query",
+            {"gen_ai.tool.name": "nexo_graph_query", **caller},
         ):
             try:
                 query = validate_read_only_cypher(cypher)

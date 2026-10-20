@@ -33,7 +33,12 @@ from nexo.storage.ontology import Ontology
 from nexo.storage.resolution import EntityResolver, ResolutionLimits
 from nexo.storage.sensitive_data import build_detector
 from nexo.storage.vector_store import LocalChunkStore
-from nexo.telemetry import setup_telemetry, traced_span
+from nexo.telemetry import (
+    caller_attributes,
+    query_attributes,
+    setup_telemetry,
+    traced_span,
+)
 
 WORKFLOW_NAME = "nexo-investigation"
 
@@ -93,6 +98,7 @@ class Runtime:
         *,
         thread_id: str | None = None,
         clearance: str | None = None,
+        user: str | None = None,
     ) -> RunResult:
         """Run a new question until it completes or pauses for human review."""
         thread_id = thread_id or uuid.uuid4().hex
@@ -101,7 +107,9 @@ class Runtime:
             "request_id": thread_id,
             "caller_clearance": clearance or self.settings.default_clearance,
         }
-        return self._drive(payload, thread_id, "start")
+        identity = caller_attributes(self.settings, user)
+        identity |= query_attributes(self.settings, user_query)
+        return self._drive(payload, thread_id, "start", identity)
 
     def review(
         self, thread_id: str, decision: ReviewDecision | dict[str, Any]
@@ -111,7 +119,8 @@ class Runtime:
             decision = decision.model_dump(mode="json")
         if self._pending(thread_id) is None:
             raise ValueError(f"thread {thread_id} is not awaiting review")
-        return self._drive(Command(resume=decision), thread_id, "review")
+        identity = caller_attributes(self.settings, decision.get("reviewer"))
+        return self._drive(Command(resume=decision), thread_id, "review", identity)
 
     def status(self, thread_id: str) -> RunResult:
         """Return the thread's current result without running anything."""
@@ -125,14 +134,18 @@ class Runtime:
             "metadata": {"thread_id": thread_id},
         }
 
-    def _drive(self, payload: Any, thread_id: str, operation: str) -> RunResult:
+    def _drive(
+        self, payload: Any, thread_id: str, operation: str, identity: dict[str, Any]
+    ) -> RunResult:
         # GenAI workflow span (OTel GenAI conventions): one per graph run; the
-        # LangGraph thread id is the conversation id that ties start and review.
+        # LangGraph thread id is the conversation id that ties start and review, and
+        # identity says who asked (user.id, session.id) and which question.
         attributes = {
             "gen_ai.operation.name": "invoke_workflow",
             "gen_ai.workflow.name": WORKFLOW_NAME,
             "gen_ai.conversation.id": thread_id,
             "nexo.operation": operation,
+            **identity,
         }
         with traced_span(f"invoke_workflow {WORKFLOW_NAME}", attributes) as span:
             for update in self.graph.stream(
