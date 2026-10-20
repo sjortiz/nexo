@@ -125,11 +125,12 @@ MEMORY_GB = {
     "jaeger": 0.01,
     "agentInbox": 0.15,  # the Next.js server; the adapter runs on the host
 }
+# Web UIs up prints: component -> its spec.ports field.
 UIS = {
-    "neo4j": "http://localhost:7474",
-    "signoz": "http://localhost:8080",
-    "langfuse": "http://localhost:3000",
-    "jaeger": "http://localhost:16686",
+    "neo4j": "neo4j_http",
+    "signoz": "signoz",
+    "langfuse": "langfuse",
+    "jaeger": "jaeger",
 }
 
 
