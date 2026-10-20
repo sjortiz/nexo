@@ -10,6 +10,7 @@ from datetime import date
 from pathlib import Path
 
 from nexo.agents.models import InvestigationScope
+from nexo.agents.redaction import ChunkRedactor
 from nexo.config import get_settings
 from nexo.evaluation import (
     answer_scores,
@@ -42,7 +43,7 @@ from nexo.storage.neo4j_chunk_store import Neo4jChunkStore, import_local_store
 from nexo.storage.ingest import ExtractionAids, IngestionTargets, KnowledgeGraphIngestor
 from nexo.storage.ontology import Ontology
 from nexo.storage.schemas import DocumentMetadata, Sensitivity, Triple
-from nexo.storage.sensitive_data import NoopDetector
+from nexo.storage.sensitive_data import NoopDetector, build_detector
 from nexo.storage.vector_store import ChunkFilter, LocalChunkStore
 from nexo.telemetry import setup_telemetry, shutdown_telemetry, traced_span
 
@@ -136,30 +137,33 @@ def _eval(args: argparse.Namespace) -> int:
     graph = GraphStore.from_settings(settings, read_only=True)
     chunks = chunk_store_from_settings(settings, graph)
     investigator = build_investigator(settings, graph, chunks)
+    redactor = ChunkRedactor(
+        build_detector(settings.sensitive_data_provider, aws_region=settings.aws_region)
+    )
     try:
         for line in Path(args.dataset).read_text(encoding="utf-8").splitlines():
             if not line.strip():
                 continue
             case = json.loads(line)
             with traced_span("eval.case"):
-                output = investigator.investigate(
-                    case["question"],
-                    scope=InvestigationScope(
-                        strategy=case.get("strategy", "hybrid"),
-                        chunk_filter=ChunkFilter(
-                            max_sensitivity=case.get(
-                                "clearance", settings.default_clearance
-                            )
-                        ),
+                scope = InvestigationScope(
+                    strategy=case.get("strategy", "hybrid"),
+                    chunk_filter=ChunkFilter(
+                        max_sensitivity=case.get(
+                            "clearance", settings.default_clearance
+                        )
                     ),
                 )
+                output = investigator.investigate(case["question"], scope=scope)
                 metrics = retrieval_scores(output, case.get("relevant_chunk_ids", []))
                 if "answer_contains" in case:
                     metrics.update(
                         answer_scores(output.answer, case["answer_contains"])
                     )
                 if judge and output.answer:
-                    evidence = [c.text for c in chunks.get_by_ids(output.citations)]
+                    evidence = _judge_evidence(
+                        chunks, redactor, scope.chunk_filter, output.citations
+                    )
                     metrics["generation.faithfulness"] = judge_faithfulness(
                         judge, output.answer, evidence
                     ).score
@@ -182,6 +186,12 @@ def _eval(args: argparse.Namespace) -> int:
     finally:
         graph.close()
     return 0
+
+
+def _judge_evidence(chunks, redactor, chunk_filter, chunk_ids) -> list[str]:
+    """Cited chunk texts as the case's caller saw them: masked, or dropped if withheld."""
+    shown = (redactor.visible(c, chunk_filter) for c in chunks.get_by_ids(chunk_ids))
+    return [c.text for c in shown if c is not None]
 
 
 def _eval_extraction(args: argparse.Namespace) -> int:

@@ -7,6 +7,7 @@ from __future__ import annotations
 import json
 
 import pytest
+from langchain_core.messages import AIMessage
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
@@ -14,6 +15,8 @@ from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanE
 from strands.models.openai import OpenAIModel
 
 from nexo.agents.investigator import Investigator
+from nexo.cli import _judge_evidence
+from nexo.evaluation import judge_faithfulness
 from nexo.agents.models import AgentOutput, InvestigationScope
 from nexo.agents.redaction import ChunkRedactor
 from nexo.agents.tools import InvestigationContext, build_investigation_tools
@@ -360,3 +363,38 @@ def test_neo4j_chunk_node_keeps_the_declared_level():
     assert _record(props).declared_sensitivity is Sensitivity.PII
     del props["declared_sensitivity"]  # a node written before the field existed
     assert _record(props).declared_sensitivity is None
+
+
+class _RecordingJudge:
+    """Stands in for the judge model: scores 5 and keeps every message it was sent."""
+
+    def __init__(self):
+        self.seen: list[str] = []
+
+    def bind(self, **_kwargs):
+        """Guided decoding is irrelevant here."""
+        return self
+
+    def invoke(self, messages, config=None):  # pylint: disable=unused-argument
+        """Record the request and answer with a valid score."""
+        self.seen.extend(str(m.content) for m in messages)
+        return AIMessage(content='{"score": 5, "rationale": "ok"}')
+
+
+def test_eval_judge_sees_the_masked_chunk_not_the_original(chunk_store):
+    """An internal case with a pii-only chunk: the judge request has [EMAIL], never the address."""
+    chunk = _leadership()
+    other = make_chunk("note", 9, f"Secret MRN: A1234567 {EMAIL}", Sensitivity.PHI)
+    _store(chunk_store, chunk, other)
+    scope = ChunkFilter(max_sensitivity=Sensitivity.INTERNAL)
+    judge = _RecordingJudge()
+
+    evidence = _judge_evidence(
+        chunk_store, ChunkRedactor(DETECTOR), scope, [chunk.chunk_id, other.chunk_id]
+    )
+    judge_faithfulness(judge, "Jane Roe led product at Delta Devices.", evidence)
+
+    sent = "\n".join(judge.seen)
+    assert "Investor relations contact: [EMAIL]" in sent
+    assert EMAIL not in sent and "A1234567" not in sent  # withheld chunk is dropped
+    assert len(evidence) == 1

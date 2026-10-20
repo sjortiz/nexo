@@ -33,7 +33,7 @@ in `examples/corpus`: a multi-hop chain through a missing entity (Delta Devices)
 question that needs both documents and a question the documents do not answer. Ingest both documents
 first. The leadership chunk has an email address, so it is classified `pii`. The Delta case runs at the default `internal`
 clearance and is answered from the masked chunk ([read-time redaction](../components/sensitive-data-detection.md#read-time-redaction));
-the two cases after it use `pii` to read the chunk whole.
+the two cases after it use `pii` to read the chunk whole. The judge is shown cited chunks as the case's clearance sees them (masked, or dropped if withheld), so a hosted judge never receives the masked-out text.
 
 Build it from real reviewer-approved threads: the approved answer becomes `reference_answer`, and the
 chunks the reviewer confirmed become `relevant_chunk_ids`.
