@@ -82,8 +82,8 @@ shares the host network.
    initial password with `neo4j-admin dbms set-initial-password`, then `sudo systemctl start neo4j`.[^neo4j-debian]
 2. Telemetry (optional): the Jaeger v2 `linux-amd64` / `linux-arm64` release binary accepts OTLP on
    `localhost:4318` with its UI on http://localhost:16686.
-3. `python3 -m venv .venv && .venv/bin/pip install -e ".[dev]"`, `cp deploy/local/local.env.example .env`,
-   then `nexo ...`.
+3. Install uv (`curl -LsSf https://astral.sh/uv/install.sh | sh`), then `uv sync && source .venv/bin/activate`,
+   `cp deploy/local/local.env.example .env`, then `nexo ...`. uv installs Python 3.12 itself.
 
 # Linux as the model machine for a Mac
 

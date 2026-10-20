@@ -1,9 +1,8 @@
 # Nexo tasks. `make` lists them.
 #
-# Tools run from the project virtualenv; CI passes RUN= to use the tools on PATH.
+# uv installs Python and the dependencies into .venv; the tasks run tools from there.
 # Works with GNU Make 3.81 (macOS) and 4.x (Linux).
 
-PYTHON    ?= python3.12
 VENV      ?= .venv
 RUN       ?= $(VENV)/bin/
 CONTAINER ?= $(shell command -v podman >/dev/null 2>&1 && echo podman || echo docker)
@@ -35,14 +34,11 @@ help: ## List the targets
 
 ##@ Set up
 
-$(VENV)/bin/python:
-	$(PYTHON) -m venv $(VENV)
+install: ## Install Python, Nexo and the dev tools into .venv with uv (from uv.lock)
+	uv sync
 
-install: $(VENV)/bin/python ## Create .venv and install Nexo with the dev tools
-	$(RUN)pip install -e ".[dev]"
-
-install-notebook: $(VENV)/bin/python ## Also install Jupyter, for the walkthrough notebook
-	$(RUN)pip install -e ".[dev,notebook]"
+install-notebook: ## Also install Jupyter, for the walkthrough notebook
+	uv sync --extra notebook
 
 env: ## Create .env from the local template (keeps an existing one)
 	@if [ -f .env ]; then echo ".env exists; leaving it as is"; else cp deploy/local/local.env.example .env && echo "created .env: set LOCAL_PROFILE and NEO4J_PASSWORD"; fi

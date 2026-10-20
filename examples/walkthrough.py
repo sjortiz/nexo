@@ -14,7 +14,7 @@
 # **Run it yourself:** follow steps 1 to 6 of [Run it](index.html#quickstart) (models, Neo4j and
 # `.env`). Then open
 # [`walkthrough.ipynb`](https://github.com/sjortiz/nexo/blob/main/examples/walkthrough.ipynb)
-# in Jupyter (`pip install -e ".[notebook]"`, then `jupyter lab`), or run
+# in Jupyter (`uv sync --extra notebook`, then `make notebook`), or run
 # `python examples/walkthrough.py`. The outputs below come from a real run of that notebook on an
 # Apple M5 Pro with the `m5-pro-24` profile. Models are not deterministic, so your wording will
 # differ.

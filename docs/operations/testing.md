@@ -50,8 +50,8 @@ make test-neo4j                          # starts nexo-neo4j-test on 127.0.0.1:7
 make neo4j-test-down
 ```
 
-CI runs the same targets (`make lint`, `make neo4j-test`, `make test`) with `RUN=`, which uses the tools
-on `PATH` instead of `.venv`.
+CI installs with `uv sync --locked` (exactly `uv.lock`) and runs the same targets: `make lint`,
+`make neo4j-test`, `make test`.
 
 # Writing tests
 

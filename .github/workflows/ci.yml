@@ -18,21 +18,21 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/setup-python@v7
+      - uses: astral-sh/setup-uv@v10
         with:
-          python-version: "3.12"
-          cache: pip
+          enable-cache: true
+      # Python from .python-version, dependencies exactly as in uv.lock.
       - name: Install
-        run: pip install -e ".[dev]"
-      # The Makefile targets developers run; RUN= uses the tools installed above.
+        run: uv sync --locked
+      # The Makefile targets developers run.
       - name: Lint
-        run: make lint RUN=
+        run: make lint
       # Containers only run on Linux runners; the Neo4j tests skip elsewhere.
       - name: Start Neo4j
         if: runner.os == 'Linux'
-        run: make neo4j-test RUN= CONTAINER=docker
+        run: make neo4j-test CONTAINER=docker
       - name: Test
         env:
           NEO4J_TEST_URI: ${{ runner.os == 'Linux' && 'bolt://127.0.0.1:7688' || '' }}
           NEO4J_TEST_PASSWORD: nexo-test-pass
-        run: make test RUN=
+        run: make test

@@ -1,8 +1,8 @@
 {
   "mcpServers": {
     "nexo": {
-      "command": "nexo",
-      "args": ["mcp"]
+      "command": "uv",
+      "args": ["run", "--quiet", "nexo", "mcp"]
     }
   }
 }

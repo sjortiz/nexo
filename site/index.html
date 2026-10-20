@@ -260,17 +260,18 @@
       <ol class="run-steps">
         <li>
           <h3>Install the prerequisites</h3>
-          <p>Python 3.11 or newer, Ollama for the models, and Podman for Neo4j and tracing.</p>
+          <p>uv for Python and the dependencies (it installs Python 3.12 itself), Ollama for the models,
+            and Podman for Neo4j and tracing.</p>
 <pre><code># macOS
-brew install python@3.12 ollama podman
+brew install uv ollama podman
 podman machine init && podman machine start
-# Linux: curl -fsSL https://ollama.com/install.sh | sh, then podman from your package manager</code></pre>
+# Linux: curl -LsSf https://astral.sh/uv/install.sh | sh, curl -fsSL https://ollama.com/install.sh | sh,
+# then podman from your package manager</code></pre>
         </li>
         <li>
           <h3>Get Nexo</h3>
 <pre><code>git clone https://github.com/sjortiz/nexo.git && cd nexo
-python3.12 -m venv .venv && source .venv/bin/activate
-pip install -e .</code></pre>
+uv sync && source .venv/bin/activate     # Python 3.12 and the locked dependencies</code></pre>
         </li>
         <li>
           <h3>Name your machine and configure</h3>

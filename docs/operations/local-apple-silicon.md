@@ -38,7 +38,7 @@ Two independent choices:
 | Models | Ollama, native (Metal GPU) | Ollama, native (Metal GPU) |
 | Neo4j | container (`neo4j:5.26-community`) | Homebrew (`neo4j` 2026.09) |
 | Telemetry | collector (strips content) + Jaeger containers | optional Jaeger binary, or none |
-| Nexo | container (`--profile app`) or `pip install` | `pip install` |
+| Nexo | container (`--profile app`) or `uv sync` | `uv sync` |
 | Good for | matching the server setup; clean teardown | fewest moving parts; no VM |
 
 | | **One Mac** | **Two Macs** |
@@ -79,7 +79,7 @@ Sizes are Ollama library download sizes; KV cache and the OS need the rest. `qwe
 3. `cp deploy/local/local.env.example .env`, set the profile(s) and `NEO4J_PASSWORD`.[^env]
 4. `podman compose up -d neo4j otel-collector jaeger` - Neo4j on `127.0.0.1:7687`, traces at
    http://localhost:16686, metrics at http://localhost:8889/metrics.
-5. Run Nexo either natively (`pip install -e .`, then `nexo ...`) or in a container:
+5. Run Nexo either natively (`uv sync`, then `nexo ...` in the activated `.venv`) or in a container:
    `podman compose --profile app run --rm nexo ingest /corpus/memo.md` with documents in `./corpus`.
    The container's `LOCAL_BASE_URL`/`REMOTE_BASE_URL` already point at `host.containers.internal`.
 
@@ -94,7 +94,7 @@ Sizes are Ollama library download sizes; KV cache and the OS need the rest. `qwe
    there is no second content filter, so keep
    `OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT=no_content`. Or unset
    `OTEL_EXPORTER_OTLP_ENDPOINT` to rely on logs only.
-6. `python3 -m venv .venv && .venv/bin/pip install -e ".[dev]"`, then `nexo ...`.
+6. `brew install uv && uv sync && source .venv/bin/activate`, then `nexo ...` (uv installs Python 3.12).
 
 # Two Macs
 

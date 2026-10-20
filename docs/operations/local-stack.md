@@ -38,7 +38,7 @@ for every service it loads; local runs with Ollama do not need them.
 2. `docker compose up -d neo4j otel-collector jaeger`
 3. `docker compose -f docker-compose.yml -f docker-compose.gpu.yml up -d` (first start downloads ~140 GB of weights; the health check
    allows 15 minutes).
-4. `pip install -e ".[dev]"` and run the CLI locally, or use the container:
+4. `uv sync` and run the CLI locally, or use the container:
    `docker compose --profile app run --rm nexo ingest /corpus/memo.md --doc-type memo`
    (`./corpus` is mounted read-only at `/corpus`).
 5. `nexo ask "..."`, then `nexo review <thread_id> --approve --reviewer <you>`.

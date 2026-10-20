@@ -25,15 +25,15 @@ sources:
 
 | File | Purpose |
 |---|---|
-| `.mcp.json` | Registers the `nexo` MCP server for this project: runs `nexo mcp` over stdio.[^mcp-config] |
+| `.mcp.json` | Registers the `nexo` MCP server for this project: runs `nexo mcp` over stdio through `uv run`.[^mcp-config] |
 | `.claude/skills/nexo-knowledge/SKILL.md` | Tells Claude how to use the tools: orient, locate, trace, read, answer with citations. Pre-approves only the read-only nexo tools.[^skill] |
 
 Claude Code reads both from the project directory.[^cc-mcp][^cc-skills]
 
 # Steps
 
-1. Install Nexo so `nexo` is on the PATH that Claude Code sees (`pip install -e .` in an activated
-   virtualenv), or change `command` in `.mcp.json` to the full path, e.g. `.venv/bin/nexo`.
+1. Install Nexo with `uv sync`. `.mcp.json` starts the server with `uv run --quiet nexo mcp`, so no
+   virtualenv needs to be active (`--quiet` keeps uv's messages off stdout, the MCP channel).
 2. Configure `.env` as usual (Neo4j, embeddings; models are not needed for the MCP tools). Set
    `MCP_CLEARANCE` if the server should see more or less than `DEFAULT_CLEARANCE`.
 3. Ingest documents (`nexo ingest ...`).

@@ -71,9 +71,10 @@ def test_skill_body_only_mentions_real_tools_and_starts_with_the_index(
 
 
 def test_project_mcp_config_launches_nexo_mcp():
-    """.mcp.json registers the server as `nexo` running `nexo mcp`."""
+    """.mcp.json registers the server as `nexo` running `nexo mcp` through uv."""
     config = json.loads((ROOT / ".mcp.json").read_text())
-    server = config["mcpServers"][
-        "nexo"
-    ]  # the name the skill's mcp__nexo__ prefix depends on
-    assert server["command"] == "nexo" and server["args"] == ["mcp"]
+    # The skill's mcp__nexo__ tool prefix depends on this name.
+    server = config["mcpServers"]["nexo"]
+    # --quiet keeps uv's own messages off stdout, which carries the MCP protocol.
+    assert server["command"] == "uv"
+    assert server["args"] == ["run", "--quiet", "nexo", "mcp"]
