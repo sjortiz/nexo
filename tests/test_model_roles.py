@@ -56,10 +56,11 @@ def test_role_overrides_come_from_environment(monkeypatch):
 
 
 ROOT = Path(__file__).resolve().parent.parent
-# Keys the compose stack reads (and passes to the collector or Langfuse), not Settings.
+# Keys the compose stack reads (and passes to the collector, SigNoz or Langfuse), not Settings.
 COMPOSE_FILES = [
     "docker-compose.yml",
     "docker-compose.gpu.yml",
+    "deploy/signoz/compose.yml",
     "deploy/langfuse/compose.yml",
 ]
 PASSTHROUGH = {

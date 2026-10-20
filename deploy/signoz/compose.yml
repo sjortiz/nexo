@@ -1,0 +1,133 @@
+# Self-hosted SigNoz (traces, metrics, logs, dashboards, alerts), included by docker-compose.yml.
+# Generated with SigNoz's installer (foundryctl 0.3.0, docker compose casting), then pinned:
+# shorter service names, images pinned, only the UI (8080) published on 127.0.0.1. The Nexo
+# collector forwards to the ingester over the compose network. Secrets come from .env
+# (`make env`); SigNoz's usage stats reporting is off.
+
+x-signoz-ingester-env: &signoz-ingester-env
+  SIGNOZ_OTEL_COLLECTOR_CLICKHOUSE_DSN: tcp://signoz-clickhouse:9000
+  SIGNOZ_OTEL_COLLECTOR_TIMEOUT: 10m
+  LOW_CARDINAL_EXCEPTION_GROUPING: "false"
+
+services:
+  signoz:
+    image: docker.io/signoz/signoz:v0.146.0
+    depends_on:
+      signoz-postgres: { condition: service_healthy }
+      signoz-clickhouse: { condition: service_healthy }
+    ports: ["127.0.0.1:8080:8080"]
+    environment:
+      SIGNOZ_SQLSTORE_PROVIDER: postgres
+      SIGNOZ_SQLSTORE_POSTGRES_DSN: postgres://signoz:${SIGNOZ_POSTGRES_PASSWORD:?run make env}@signoz-postgres:5432/signoz?sslmode=disable
+      SIGNOZ_TELEMETRYSTORE_PROVIDER: clickhouse
+      SIGNOZ_TELEMETRYSTORE_CLICKHOUSE_DSN: tcp://signoz-clickhouse:9000
+      SIGNOZ_TOKENIZER_JWT_SECRET: ${SIGNOZ_JWT_SECRET:?run make env}
+      SIGNOZ_STATSREPORTER_ENABLED: "false"
+      # Headless setup: a "nexo" organization and a login for the UI.
+      SIGNOZ_USER_ROOT_ENABLED: "true"
+      SIGNOZ_USER_ROOT_EMAIL: ${SIGNOZ_USER_EMAIL:-admin@nexo.local}
+      SIGNOZ_USER_ROOT_PASSWORD: ${SIGNOZ_USER_PASSWORD:?run make env}
+      SIGNOZ_USER_ROOT_ORG_NAME: nexo
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8080/api/v1/health"]
+      interval: 10s
+      timeout: 10s
+      retries: 30
+
+  signoz-ingester:
+    image: docker.io/signoz/signoz-otel-collector:v0.144.14
+    depends_on:
+      signoz-migrator: { condition: service_completed_successfully }
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - >-
+        /signoz-otel-collector migrate sync check &&
+        /signoz-otel-collector --config=/etc/otel-collector-config.yaml
+        --manager-config=/etc/opamp-config.yaml --copy-path=/var/tmp/collector-config.yaml
+    environment: *signoz-ingester-env
+    volumes:
+      - ./ingester.yaml:/etc/otel-collector-config.yaml:ro
+      - ./opamp.yaml:/etc/opamp-config.yaml:ro
+    restart: unless-stopped
+
+  # One-shot: creates and migrates the ClickHouse schemas.
+  signoz-migrator:
+    image: docker.io/signoz/signoz-otel-collector:v0.144.14
+    depends_on:
+      signoz-clickhouse: { condition: service_healthy }
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - >-
+        /signoz-otel-collector migrate ready &&
+        /signoz-otel-collector migrate bootstrap &&
+        /signoz-otel-collector migrate sync up &&
+        /signoz-otel-collector migrate async up
+    environment: *signoz-ingester-env
+    restart: on-failure
+
+  signoz-clickhouse:
+    image: docker.io/clickhouse/clickhouse-server:25.12.5
+    depends_on:
+      signoz-keeper: { condition: service_healthy }
+      signoz-clickhouse-scripts: { condition: service_completed_successfully }
+    environment:
+      CLICKHOUSE_SKIP_USER_SETUP: "1"
+      CLICKHOUSE_CONFIG: /etc/clickhouse-server/config.yaml
+    volumes:
+      - signoz-clickhouse-data:/var/lib/clickhouse
+      - signoz-clickhouse-scripts:/var/lib/clickhouse/user_scripts:ro
+      - ./clickhouse/config.yaml:/etc/clickhouse-server/config.yaml:ro
+      - ./clickhouse/functions.yaml:/etc/clickhouse-server/functions.yaml:ro
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8123/ping"]
+      interval: 5s
+      timeout: 10s
+      retries: 30
+
+  # One-shot: installs SigNoz's histogramQuantile function for ClickHouse.
+  signoz-clickhouse-scripts:
+    image: docker.io/clickhouse/clickhouse-server:25.12.5
+    command:
+      - bash
+      - -c
+      - |-
+        version="v0.0.1"
+        node_os=$$(uname -s | tr '[:upper:]' '[:lower:]')
+        node_arch=$$(uname -m | sed s/aarch64/arm64/ | sed s/x86_64/amd64/)
+        cd /tmp
+        wget -O histogram-quantile.tar.gz "https://github.com/SigNoz/signoz/releases/download/histogram-quantile%2F$${version}/histogram-quantile_$${node_os}_$${node_arch}.tar.gz"
+        tar -xzf histogram-quantile.tar.gz
+        mv histogram-quantile /var/lib/clickhouse/user_scripts/histogramQuantile
+    volumes: [signoz-clickhouse-scripts:/var/lib/clickhouse/user_scripts]
+    restart: on-failure
+
+  signoz-keeper:
+    image: docker.io/clickhouse/clickhouse-keeper:25.12.5
+    entrypoint: ["/usr/bin/clickhouse-keeper", "--config-file=/etc/clickhouse-keeper/keeper.yaml"]
+    volumes:
+      - signoz-keeper-data:/var/lib/clickhouse-keeper
+      - ./keeper.yaml:/etc/clickhouse-keeper/keeper.yaml:ro
+    healthcheck:
+      test: ["CMD", "clickhouse-keeper-client", "-h", "localhost", "-p", "9181", "-q", "ls"]
+      interval: 5s
+      timeout: 10s
+      retries: 30
+
+  signoz-postgres:
+    image: docker.io/library/postgres:16
+    environment:
+      POSTGRES_DB: signoz
+      POSTGRES_USER: signoz
+      POSTGRES_PASSWORD: ${SIGNOZ_POSTGRES_PASSWORD:?run make env}
+    volumes: [signoz-postgres-data:/var/lib/postgresql/data]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U signoz -d signoz"]
+      interval: 3s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  signoz-clickhouse-data:
+  signoz-clickhouse-scripts:
+  signoz-keeper-data:
+  signoz-postgres-data:

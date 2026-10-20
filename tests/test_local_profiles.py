@@ -411,7 +411,9 @@ def test_make_env_generates_every_secret_the_local_stack_requires():
     local = set().union(*(required.findall(f.read_text()) for f in files))
     script = (ROOT / "deploy/local/env-secrets.sh").read_text()
     generated = set(re.findall(r"^ensure (\w+) ", script, re.MULTILINE))
-    assert "LANGFUSE_SECRET_KEY" in local and local <= generated, local - generated
+    assert {"SIGNOZ_USER_PASSWORD", "LANGFUSE_SECRET_KEY"} <= local <= generated, (
+        local - generated
+    )
     gpu = set(required.findall((ROOT / "docker-compose.gpu.yml").read_text()))
     assert gpu == {"VLLM_IMAGE_TAG", "VLLM_API_KEY", "HF_TOKEN", "EMBEDDING_API_KEY"}
     assert not gpu & local

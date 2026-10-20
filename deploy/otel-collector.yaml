@@ -1,10 +1,3 @@
-extensions:
-  # Langfuse authenticates OTLP with Basic auth: public key and secret key.
-  basicauth/langfuse:
-    client_auth:
-      username: ${env:LANGFUSE_PUBLIC_KEY}
-      password: ${env:LANGFUSE_SECRET_KEY}
-
 receivers:
   otlp:
     protocols:
@@ -35,30 +28,25 @@ processors:
         - 'name == "gen_ai.client.inference.operation.details"'
 
 exporters:
-  # Self-hosted Langfuse (deploy/langfuse/compose.yml); the exporter adds /v1/traces.
-  otlphttp/langfuse:
-    endpoint: http://langfuse-web:3000/api/public/otel
-    auth: { authenticator: basicauth/langfuse }
-    headers:
-      x-langfuse-ingestion-version: "4"  # without it, traces can take minutes to appear
+  # Self-hosted SigNoz (deploy/signoz/compose.yml): traces, metrics and logs.
+  otlp/signoz:
+    endpoint: signoz-ingester:4317
+    tls: { insecure: true }
   prometheus:
     endpoint: 0.0.0.0:8889
-  # Logs (OTEL_LOGS_EXPORTER=otlp) are kept only by an add-on that stores them (lgtm).
-  nop: {}
 
-# Jaeger, LangSmith and Grafana LGTM are add-ons with their own pipelines: deploy/otel-addons/.
+# Langfuse, Jaeger and LangSmith are add-ons with their own pipelines: deploy/otel-addons/.
 service:
-  extensions: [basicauth/langfuse]
   pipelines:
     traces:
       receivers: [otlp]
       processors: [attributes/strip-content, filter/strip-content-events, batch]
-      exporters: [otlphttp/langfuse]
+      exporters: [otlp/signoz]
     metrics:
       receivers: [otlp]
       processors: [batch]
-      exporters: [prometheus]
+      exporters: [otlp/signoz, prometheus]
     logs:
       receivers: [otlp]
       processors: [batch]
-      exporters: [nop]
+      exporters: [otlp/signoz]

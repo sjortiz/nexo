@@ -1,0 +1,24 @@
+# Add-on: also send traces to self-hosted Langfuse (make up LANGFUSE=1) for LLM evaluation:
+# datasets, experiments, scores and annotation queues. Same content stripping as the main pipeline.
+extensions:
+  # Langfuse authenticates OTLP with Basic auth: public key and secret key.
+  basicauth/langfuse:
+    client_auth:
+      username: ${env:LANGFUSE_PUBLIC_KEY}
+      password: ${env:LANGFUSE_SECRET_KEY}
+
+exporters:
+  # deploy/langfuse/compose.yml; the exporter adds /v1/traces.
+  otlphttp/langfuse:
+    endpoint: http://langfuse-web:3000/api/public/otel
+    auth: { authenticator: basicauth/langfuse }
+    headers:
+      x-langfuse-ingestion-version: "4"  # without it, traces can take minutes to appear
+
+service:
+  extensions: [basicauth/langfuse]
+  pipelines:
+    traces/langfuse:
+      receivers: [otlp]
+      processors: [attributes/strip-content, filter/strip-content-events, batch]
+      exporters: [otlphttp/langfuse]

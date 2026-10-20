@@ -3,7 +3,7 @@
 #
 #   deploy/local/env-secrets.sh [.env]
 #
-# Covers Neo4j and the self-hosted Langfuse stack (deploy/langfuse/compose.yml).
+# Covers Neo4j, SigNoz (deploy/signoz/compose.yml) and the Langfuse add-on (deploy/langfuse/compose.yml).
 set -euo pipefail
 
 file="${1:-.env}"
@@ -28,6 +28,9 @@ ensure() {  # KEY VALUE: set KEY only when it is absent or empty
 }
 
 ensure NEO4J_PASSWORD "$(hex 16)"
+ensure SIGNOZ_USER_PASSWORD "Nexo-$(hex 12)-1"  # SigNoz wants upper, lower, digit and symbol
+ensure SIGNOZ_JWT_SECRET "$(hex 32)"
+ensure SIGNOZ_POSTGRES_PASSWORD "$(hex 16)"
 ensure LANGFUSE_PUBLIC_KEY "pk-lf-$(hex 16)"
 ensure LANGFUSE_SECRET_KEY "sk-lf-$(hex 24)"
 ensure LANGFUSE_USER_PASSWORD "$(hex 12)"
