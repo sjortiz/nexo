@@ -42,6 +42,7 @@ from nexo.service import (
     chunk_store_from_settings,
     open_ingestor,
     open_review_runtime,
+    RunResult,
     open_runtime,
 )
 from nexo.storage.graph_store import GraphStore
@@ -112,8 +113,16 @@ def _ask(args: argparse.Namespace) -> int:
             clearance=args.clearance,
             user=args.user,
         )
-        _emit(result, "thread %s: %s", result.thread_id, result.status)
+        _emit(result, "%s", _summary(result))
     return 0
+
+
+def _summary(result: RunResult) -> str:
+    """A thread's log line: its status and, once completed, how it ended."""
+    line = f"thread {result.thread_id}: {result.status}"
+    if result.status == "completed" and result.outcome:
+        return f"{line} ({result.outcome})"
+    return line
 
 
 def _review(args: argparse.Namespace) -> int:
@@ -126,13 +135,7 @@ def _review(args: argparse.Namespace) -> int:
     }
     with open_runtime(get_settings()) as runtime:
         result = runtime.review(args.thread_id, decision)
-        _emit(
-            result,
-            "thread %s: %s (%s)",
-            result.thread_id,
-            result.status,
-            result.approval_status,
-        )
+        _emit(result, "%s", _summary(result))
     return 0
 
 
@@ -163,7 +166,7 @@ def _status(args: argparse.Namespace) -> int:
 
     with open_runtime(get_settings()) as runtime:
         result = runtime.status(args.thread_id)
-        _emit(result, "thread %s: %s", result.thread_id, result.status)
+        _emit(result, "%s", _summary(result))
     return 0
 
 

@@ -34,6 +34,23 @@ sources:
    an `error` in the packet.
 6. **Release.** On approval, `final_response` is set to the draft answer; on rejection it stays `null`.
 
+# Result
+
+`Runtime.start`, `review` and `status` return a `RunResult`. Its `status` is the lifecycle state only:
+`awaiting_review` or `completed`, and a completed thread may have been approved or rejected. Read
+`approval_status` for the decision and `outcome` for a one-line account of it:[^service]
+
+| `outcome` | When |
+|---|---|
+| `awaiting review` | Paused at the compliance interrupt. |
+| `approved by <reviewer>[: <comment>]` | A person approved the draft. |
+| `rejected by <reviewer>[: <comment>]` | A person rejected the draft. |
+| `rejected: no releasable output` | The system rejected it: the agent failed or returned no answer. |
+| `rejected: <routing reason>` | The router refused the question (`approval_status: not_required`). |
+
+`nexo ask`, `review` and `status` print it after a completed status, e.g.
+`thread 3f2a…: completed (rejected: no releasable output)`.
+
 # State
 
 | Key | Written by | Meaning |

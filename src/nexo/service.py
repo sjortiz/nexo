@@ -52,6 +52,9 @@ class RunResult(BaseModel):
 
     thread_id: str
     status: str  # awaiting_review | completed
+    # How the thread ended, for people: e.g. "rejected: no releasable output". `status`
+    # stays the lifecycle state, so a rejected run is still `completed`.
+    outcome: str | None = None
     routing_target: str | None = None
     routing_reason: str | None = None
     approval_status: str | None = None
@@ -251,9 +254,30 @@ class Runtime:
             routing_target=values.get("routing_target"),
             routing_reason=values.get("routing_reason"),
             approval_status=values.get("approval_status"),
+            outcome=_outcome(values, pending),
             final_response=values.get("final_response"),
             pending_review=pending,
         )
+
+
+def _outcome(values: dict[str, Any], pending: dict[str, Any] | None) -> str | None:
+    """Say how a thread ended, so a rejection never reads as plain success.
+
+    `rejected: <reason>` is a system rejection (the router refused the question, or
+    the run had no releasable output); `approved by` / `rejected by` name a reviewer.
+    """
+    if pending is not None:
+        return "awaiting review"
+    if values.get("routing_target") == "rejected":
+        return f"rejected: {values.get('routing_reason') or 'not routed'}"
+    status = values.get("approval_status")
+    if status not in ("approved", "rejected"):
+        return None
+    review = values.get("review") or {}
+    if review.get("reviewer") == "system":  # the compliance node's auto-reject
+        return f"rejected: {review.get('comment') or 'no releasable output'}"
+    outcome = f"{status} by {review.get('reviewer') or 'unknown reviewer'}"
+    return f"{outcome}: {review['comment']}" if review.get("comment") else outcome
 
 
 def _passage(
