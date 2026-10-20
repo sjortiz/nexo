@@ -15,13 +15,18 @@ AUTH_FAILURE = re.compile(
 
 
 def parse_ps(text: str) -> list[dict[str, Any]]:
-    """`compose ps --all --format json` output: a JSON array, or one object per line."""
-    text = text.strip()
-    if not text:
-        return []
-    if text.startswith("["):
-        return json.loads(text)
-    return [json.loads(line) for line in text.splitlines() if line.strip()]
+    """`compose ps --all --format json` output: a JSON array, or one object per line.
+
+    Other lines (podman compose announces its external provider) are skipped.
+    """
+    containers: list[dict[str, Any]] = []
+    for line in text.splitlines():
+        line = line.strip()
+        if line.startswith("["):
+            containers += json.loads(line)
+        elif line.startswith("{"):
+            containers.append(json.loads(line))
+    return containers
 
 
 def assess(containers: list[dict[str, Any]]) -> tuple[list[str], list[str]]:
