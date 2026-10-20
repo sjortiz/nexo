@@ -112,8 +112,9 @@ show(
 )
 
 # %% [markdown]
-# Collect traces in memory, so later steps can look at what happened inside each call. In a real
-# deployment these spans go to an OpenTelemetry collector instead.
+# Collect traces in memory, so later steps can look at what happened inside each call. With
+# `make up`, the same spans go through the OpenTelemetry collector to Langfuse, which runs
+# locally at http://localhost:3000; Jaeger and LangSmith are opt-in add-ons.
 
 # %%
 spans = InMemorySpanExporter()
@@ -490,6 +491,10 @@ show(found)
 # Every run produces one trace: the workflow, each node, the agent, each model call, each tool call
 # and each database query, named with the OpenTelemetry GenAI conventions. This is the trace of the
 # run that paused for review in step 11.
+#
+# In Langfuse the same trace appears with each model call as a generation, with its token counts,
+# and each embedding call as an embedding. Message content stays out of it: the collector strips
+# it unless you opt in.
 
 # %%
 finished = spans.get_finished_spans()

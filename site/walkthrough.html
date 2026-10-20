@@ -208,7 +208,7 @@ settings = Settings(
     "check": "ok"
   }
 ]</samp></pre></div>
-<div class="prose"><p>Collect traces in memory, so later steps can look at what happened inside each call. In a real deployment these spans go to an OpenTelemetry collector instead.</p></div>
+<div class="prose"><p>Collect traces in memory, so later steps can look at what happened inside each call. With <code>make up</code>, the same spans go through the OpenTelemetry collector to Langfuse, which runs locally at http://localhost:3000; Jaeger and LangSmith are opt-in add-ons.</p></div>
 <div class="cell"><pre class="code"><code>spans = InMemorySpanExporter()
 setup_telemetry(settings).add_span_processor(SimpleSpanProcessor(spans))</code></pre></div>
 <div class="prose"><h2 id="1-split-documents-along-their-structure">1. Split documents along their structure</h2>
@@ -783,7 +783,8 @@ show(found)</code></pre><div class="out-label">Output</div><pre class="output"><
   ]
 }</samp></pre></div>
 <div class="prose"><h2 id="14-read-the-trace">14. Read the trace</h2>
-<p>Every run produces one trace: the workflow, each node, the agent, each model call, each tool call and each database query, named with the OpenTelemetry GenAI conventions. This is the trace of the run that paused for review in step 11.</p></div>
+<p>Every run produces one trace: the workflow, each node, the agent, each model call, each tool call and each database query, named with the OpenTelemetry GenAI conventions. This is the trace of the run that paused for review in step 11.</p>
+<p>In Langfuse the same trace appears with each model call as a generation, with its token counts, and each embedding call as an embedding. Message content stays out of it: the collector strips it unless you opt in.</p></div>
 <div class="cell"><pre class="code"><code>finished = spans.get_finished_spans()
 children = {}
 <span class="kw">for</span> s <span class="kw">in</span> finished:
