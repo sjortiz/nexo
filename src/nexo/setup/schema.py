@@ -26,7 +26,8 @@ class SetupError(ValueError):
 
 
 class _Strict(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    # strict: "yes" is not a boolean and "11435" is not a port; YAML gives real types.
+    model_config = ConfigDict(extra="forbid", strict=True)
 
 
 class Target(_Strict):
@@ -153,6 +154,22 @@ def load_casting(path: Path) -> Casting:
         raise SetupError(f"{path} not found; create one with `nexo setup init`")
     try:
         data = yaml.safe_load(path.read_text(encoding="utf-8"))
+    except yaml.YAMLError as exc:
+        raise SetupError(f"{path}: not valid YAML: {exc}") from exc
+    if data is None:
+        raise SetupError(f"{path} is empty; start from a preset: nexo setup init")
+    if not isinstance(data, dict):
+        raise SetupError(f"{path}: expected apiVersion, kind and spec at the top level")
+    try:
         return Casting.model_validate(data)
-    except (yaml.YAMLError, ValidationError) as exc:
-        raise SetupError(f"{path}: {exc}") from exc
+    except ValidationError as exc:
+        raise SetupError(f"{path}: {describe(exc)}") from exc
+
+
+def describe(exc: ValidationError) -> str:
+    """One `field.path: message` per problem, without pydantic's documentation links."""
+    problems = []
+    for error in exc.errors():
+        where = ".".join(str(part) for part in error["loc"]) or "top level"
+        problems.append(f"{where}: {error['msg'].removeprefix('Value error, ')}")
+    return "; ".join(problems)

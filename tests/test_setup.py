@@ -192,6 +192,24 @@ def test_lock_keeps_pins_until_upgrade(workdir):
             "cannot be disabled",
         ),
         (lambda d: d.update(apiVersion="v1"), "apiVersion"),
+        (
+            lambda d: d["spec"]["addons"].update(jaeger={"enabled": "yes"}),
+            "addons.jaeger.enabled: Input should be a valid boolean",
+        ),
+        (
+            lambda d: d["spec"]["models"]["local"].update(profile="m9-ultra-999"),
+            "no Apple M9",
+        ),
+        (
+            lambda d: d["spec"]["models"]["local"].update(profile="m4-max-100"),
+            "not 100",
+        ),
+        (
+            lambda d: d["spec"]["models"].update(
+                remote={"profile": "m1-max-64", "port": "11435"}
+            ),
+            "remote.port",
+        ),
     ],
 )
 def test_invalid_setup_files_are_rejected_naming_the_problem(workdir, edit, message):
@@ -595,3 +613,29 @@ def test_no_volume_hint_without_an_auth_failure():
     assert (
         stale_volume_hint("signoz", "panic: out of memory", compose, "podman") is None
     )
+
+
+@pytest.mark.parametrize(
+    "text, message",
+    [
+        ("", "is empty; start from a preset"),
+        ("# only a comment\n", "is empty"),
+        ("- a\n- b\n", "expected apiVersion, kind and spec"),
+        ("spec: [unclosed\n", "not valid YAML"),
+    ],
+)
+def test_unusable_setup_files_say_why(tmp_path, text, message):
+    """An empty, non-mapping or broken file gets a plain message."""
+    path = tmp_path / "nexo.yaml"
+    path.write_text(text)
+    with pytest.raises(SetupError, match=message):
+        load_casting(path)
+
+
+def test_validation_errors_carry_no_documentation_links(workdir):
+    """Errors read `field.path: message`, without pydantic's URL."""
+    path = _setup(workdir, "mac-single", lambda d: d["spec"]["addons"].update(x={}))
+    with pytest.raises(SetupError) as raised:
+        load_casting(path)
+    assert "pydantic" not in str(raised.value) and "http" not in str(raised.value)
+    assert "spec.addons.x" in str(raised.value)

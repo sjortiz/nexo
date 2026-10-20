@@ -74,6 +74,9 @@ def test_linux_gpu_and_cpu_profiles_pick_tiers_by_vram_or_ram(name, kind, tier):
         "tpu-64",
         "gpu-24-max",
         "cpu--64",
+        "m9-ultra-999",  # no such chip or memory size
+        "m6-max-64",
+        "m4-max-100",
     ],
 )
 def test_invalid_or_too_small_profiles_are_rejected(name):
