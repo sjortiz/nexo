@@ -42,6 +42,7 @@ from nexo.setup.render import (
     RENDER_DIR,
     Host,
     enabled_set,
+    inbox_ports,
     portable_files,
     render,
     secrets_options,
@@ -345,6 +346,14 @@ def _up(args: argparse.Namespace) -> int:
         return code
     for name in sorted(on & UIS.keys()):
         log.info("%s: %s", name, UIS[name])
+    if "agentInbox" in on:
+        page, adapter = inbox_ports(casting)
+        log.info(
+            "agentInbox: http://127.0.0.1:%s (add inbox: graph nexo, URL http://127.0.0.1:%s); "
+            "start the adapter with make review-inbox",
+            page,
+            adapter,
+        )
     return 0
 
 

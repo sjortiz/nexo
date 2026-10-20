@@ -95,6 +95,11 @@ COMPONENTS: dict[str, ComponentDef] = {
             required=("LANGSMITH_API_KEY",),
         ),
         ComponentDef(
+            "agentInbox",
+            compose="deploy/agent-inbox/compose.yml",
+            main="agent-inbox",
+        ),
+        ComponentDef(
             "hostMetrics",
             compose="deploy/compose/host-metrics.yaml",
             collector="deploy/otel-addons/host-metrics.yaml",
@@ -118,6 +123,7 @@ MEMORY_GB = {
     "signoz": 1.4,  # ClickHouse ~1.15, keeper, ingester, app and Postgres
     "langfuse": 3.0,  # web 1.4, worker 0.8, ClickHouse 0.65, storage, Postgres, Redis
     "jaeger": 0.01,
+    "agentInbox": 0.15,  # the Next.js server; the adapter runs on the host
 }
 UIS = {
     "neo4j": "http://localhost:7474",

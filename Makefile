@@ -8,17 +8,18 @@ RUN       ?= $(VENV)/bin/
 CONTAINER ?= $(shell command -v podman >/dev/null 2>&1 && echo podman || echo docker)
 # The stack is described by nexo.yaml (`make env` writes it from a preset) and run by
 # `nexo setup`, which renders .nexo/render/. Add-ons for one run, without editing nexo.yaml:
-# make up LANGFUSE=1 JAEGER=1 LANGSMITH=1.
+# make up LANGFUSE=1 JAEGER=1 LANGSMITH=1 AGENT_INBOX=1.
 SETUP     ?= nexo.yaml
 PRESET    ?=
 LANGFUSE  ?=
 JAEGER    ?=
 LANGSMITH ?=
+AGENT_INBOX ?=
 UPGRADE   ?=
 FORCE     ?=
 NEXO_SETUP = $(RUN)nexo setup -f $(SETUP)
 ADDONS     = $(if $(LANGFUSE),--addon langfuse) $(if $(JAEGER),--addon jaeger) \
-             $(if $(LANGSMITH),--addon langsmith)
+             $(if $(LANGSMITH),--addon langsmith) $(if $(AGENT_INBOX),--addon agentInbox)
 PROFILE  ?=
 ROLES    ?=
 FILE     ?=
@@ -31,7 +32,7 @@ NEO4J_TEST_PASSWORD ?= nexo-test-pass
 
 .DEFAULT_GOAL := help
 .PHONY: help install install-notebook install-keychain env models up down check render lock compose-file \
-        ingest ask mcp graph app \
+        ingest ask mcp review-inbox graph app \
         lint format test neo4j-test test-neo4j neo4j-test-down test-live ci \
         walkthrough site serve-site notebook clean
 
@@ -58,7 +59,7 @@ models: ## Pull and start the profile's models in Ollama (PROFILE=m1-max-64 ROLE
 
 ##@ Run
 
-up: ## Start the models and the stack in nexo.yaml (one run: LANGFUSE=1 JAEGER=1 LANGSMITH=1; FORCE=1)
+up: ## Start the models and the stack in nexo.yaml (one run: LANGFUSE=1 JAEGER=1 LANGSMITH=1 AGENT_INBOX=1; FORCE=1)
 	$(NEXO_SETUP) up $(ADDONS) $(if $(FORCE),--force)
 
 down: ## Stop the stack (data volumes are kept)
@@ -86,6 +87,9 @@ ask: ## Ask a question (pauses for review): make ask Q="How is A connected to B?
 
 mcp: ## Serve the knowledge graph to MCP clients over stdio
 	$(RUN)nexo mcp
+
+review-inbox: ## Serve the Agent Inbox adapter on 127.0.0.1 (opt-in; start the page with make up AGENT_INBOX=1)
+	$(RUN)nexo review-inbox
 
 graph: ## Print the LangGraph workflow as Mermaid
 	$(RUN)nexo graph

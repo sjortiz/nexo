@@ -1,0 +1,11 @@
+# Agent Inbox add-on (addons.agentInbox in nexo.yaml, or make up AGENT_INBOX=1 for one run):
+# LangChain's review page, built from a pinned commit of its MIT-licensed repo, which is archived
+# and publishes no image. Published on 127.0.0.1 only. It talks to `nexo review-inbox` (the
+# adapter, run on the host), never to Neo4j or a model; the browser holds its settings.
+services:
+  agent-inbox:
+    image: nexo/agent-inbox:f1616f3
+    build: .
+    ports: ["127.0.0.1:3030:3000"]
+    environment:
+      NEXT_TELEMETRY_DISABLED: "1"

@@ -134,6 +134,27 @@ def test_an_addon_brings_its_services_pipeline_and_required_keys(workdir):
     assert "LANGFUSE" not in yaml.safe_dump(compose)
 
 
+def test_agent_inbox_renders_only_when_enabled_and_only_on_loopback(workdir):
+    """Off by default; on by the flag or by nexo.yaml, published on 127.0.0.1 at the set port."""
+    plain = _setup(workdir, "mac-single")
+    assert "agent-inbox" not in _render(workdir, plain)[0]["services"]
+    assert "AGENT_INBOX_PORT" not in _render(workdir, plain)[2]
+
+    flagged = _render(workdir, plain, addons={"agentInbox"})[0]["services"]
+    assert flagged["agent-inbox"]["ports"] == ["127.0.0.1:3030:3000"]
+    assert flagged["agent-inbox"]["image"] == "nexo/agent-inbox:f1616f3"
+
+    def enable(data):
+        data["spec"]["addons"]["agentInbox"] = {
+            "enabled": True,
+            "config": {"port": 3131, "adapterPort": 2025},
+        }
+
+    compose, _, env = _render(workdir, _setup(workdir, "mac-single", enable))
+    assert compose["services"]["agent-inbox"]["ports"] == ["127.0.0.1:3131:3000"]
+    assert env["AGENT_INBOX_PORT"] == "3131" and env["REVIEW_INBOX_PORT"] == "2025"
+
+
 def test_host_decides_how_the_nexo_container_reaches_host_services(workdir):
     """macOS goes through the engine's gateway; Linux shares the host network."""
     path = _setup(workdir, "mac-two-machines")
