@@ -43,13 +43,17 @@ sources:
 | `outcome` | When |
 |---|---|
 | `awaiting review` | Paused at the compliance interrupt. |
-| `approved by <reviewer>[: <comment>]` | A person approved the draft. |
-| `rejected by <reviewer>[: <comment>]` | A person rejected the draft. |
-| `rejected: no releasable output` | The system rejected it: the agent failed or returned no answer. |
-| `rejected: <routing reason>` | The router refused the question (`approval_status: not_required`). |
+| `approved by <reviewer>` | A reviewer or the review policy approved the draft. |
+| `rejected by <reviewer>` | A reviewer or the review policy rejected the draft. |
+| `rejected: no releasable output` | The compliance node rejected it (`review.source: system`): the agent failed or returned no answer. |
+| `rejected: router refused` | The router refused the question (`approval_status: not_required`). |
 
-`nexo ask`, `review` and `status` print it after a completed status, e.g.
-`thread 3f2a…: completed (rejected: no releasable output)`.
+`nexo ask`, `review` and `status` log it to stderr after a completed status (the JSON result goes to stdout), e.g.
+`thread 3f2a…: completed (rejected: no releasable output)`. Logs are exported, so `outcome` carries
+no free text: the reviewer's comment is in `review.comment` and the router's reason in
+`routing_reason`, which stay in the result and are exported only with content capture
+([ADR-0009](../decisions/adr-0009-opentelemetry-genai-conventions.md)). A reviewer may be named
+`system`; only `review.source: system` marks the compliance node's own rejection.
 
 # State
 
@@ -64,7 +68,7 @@ sources:
 | `agent_outputs` | investigator | Append-only list of agent outputs (audit trail). |
 | `compliance_report` | compliance | Findings and the `blocking` flag. |
 | `approval_status` | router, compliance | `pending`, `approved`, `rejected` or `not_required`. |
-| `review` | compliance | The reviewer's decision, or `reviewer: system` on auto-reject. |
+| `review` | compliance | The reviewer's decision, or `reviewer: system` and `source: system` on auto-reject. |
 | `final_response` | router, compliance | Released answer, only after approval. |
 
 # Examples

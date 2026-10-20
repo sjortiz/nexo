@@ -264,20 +264,35 @@ def _outcome(values: dict[str, Any], pending: dict[str, Any] | None) -> str | No
     """Say how a thread ended, so a rejection never reads as plain success.
 
     `rejected: <reason>` is a system rejection (the router refused the question, or
-    the run had no releasable output); `approved by` / `rejected by` name a reviewer.
+    the run had no releasable output); `approved by` / `rejected by` name whoever
+    decided: a reviewer or the review policy. Free text (the reviewer's comment, the
+    router's reason) stays out: the CLI logs this line, and logs are exported
+    (ADR-0009); the full result carries both.
     """
     if pending is not None:
         return "awaiting review"
     if values.get("routing_target") == "rejected":
-        return f"rejected: {values.get('routing_reason') or 'not routed'}"
+        return "rejected: router refused"
     status = values.get("approval_status")
     if status not in ("approved", "rejected"):
         return None
     review = values.get("review") or {}
-    if review.get("reviewer") == "system":  # the compliance node's auto-reject
-        return f"rejected: {review.get('comment') or 'no releasable output'}"
-    outcome = f"{status} by {review.get('reviewer') or 'unknown reviewer'}"
-    return f"{outcome}: {review['comment']}" if review.get("comment") else outcome
+    if _system_rejected(status, review):
+        return "rejected: no releasable output"
+    return f"{status} by {review.get('reviewer') or 'unknown reviewer'}"
+
+
+def _system_rejected(status: str, review: dict[str, Any]) -> bool:
+    """Whether the compliance node rejected the run itself, not a reviewer."""
+    if "source" in review:
+        return review["source"] == "system"
+    # Checkpoints from before the marker: the auto-reject had no other keys, while a
+    # reviewer's decision always carries acknowledged_findings (even one named system).
+    return (
+        status == "rejected"
+        and review.get("reviewer") == "system"
+        and "acknowledged_findings" not in review
+    )
 
 
 def _passage(

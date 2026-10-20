@@ -256,7 +256,12 @@ def _compliance_node(deps: GraphDependencies) -> Callable[..., dict[str, Any]]:
                 "approval_status": "rejected",
                 "compliance_report": report.as_state(),
                 "final_response": None,
-                "review": {"reviewer": "system", "comment": "no releasable output"},
+                # source marks a system decision; a reviewer may be named "system".
+                "review": {
+                    "reviewer": "system",
+                    "comment": "no releasable output",
+                    "source": "system",
+                },
             }
 
         request = {

@@ -46,7 +46,7 @@ below their clearance ([ADR-0019](../decisions/adr-0019-review-surfaces.md)).
    forms is refused and told the command above.
 
 5. **Confirm** the result shows `status: completed` and the expected `approval_status`. `completed`
-   only means the run finished; `outcome` says how, e.g. `rejected by you@corp: ...` or, when
+   only means the run finished; `outcome` says how, e.g. `rejected by you@corp` or, when
    nothing reached review, `rejected: no releasable output`
    ([Request lifecycle](../architecture/request-lifecycle.md#result)).
 

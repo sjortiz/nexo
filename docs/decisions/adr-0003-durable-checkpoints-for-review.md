@@ -26,6 +26,16 @@ The compliance node pauses with `interrupt()`; reviewers resume with `Command(re
 checkpointer is `sqlite` by default (single node) or `postgres` (multiple replicas); `memory` exists
 for tests only.[^service] A test starts a run with one SQLite saver and approves it from a new one.[^test-graph]
 
+- **Amended 2026-10-20:** a thread's `status` stays `awaiting_review` or `completed`, and `completed`
+  still means only that the run finished. A run the system rejected (no releasable output, or a refused
+  question) read as success, so results gain an additive `outcome` field, e.g.
+  `rejected: no releasable output`, `rejected: router refused` or `rejected by analyst@corp`, which the
+  CLI logs after the status. It carries no free text (comments, router reasons), because logs are
+  exported ([ADR-0009](adr-0009-opentelemetry-genai-conventions.md)). The compliance node marks its own
+  rejection `source: system`, so a reviewer named `system` still reads as a reviewer. A `rejected`
+  status value was not added: clients that poll until `completed` would wait forever, and
+  `approval_status` already carries the decision ([Request lifecycle](../architecture/request-lifecycle.md#result)).
+
 # Options considered
 
 | Option | Against |
@@ -38,13 +48,6 @@ for tests only.[^service] A test starts a run with one SQLite saver and approves
 
 Pending reviews survive restarts and deploys. Postgres is required to run more than one replica.
 Graph-state values are plain JSON, so any checkpointer can store them.
-
-- **Amended 2026-10-20:** a thread's `status` stays `awaiting_review` or `completed`, and `completed`
-  still means only that the run finished. A run the system rejected (no releasable output, or a refused
-  question) read as success, so results gain an additive `outcome` field, e.g.
-  `rejected: no releasable output` or `rejected by analyst@corp`, which the CLI prints after the status.
-  A `rejected` status value was not added: clients that poll until `completed` would wait forever, and
-  `approval_status` already carries the decision ([Request lifecycle](../architecture/request-lifecycle.md#result)).
 
 [^service]: open_checkpointer
 [^test-graph]: Restart durability test

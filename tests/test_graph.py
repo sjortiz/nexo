@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
 from contextlib import nullcontext
 from dataclasses import dataclass, field
@@ -17,6 +18,11 @@ from langchain_core.language_models.fake_chat_models import GenericFakeChatModel
 from langchain_core.messages import AIMessage
 from langchain_openai import ChatOpenAI
 from langgraph.checkpoint.memory import InMemorySaver
+from opentelemetry.sdk._logs import LoggerProvider
+from opentelemetry.sdk._logs.export import (
+    InMemoryLogRecordExporter,
+    SimpleLogRecordProcessor,
+)
 from opentelemetry.trace import SpanKind, StatusCode
 
 from pydantic import SecretStr
@@ -28,9 +34,9 @@ from nexo.orchestration.graph import (
     workflow_mermaid,
     traced_node,
 )
-from nexo.service import RunResult, Runtime, open_checkpointer
+from nexo.service import RunResult, Runtime, _outcome, open_checkpointer
 from nexo.storage.sensitive_data import RegexDetector
-from nexo.telemetry import SESSION_ID, get_tracer, query_attributes
+from nexo.telemetry import OtelLogHandler, SESSION_ID, get_tracer, query_attributes
 
 CHUNK = "chk_" + "a" * 16
 
@@ -240,13 +246,32 @@ def test_outcome_says_who_approved(settings):
 
 
 def test_outcome_says_a_reviewer_rejected(settings):
-    """A person's rejection names the reviewer and their comment."""
+    """A person's rejection names the reviewer; their comment stays in the result only."""
     rt = runtime(settings, FakeInvestigator([grounded_output()]))
     rt.start("q", thread_id="o2")
     done = rt.review(
         "o2", {"approval_status": "rejected", "reviewer": "a", "comment": "unverified"}
     )
-    assert done.status == "completed" and done.outcome == "rejected by a: unverified"
+    assert done.status == "completed" and done.outcome == "rejected by a"
+    assert _state(rt, "o2")["review"]["comment"] == "unverified"
+
+
+@pytest.mark.parametrize("decision", ["approved", "rejected"])
+def test_outcome_names_a_reviewer_called_system(settings, decision):
+    """A person named `system` is a reviewer, not the compliance node's auto-reject."""
+    rt = runtime(settings, FakeInvestigator([grounded_output()]))
+    rt.start("q", thread_id="o6")
+    done = rt.review("o6", {"approval_status": decision, "reviewer": "system"})
+    assert done.approval_status == decision
+    assert done.outcome == f"{decision} by system"
+
+
+def test_outcome_shows_a_policy_approval_as_an_approval(settings):
+    """The review policy's `system:auto` approval reads as approved, not system-rejected."""
+    rt = runtime(settings, FakeInvestigator([grounded_output()]))
+    rt.start("q", thread_id="o7")
+    done = rt.review("o7", {"approval_status": "approved", "reviewer": "system:auto"})
+    assert done.outcome == "approved by system:auto"
 
 
 @pytest.mark.parametrize(
@@ -254,32 +279,93 @@ def test_outcome_says_a_reviewer_rejected(settings):
 )
 def test_outcome_shows_a_system_rejection(settings, output):
     """No releasable output completes as rejected, and the outcome says so."""
-    result = runtime(settings, FakeInvestigator([output])).start("q", thread_id="o3")
+    rt = runtime(settings, FakeInvestigator([output]))
+    result = rt.start("q", thread_id="o3")
     assert result.status == "completed" and result.approval_status == "rejected"
     assert result.outcome == "rejected: no releasable output"
+    assert _state(rt, "o3")["review"]["source"] == "system"
+
+
+@pytest.mark.parametrize(
+    ("review", "outcome"),
+    [
+        (
+            {"reviewer": "system", "comment": "no releasable output"},
+            "rejected: no releasable output",
+        ),
+        (
+            {"reviewer": "system", "comment": None, "acknowledged_findings": False},
+            "rejected by system",
+        ),
+    ],
+)
+def test_outcome_reads_auto_rejects_checkpointed_before_the_marker(review, outcome):
+    """A pre-marker auto-reject has no `source`; a reviewer always sets acknowledged_findings."""
+    values = {"approval_status": "rejected", "review": review}
+    assert _outcome(values, None) == outcome
 
 
 def test_outcome_shows_a_router_rejection(settings):
-    """A question the router refuses reads as rejected, with the router's reason."""
-    result = runtime(settings, FakeInvestigator([grounded_output()])).start(
-        "", thread_id="o4"
-    )
+    """A question the router refuses reads as rejected; its reason stays in the result."""
+    reason = "asks for a patient's address"
+    result = runtime(
+        settings,
+        FakeInvestigator([grounded_output()]),
+        [route("rejected", reason=reason)],
+    ).start("q", thread_id="o4")
     assert result.status == "completed" and result.approval_status == "not_required"
-    assert result.outcome == "rejected: empty query"
+    assert result.outcome == "rejected: router refused"
+    assert result.routing_reason == reason
+
+
+def _cli(rt: Runtime, settings, *argv: str) -> None:
+    """Run the CLI against an existing runtime."""
+    with (
+        patch("nexo.cli.get_settings", lambda: settings),
+        patch("nexo.cli.open_runtime", lambda _settings: nullcontext(rt)),
+    ):
+        assert main(list(argv)) == 0
 
 
 def test_cli_summary_shows_the_outcome_of_a_completed_thread(settings, capsys):
     """`nexo status` puts the outcome on the log line, so a rejection is not read as success."""
     rt = runtime(settings, FakeInvestigator([AgentOutput()]))
     rt.start("q", thread_id="o5")
-    with (
-        patch("nexo.cli.get_settings", lambda: settings),
-        patch("nexo.cli.open_runtime", lambda _settings: nullcontext(rt)),
-    ):
-        assert main(["status", "o5"]) == 0
+    _cli(rt, settings, "status", "o5")
     assert "thread o5: completed (rejected: no releasable output)" in (
         capsys.readouterr().err
     )
+
+
+def test_exported_summary_keeps_free_text_out_without_capture(settings):
+    """With content capture off, the exported summary has no reviewer comment or router reason."""
+    exporter = InMemoryLogRecordExporter()
+    provider = LoggerProvider()
+    provider.add_log_record_processor(SimpleLogRecordProcessor(exporter))
+    otlp = OtelLogHandler(provider, capture_content=False)
+    comment, reason = "SSN 123-45-6789 on page 2", "asks for a patient's address"
+    rt = runtime(settings, FakeInvestigator([grounded_output()]))
+    rt.start("q", thread_id="o8")
+    refused = runtime(
+        settings,
+        FakeInvestigator([grounded_output()]),
+        [route("rejected", reason=reason)],
+    )
+    cli_log = logging.getLogger("nexo.cli")
+    cli_log.addHandler(otlp)
+    try:
+        args = ["review", "o8", "--reject", "--reviewer", "a", "--comment", comment]
+        _cli(rt, settings, *args)
+        _cli(refused, settings, "ask", "q")
+    finally:
+        cli_log.removeHandler(otlp)
+    bodies = [
+        f"{log.log_record.body} {dict(log.log_record.attributes or {})}"
+        for log in exporter.get_finished_logs()
+    ]
+    assert any("(rejected by a)" in body for body in bodies), bodies
+    assert any("(rejected: router refused)" in body for body in bodies), bodies
+    assert not any(comment in b or reason in b for b in bodies), bodies
 
 
 def test_transient_vllm_error_retries_investigation(settings):
