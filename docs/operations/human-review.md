@@ -18,7 +18,9 @@ sources:
 # Trigger
 
 `nexo ask` (or `Runtime.start`) returns `status: awaiting_review` with a `pending_review` packet. Show
-it again any time with `nexo status <thread_id>`.
+it again any time with `nexo status <thread_id>`. In code, `Runtime.pending_reviews()` lists every paused
+thread, newest first, and `Runtime.review_passages(thread_id, clearance)` reads the cited chunks, masked
+below their clearance ([ADR-0019](../decisions/adr-0019-review-surfaces.md)).
 
 # Steps
 
