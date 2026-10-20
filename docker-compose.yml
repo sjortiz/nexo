@@ -30,7 +30,7 @@ services:
       retries: 12
 
   otel-collector:
-    image: otel/opentelemetry-collector-contrib:0.111.0
+    image: docker.io/otel/opentelemetry-collector-contrib:0.162.0
     # Add-ons merge their own pipelines into the main config; "none" is an empty file.
     command:
       - --config=/etc/otelcol/config.yaml
@@ -38,8 +38,10 @@ services:
       - --config=/etc/otelcol/addons/${OTEL_JAEGER:-none}.yaml
       - --config=/etc/otelcol/addons/${OTEL_LANGSMITH:-none}.yaml
     # Root in the container to read the container engine's socket (container metrics); with
-    # rootless Podman that is the unprivileged user that owns the socket.
+    # rootless Podman that is the unprivileged user that owns the socket. SELinux (Podman's VM,
+    # Fedora) blocks containers from host sockets unless labeling is off for this container.
     user: "0"
+    security_opt: ["label=disable"]
     volumes:
       - ./deploy/otel-collector.yaml:/etc/otelcol/config.yaml:ro
       - ./deploy/otel-addons:/etc/otelcol/addons:ro
@@ -53,6 +55,7 @@ services:
       LANGFUSE_SECRET_KEY: ${LANGFUSE_SECRET_KEY:-}
       LANGSMITH_API_KEY: ${LANGSMITH_API_KEY:-}
       LANGSMITH_PROJECT: ${LANGSMITH_PROJECT:-nexo}
+      OTEL_RESOURCE_ATTRIBUTES: host.name=${NEXO_HOST:-nexo-host}
 
   jaeger:  # add-on: make up JAEGER=1
     image: jaegertracing/all-in-one:1.62.0

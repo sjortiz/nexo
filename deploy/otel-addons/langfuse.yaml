@@ -9,7 +9,7 @@ extensions:
 
 exporters:
   # deploy/langfuse/compose.yml; the exporter adds /v1/traces.
-  otlphttp/langfuse:
+  otlp_http/langfuse:
     endpoint: http://langfuse-web:3000/api/public/otel
     auth: { authenticator: basicauth/langfuse }
     headers:
@@ -21,4 +21,4 @@ service:
     traces/langfuse:
       receivers: [otlp]
       processors: [attributes/strip-content, filter/strip-content-events, batch]
-      exporters: [otlphttp/langfuse]
+      exporters: [otlp_http/langfuse]
