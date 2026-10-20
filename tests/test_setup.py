@@ -14,6 +14,7 @@ import yaml
 
 from nexo import cli
 from nexo.config import Settings
+from nexo.secret_store import EnvStore, KeychainStore
 from nexo.local_profiles import plan
 from nexo.setup import check
 from nexo.setup.check import Finding, memory_budget
@@ -145,7 +146,11 @@ def test_host_decides_how_the_nexo_container_reaches_host_services(workdir):
     assert "network_mode" not in app
     compose, _, _ = _render(workdir, path, LINUX)
     assert compose["services"]["nexo"]["network_mode"] == "host"
-    assert "environment" not in compose["services"]["nexo"]
+    assert "REMOTE_BASE_URL" not in compose["services"]["nexo"]["environment"]
+    assert (
+        compose["services"]["nexo"]["environment"]["NEO4J_PASSWORD"]
+        == "${NEO4J_PASSWORD}"
+    )
 
 
 def test_lock_keeps_pins_until_upgrade(workdir):
@@ -257,18 +262,36 @@ def test_collector_config_override_is_validated(workdir):
         _render(workdir, path)
 
 
-def test_secrets_are_generated_for_enabled_components_only_and_kept(workdir):
-    """make env: fills empty keys, keeps existing values, never writes disabled add-ons' keys."""
+def test_secrets_live_in_the_provider_not_in_dot_env(workdir, memory_keychain, caplog):
+    """make env: an older .env value moves to the keychain (blanked there); the rest is made."""
+    caplog.set_level("INFO")
     env = workdir / ".env"
     env.write_text("NEO4J_PASSWORD=keep-me\nSIGNOZ_JWT_SECRET=\n")
-    generated = ensure_secrets(env, workdir, {"neo4j", "signoz"})
-    values = read_env(env)
-    assert values["NEO4J_PASSWORD"] == "keep-me"
-    assert set(generated) == set(COMPONENTS["signoz"].secrets)
-    assert all(values[key] for key in COMPONENTS["signoz"].secrets)
-    assert not any(key.startswith("LANGFUSE") for key in values)
+    store = KeychainStore("nexo")
+    values = ensure_secrets(env, workdir, {"neo4j", "signoz"}, store)
+    assert (
+        values["NEO4J_PASSWORD"] == "keep-me"
+    )  # the volume made with it keeps working
+    assert set(values) == {"NEO4J_PASSWORD", *COMPONENTS["signoz"].secrets}
+    assert store.get(values) == values
+    assert read_env(env)["NEO4J_PASSWORD"] == ""  # no secret left in the checkout
+    assert not any(k.startswith("LANGFUSE") for _, k in memory_keychain.items)
     assert stat.S_IMODE(env.stat().st_mode) == 0o600
-    assert not ensure_secrets(env, workdir, {"neo4j", "signoz"})
+    assert ensure_secrets(env, workdir, {"neo4j", "signoz"}, store) == values
+    assert not any(value in caplog.text for value in values.values())
+
+
+def test_env_provider_needs_every_secret_from_outside(workdir, monkeypatch):
+    """Opted out: nothing is generated; missing keys are named; .env or the environment count."""
+    env = workdir / ".env"
+    env.write_text("NEO4J_PASSWORD=from-dot-env\n")
+    with pytest.raises(SetupError, match="SIGNOZ_JWT_SECRET"):
+        ensure_secrets(env, workdir, {"neo4j", "signoz"}, EnvStore())
+    for key in COMPONENTS["signoz"].secrets:
+        monkeypatch.setenv(key, "from-k8s")
+    values = ensure_secrets(env, workdir, {"neo4j", "signoz"}, EnvStore())
+    assert values["NEO4J_PASSWORD"] == "from-dot-env"
+    assert values["SIGNOZ_JWT_SECRET"] == "from-k8s"
 
 
 def test_every_required_variable_in_a_fragment_is_generated_or_declared():
@@ -386,10 +409,13 @@ def test_model_lines_report_off_roles_and_what_a_server_has():
 
 
 def _recording_run(seen: list[list[str]], stdout=lambda _command: ""):
-    """A stand-in for subprocess.run: records each command, succeeds, prints stdout(command)."""
+    """A stand-in for subprocess.run: records each command, succeeds, prints stdout(command).
 
-    def run(command, **_kwargs):
-        seen.append(list(command))
+    The environment a compose command got is recorded as its last element (a dict).
+    """
+
+    def run(command, **kwargs):
+        seen.append([*command, kwargs.get("env") or {}])
         return subprocess.CompletedProcess(
             command, 0, stdout=stdout(command), stderr=""
         )
@@ -434,6 +460,18 @@ def test_a_plain_up_removes_add_ons_a_previous_run_enabled(workdir, fake_up):
     compose_up = [c for c in seen if c[1:2] == ["compose"] and "up" in c]
     assert len(compose_up) == 2
     assert all("--remove-orphans" in c for c in compose_up)
+
+
+def test_compose_gets_secrets_through_its_environment_only(fake_up):
+    """Secrets reach compose as environment variables: never in its arguments or a file."""
+    up, seen, _ = fake_up
+    assert up() == 0
+    command = next(c for c in seen if c[1:2] == ["compose"] and "up" in c)
+    password = KeychainStore("nexo").get(["NEO4J_PASSWORD"])["NEO4J_PASSWORD"]
+    assert command[-1]["NEO4J_PASSWORD"] == password
+    assert not any(password in str(arg) for arg in command[:-1])
+    rendered = (Path.cwd() / RENDER_DIR).glob("*")
+    assert not any(password in p.read_text() for p in rendered)
 
 
 def _memory(workdir, monkeypatch, preset, sizes, addons=()):

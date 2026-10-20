@@ -14,19 +14,22 @@ from __future__ import annotations
 
 import argparse
 import logging
+import os
 import platform
 import shutil
 import subprocess
 import time
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import yaml
 
 from nexo.config import Settings
 from nexo.llm import check_model_servers, resolved_models
+from nexo.secret_store import SecretStore, SecretStoreError, store_from_options
 from nexo.setup.check import FORCEABLE, detect_host, preflight
-from nexo.setup.components import UIS
-from nexo.setup.envfile import ensure_secrets
+from nexo.setup.components import COMPONENTS, UIS
+from nexo.setup.envfile import ensure_secrets, stack_secrets
 from nexo.setup.lock import lock as resolve_lock
 from nexo.setup.render import (
     RENDER_DIR,
@@ -34,6 +37,7 @@ from nexo.setup.render import (
     enabled_set,
     portable_files,
     render,
+    secrets_options,
     write_files,
 )
 from nexo.setup.schema import ADDONS, Casting, SetupError, load_casting
@@ -60,45 +64,71 @@ def _addons(args: argparse.Namespace) -> frozenset[str]:
     return frozenset(getattr(args, "addon", None) or ())
 
 
-def _compose_command(host: Host) -> list[str]:
-    root = Path.cwd()
-    command = [host.engine, "compose", "-f", str(root / RENDER_DIR / "compose.yaml")]
-    if (root / ".env").exists():
-        command += ["--env-file", str(root / ".env")]
-    return command
+def store_for(casting: Casting) -> SecretStore:
+    """The secrets provider the setup file chose (the OS keychain by default)."""
+    return store_from_options(secrets_options(casting))
 
 
-def _compose(host: Host, args: list[str]) -> int:
-    command = _compose_command(host) + args
+@dataclass(frozen=True)
+class _Stack:
+    """A rendered stack and its secrets, which compose gets through the environment."""
+
+    host: Host
+    secrets: dict[str, str] = field(default_factory=dict)
+
+    def command(self, args: list[str]) -> list[str]:
+        """The engine's compose on the render, with .env for personal settings."""
+        root = Path.cwd()
+        command = [
+            self.host.engine,
+            "compose",
+            "-f",
+            str(root / RENDER_DIR / "compose.yaml"),
+        ]
+        if (root / ".env").exists():
+            command += ["--env-file", str(root / ".env")]
+        return command + args
+
+    def environment(self) -> dict[str, str]:
+        """This process's environment plus the secrets; nothing is written to disk."""
+        return os.environ | self.secrets
+
+
+def _compose(stack: _Stack, args: list[str]) -> int:
+    command = stack.command(args)
     log.info("%s", " ".join(command))
-    return subprocess.run(command, check=False).returncode
+    return subprocess.run(command, env=stack.environment(), check=False).returncode
 
 
-def _captured(command: list[str], *, stderr: bool = True) -> str:
-    result = subprocess.run(command, capture_output=True, text=True, check=False)
+def _captured(stack: _Stack, args: list[str], *, stderr: bool = True) -> str:
+    result = subprocess.run(
+        stack.command(args),
+        env=stack.environment(),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
     return (result.stdout or "") + ((result.stderr or "") if stderr else "")
 
 
-def _explain(host: Host, failed: list[str]) -> None:
+def _explain(stack: _Stack, failed: list[str]) -> None:
     """Each failed service's last log lines, and a fix when it is a stale data volume."""
     compose = yaml.safe_load((Path.cwd() / RENDER_DIR / "compose.yaml").read_text())
     for service in failed:
-        logs = _captured(_compose_command(host) + ["logs", "--tail", "20", service])
+        logs = _captured(stack, ["logs", "--tail", "20", service])
         log.error("%s did not start; its last log lines:\n%s", service, logs.rstrip())
-        if hint := stale_volume_hint(service, logs, compose, host.engine):
+        if hint := stale_volume_hint(service, logs, compose, stack.host.engine):
             log.error("%s", hint)
 
 
-def _wait_for_services(host: Host) -> int:
+def _wait_for_services(stack: _Stack) -> int:
     """Until every service runs (one-shot jobs may exit 0); 1 when one fails or hangs."""
     deadline = time.monotonic() + WAIT_S
     while True:
-        ps = _captured(
-            _compose_command(host) + ["ps", "--all", "--format", "json"], stderr=False
-        )
+        ps = _captured(stack, ["ps", "--all", "--format", "json"], stderr=False)
         failed, waiting = assess(parse_ps(ps))
         if failed:
-            _explain(host, failed)
+            _explain(stack, failed)
             return 1
         if not waiting:
             return 0
@@ -108,12 +138,13 @@ def _wait_for_services(host: Host) -> int:
         time.sleep(3)
 
 
-def _ensure_render(args: argparse.Namespace) -> Host:
+def _ensure_render(args: argparse.Namespace) -> _Stack:
+    """The rendered stack with the secrets already in the provider (nothing generated)."""
     casting, lock = _context(args)
     host = detect_host(casting)
     if not (Path.cwd() / RENDER_DIR / "compose.yaml").exists():
         render(casting, lock, Path.cwd(), host)
-    return host
+    return _Stack(host, stack_secrets(store_for(casting), COMPONENTS))
 
 
 def _init(args: argparse.Namespace) -> int:
@@ -138,11 +169,14 @@ def _init(args: argparse.Namespace) -> int:
 
 
 def _secrets(args: argparse.Namespace) -> int:
-    on = {"neo4j", "signoz"}
-    if Path(args.file).exists():
-        _, lock = _context(args)
-        on = enabled_set(lock, _addons(args))
-    ensure_secrets(Path.cwd() / ".env", Path.cwd(), on)
+    if not Path(args.file).exists():
+        raise SetupError(f"{args.file} not found; create one with `nexo setup init`")
+    casting, lock = _context(args)
+    store = store_for(casting)
+    ensure_secrets(
+        Path.cwd() / ".env", Path.cwd(), enabled_set(lock, _addons(args)), store
+    )
+    log.info("secrets for stack %s: %s", casting.metadata.name, store.label)
     return 0
 
 
@@ -169,7 +203,7 @@ def _report(
     casting: Casting, lock: dict, on: set[str], host: Host, force: bool
 ) -> bool:
     """Log the preflight; False when a check failed (memory ones pass with --force)."""
-    findings = preflight(casting, lock, on, host, Path.cwd())
+    findings = preflight(casting, lock, on, host, store_for(casting))
     blocked = False
     for finding in findings:
         forced = not finding.ok and force and finding.name in FORCEABLE
@@ -238,14 +272,15 @@ def _up(args: argparse.Namespace) -> int:
     casting, lock = _context(args)
     host = detect_host(casting)
     on = enabled_set(lock, _addons(args))
-    ensure_secrets(Path.cwd() / ".env", Path.cwd(), on)
+    store = store_for(casting)
+    stack = _Stack(host, ensure_secrets(Path.cwd() / ".env", Path.cwd(), on, store))
     render(casting, lock, Path.cwd(), host, _addons(args))
     if not _report(casting, lock, on, host, args.force):
         return 1
     if casting.spec.models.provider == "ollama" and not args.skip_models:
         if code := _start_models(casting):
             return code
-    if code := _compose(host, UP) or _wait_for_services(host):
+    if code := _compose(stack, UP) or _wait_for_services(stack):
         return code
     for name in sorted(on & UIS.keys()):
         log.info("%s: %s", name, UIS[name])
@@ -264,7 +299,7 @@ def run(args: argparse.Namespace) -> int:
     """Run one `nexo setup` verb; setup problems are reported, not raised."""
     try:
         return args.verb_handler(args)
-    except SetupError as exc:
+    except (SetupError, SecretStoreError) as exc:
         log.error("%s", exc)
         return 2
 
