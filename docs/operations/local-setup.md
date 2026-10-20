@@ -65,7 +65,7 @@ spec:
     hostMetrics: { enabled: true }
   telemetry: { logs: otlp, queryText: false }           # queryText: the question on traces
   ports: { neo4jBolt: 7687, signoz: 8080 }              # host ports; move them for a second stack
-  review: always                                        # always | on-findings | never
+  review: on-findings                                   # on-findings (default) | always | never
   patches:                                              # RFC 6902, applied last
     - target: compose.yaml
       operations: [{ op: add, path: /services/neo4j/mem_limit, value: 3g }]

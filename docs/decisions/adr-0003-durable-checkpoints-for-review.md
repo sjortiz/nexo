@@ -36,9 +36,15 @@ for tests only.[^service] A test starts a run with one SQLite saver and approves
   status value was not added: clients that poll until `completed` would wait forever, and
   `approval_status` already carries the decision ([Request lifecycle](../architecture/request-lifecycle.md#result)).
 - **Amended 2026-10-20:** not every answer has to pause. `spec.review` in `nexo.yaml`
-  (`REVIEW_POLICY`) is `always` (the default: every answer pauses, as before), `on-findings` (an
-  answer with no findings and complete, grounded citations is approved without a pause) or `never`
-  (an answer with no findings or only `warn` findings is approved; any other finding pauses). Blocking findings pause under every policy. An
+  (`REVIEW_POLICY`) is `on-findings`, `always` or `never`:
+  - `on-findings` approves an answer with no findings and complete, grounded citations without a
+    pause.
+  - `always` pauses every answer, as before.
+  - `never` approves an answer with no findings or only `warn` findings; any other finding pauses.
+
+  Blocking findings pause under every policy. **The default is `on-findings`.** Issue #36 proposed
+  `always`; the maintainer chose `on-findings`. An answer with no findings and fully grounded
+  citations does not need a person, and every answer with any finding still pauses. An
   approval without a pause is recorded in the thread's `review` with `reviewer: system:auto` and on
   the compliance span (`nexo.review.reviewer`), so the audit trail is the same shape either way. See
   [Review policy](../operations/human-review.md#review-policy).

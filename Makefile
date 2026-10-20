@@ -81,7 +81,7 @@ ingest: ## Ingest a document: make ingest FILE=corpus/memo.md DOC_TYPE=memo
 	@if [ -z "$(FILE)" ]; then echo "usage: make ingest FILE=path/to/doc.md [DOC_TYPE=memo]" >&2; exit 2; fi
 	$(RUN)nexo ingest "$(FILE)" --doc-type "$(DOC_TYPE)"
 
-ask: ## Ask a question (pauses for review): make ask Q="How is A connected to B?"
+ask: ## Ask a question (a flagged answer pauses for review): make ask Q="How is A connected to B?"
 	@if [ -z "$(Q)" ]; then echo 'usage: make ask Q="your question"' >&2; exit 2; fi
 	$(RUN)nexo ask "$(Q)"
 

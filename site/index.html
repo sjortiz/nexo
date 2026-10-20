@@ -166,7 +166,8 @@
         <article class="card step">
           <h3>Review</h3>
           <p>Compliance checks flag uncited claims, citations to text the agent never read, and sensitive data.
-            The run pauses until a reviewer approves or rejects, even days later.</p>
+            By default a clean, grounded answer is released; any finding pauses the run until a reviewer approves
+            or rejects, even days later.</p>
         </article>
       </div>
 
@@ -174,8 +175,8 @@
         <svg viewBox="0 0 860 230" role="img" aria-labelledby="wf-title wf-desc">
           <title id="wf-title">The LangGraph workflow</title>
           <desc id="wf-desc">Start, then router. The router either rejects the request and ends, or passes it to the
-            investigator. The investigator hands its answer to compliance, which pauses for human approval and
-            then ends.</desc>
+            investigator. The investigator hands its answer to compliance, which releases a clean answer or pauses
+            for human approval, then ends.</desc>
           <defs>
             <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
               <path d="M0 0 10 5 0 10Z" class="svg-arrow"/>
@@ -200,7 +201,7 @@
           <path d="M720 93 H756" class="svg-edge" marker-end="url(#arrow)"/>
           <path d="M220 124 V190 H805 V120" class="svg-edge dashed" marker-end="url(#arrow)"/>
           <text x="512" y="182" text-anchor="middle" class="svg-note">rejected: out of scope, empty, or router unavailable</text>
-          <text x="645" y="44" text-anchor="middle" class="svg-note">pauses for a person's decision</text>
+          <text x="645" y="44" text-anchor="middle" class="svg-note">any finding: pauses for a person</text>
         </svg>
         <figcaption>The fixed workflow. Dashed edges are the router's branch. The full, generated diagram is in the
           <a href="https://github.com/sjortiz/nexo/blob/main/docs/components/orchestration-graph.md">orchestration docs</a>.</figcaption>
@@ -306,8 +307,9 @@ python3 src/nexo/local_profiles.py plan m5-pro-24   # the models a profile picks
         <li>
           <h3>Ingest and ask</h3>
           <p>Put Markdown or text files in <code>corpus/</code>. <code>ask</code> prints
-            <code>thread &lt;id&gt;: awaiting_review</code> with the answer, its citations and any findings; a reviewer
-            then approves or rejects it.</p>
+            the answer and its citations. A clean, grounded answer is approved by the review policy; one with
+            findings prints <code>thread &lt;id&gt;: awaiting_review</code> with them, and a reviewer then approves or
+            rejects it.</p>
 <pre><code>nexo ingest corpus/memo.md --doc-type memo
 nexo ask "How is Acme Holdings connected to Gamma Clinics?"
 nexo review &lt;thread_id&gt; --approve --reviewer you@example.com</code></pre>

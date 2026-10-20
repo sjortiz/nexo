@@ -28,7 +28,7 @@ sources:
    [the handoff](langgraph-strands-handoff.md).
 4. **Compliance.** Runs [deterministic checks](../components/compliance-checks.md). A failed or empty
    investigation is auto-rejected with no human step. If the
-   [review policy](../operations/human-review.md#review-policy) (`spec.review`, default `always`)
+   [review policy](../operations/human-review.md#review-policy) (`spec.review`, default `on-findings`)
    releases the answer, it is approved as `reviewer: system:auto` with no pause; an answer with a
    `block` finding never is. Otherwise the node calls `interrupt()` with a review packet; the run
    pauses and its state is checkpointed.[^graph]
@@ -80,6 +80,7 @@ no free text: the reviewer's comment is in `review.comment` and the router's rea
 ```bash
 nexo ask "How is Acme Holdings connected to Gamma Clinics?" --clearance internal
 # -> {"thread_id": "...", "status": "awaiting_review", "pending_review": {...}}
+#    (or "status": "completed" when the review policy approves a clean answer as system:auto)
 nexo review <thread_id> --approve --reviewer analyst@corp
 ```
 

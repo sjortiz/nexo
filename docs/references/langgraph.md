@@ -26,7 +26,8 @@ sources:
 
 # Role in Nexo
 
-LangGraph runs the fixed workflow: router → investigator → compliance, with a human approval pause. It
+LangGraph runs the fixed workflow: router → investigator → compliance, with a human approval pause
+when the [review policy](../operations/human-review.md#review-policy) holds the answer. It
 owns what must always happen in order; the open-ended reasoning happens inside the
 [Strands agent](strands-agents.md).[^overview] Pinned as `langgraph>=1.2,<2`. Diagram and node details:
 [Orchestration graph](../components/orchestration-graph.md).

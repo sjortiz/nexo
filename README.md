@@ -8,7 +8,7 @@ Overview: [sjortiz.github.io/nexo](https://sjortiz.github.io/nexo/). Step by ste
 
 ```
             ┌─────────────── LangGraph StateGraph (checkpointed) ──────────────┐
-request ──► │ router ──► investigator ─────────────► compliance ──interrupt──► │──► reviewer approves ──► answer
+request ──► │ router ──► investigator ─────────────► compliance ──interrupt──► │──► reviewer (or policy) approves ──► answer
             │   │          │ @task: Strands Agent        (pure checks)         │
             │   ▼          │   ├─ query_knowledge_graph ──► Neo4j (READ tx)    │
             │  END         │   └─ fetch_vector_chunks  ──► chunk store         │
@@ -59,8 +59,8 @@ uv sync && source .venv/bin/activate                  # Python 3.12 + deps from 
 make env PRESET=linux-vllm                             # nexo.yaml + secrets in ~/.config/nexo; HF_TOKEN in .env
 make up                                                # Neo4j, collector, SigNoz, vLLM (4x80GB GPUs)
 nexo ingest corpus/memo.md --doc-type memo --effective-date 2025-06-30
-nexo ask "How is Acme Holdings connected to Gamma Clinics?"   # prints thread_id + review packet
-nexo review <thread_id> --approve --reviewer you@corp
+nexo ask "How is Acme Holdings connected to Gamma Clinics?"   # answer, or thread_id + review packet on findings
+nexo review <thread_id> --approve --reviewer you@corp       # only for a paused thread
 ```
 
 Traces, metrics and logs: http://localhost:8080 (SigNoz; log in with `SIGNOZ_USER_EMAIL` / `SIGNOZ_USER_PASSWORD` from
