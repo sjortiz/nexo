@@ -38,7 +38,7 @@ ingest: document ─► heading-aware chunks ─► embeddings ─► chunk stor
 | Module | Responsibility | Concepts |
 |---|---|---|
 | A. Storage | Turn documents into chunks, vectors and resolved graph triples that point back to their chunks. | [Ingestion pipeline](../components/ingestion-pipeline.md), [Relation ontology](../components/relation-ontology.md), [Entity resolution](../components/entity-resolution.md), [Graph store](../components/graph-store.md), [Chunk store](../components/chunk-store.md) |
-| B. Micro-agent | Decide autonomously which relationships to trace and which evidence to read. | [Investigator agent](../components/investigator-agent.md), [query_knowledge_graph](../components/query-knowledge-graph.md), [fetch_vector_chunks](../components/fetch-vector-chunks.md) |
+| B. Micro-agent | Decide autonomously which relationships to trace and which evidence to read. | [Investigator agent](../components/investigator-agent.md), [query_knowledge_graph](../components/query-knowledge-graph.md), [find_paths and entity_neighbours](../components/graph-lookup-tools.md), [fetch_vector_chunks](../components/fetch-vector-chunks.md) |
 | C. Orchestration | Enforce the fixed corporate workflow: validate, investigate, review. | [Orchestration graph](../components/orchestration-graph.md), [Compliance checks](../components/compliance-checks.md) |
 
 Split of responsibility: the graph owns what must always happen (intake validation, audit trail, human

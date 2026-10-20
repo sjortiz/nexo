@@ -13,6 +13,7 @@
 
 * [Investigator agent](investigator-agent.md) - The Strands agent that traces relationships autonomously.
 * [query_knowledge_graph](query-knowledge-graph.md) - Agent tool: read-only Cypher against Neo4j.
+* [find_paths and entity_neighbours](graph-lookup-tools.md) - Agent tools: entity paths and neighbours without Cypher.
 * [fetch_vector_chunks](fetch-vector-chunks.md) - Agent tool: exact chunk text for ids found in the graph.
 * [search_chunks](search-chunks.md) - Agent tool: search the source text when the graph lacks an entity or path.
 

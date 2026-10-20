@@ -20,11 +20,12 @@ sources:
 
 - **Goal, not workflow.** The system prompt states the goal (deep-dive into how the question's entities
   connect, directly and through multi-hop paths), the graph data model with the relation patterns
-  present, example queries (alias lookup, bounded paths that skip lexical edges, neighbourhoods,
-  timelines, neighbouring chunks), and how to judge evidence. It never lists steps.
-- **Three tools.** [query_knowledge_graph](query-knowledge-graph.md),
-  [fetch_vector_chunks](fetch-vector-chunks.md) and [search_chunks](search-chunks.md), built per investigation as closures over an
-  `InvestigationContext` (budget, clearance, evidence ledger).
+  present, which tool to use for paths and neighbours, example queries (alias lookup, timelines,
+  neighbouring chunks), and how to judge evidence. It never lists steps.
+- **Five tools.** [query_knowledge_graph](query-knowledge-graph.md),
+  [find_paths and entity_neighbours](graph-lookup-tools.md),
+  [fetch_vector_chunks](fetch-vector-chunks.md) and [search_chunks](search-chunks.md), built per
+  investigation as closures over an `InvestigationContext` (budget, clearance, evidence ledger).
 - **Fresh agent per request.** Strands agents hold conversation state; one is built per investigation,
   while the vLLM model client is shared.
 - **Seeds for vector/hybrid.** The top `SEED_CHUNKS` (5) hits from the chunk store's search (hybrid BM25 +

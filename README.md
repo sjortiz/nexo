@@ -45,7 +45,7 @@ graph TD;
 | Module | Code |
 | --- | --- |
 | A. Storage | `storage/` — `ingest.py`, `chunking.py`, `schemas.py`, `ontology.py`, `resolution.py`, `graph_store.py`, `vector_store.py`, `sensitive_data.py` |
-| B. Micro-agent | `agents/` — `investigator.py` (Strands Agent), `tools.py` (the three tools) |
+| B. Micro-agent | `agents/` — `investigator.py` (Strands Agent), `tools.py` (the agent's tools) |
 | C. Orchestration | `orchestration/` — `graph.py` (3 nodes), `state.py`, `compliance.py` |
 | Wiring | `service.py`, `cli.py`, `telemetry.py`, `logging_setup.py`, `llm.py`, `evaluation.py` |
 
