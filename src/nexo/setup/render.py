@@ -413,8 +413,8 @@ def build_env(casting: Casting) -> dict[str, str]:
             "AGENT_INBOX_PORT": str(ports.agent_inbox),
             "REVIEW_INBOX_PORT": str(ports.review_inbox),
         }
-    # Always set, even to the default: a REVIEW_POLICY left in .env would otherwise relax
-    # spec.review always, releasing answers without a person.
+    # Always set, even to the default: a REVIEW_POLICY left in .env would otherwise override
+    # spec.review, e.g. relax always and release answers without a person.
     env["REVIEW_POLICY"] = spec.review
     for role, override in models.roles.items():
         if override.model:

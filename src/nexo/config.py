@@ -212,10 +212,11 @@ class Settings(BaseSettings):
     # Default: <data dir>/<stack>/checkpoints.sqlite, shared by every checkout of the stack.
     checkpoint_sqlite_path: Path | None = None
     checkpoint_postgres_uri: SecretStr | None = None
-    # Which answers wait for a person (ADR-0003, amended): always; on-findings, where an
-    # answer with no findings and grounded citations is approved as system:auto; never,
-    # where answers with only warn findings are approved too. Blocking findings always wait.
-    review_policy: Literal["always", "on-findings", "never"] = "always"
+    # Which answers wait for a person (ADR-0003, amended): on-findings (the default), where
+    # an answer with no findings and grounded citations is approved as system:auto; always;
+    # never, where answers with only warn findings are approved too. Blocking findings
+    # always wait.
+    review_policy: Literal["always", "on-findings", "never"] = "on-findings"
 
     # --- Evaluation (LLM-as-a-judge) ------------------------------------------
     # Prefer a different model from the generator to reduce self-preference bias.

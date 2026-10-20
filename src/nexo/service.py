@@ -112,7 +112,7 @@ class Runtime:
         clearance: str | None = None,
         user: str | None = None,
     ) -> RunResult:
-        """Run a new question until it completes or pauses for human review."""
+        """Run a new question until it completes or, per the review policy, pauses for review."""
         thread_id = thread_id or uuid.uuid4().hex
         payload = {
             "user_query": user_query,
