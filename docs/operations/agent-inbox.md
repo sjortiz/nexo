@@ -29,7 +29,7 @@ You want to review paused questions in a page instead of over MCP or `nexo revie
      addons:
        agentInbox:
          enabled: true
-         config: { port: 3030, adapterPort: 2024 }   # optional; these are the defaults
+     ports: { agentInbox: 3030, reviewInbox: 2024 }   # optional; these are the defaults
    ```
 
 2. `make up` builds and starts the page at `http://127.0.0.1:3030`. The first build needs network access.
