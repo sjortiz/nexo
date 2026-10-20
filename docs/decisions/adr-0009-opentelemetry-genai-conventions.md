@@ -32,6 +32,11 @@ content into span events.
 - Nexo emits `invoke_workflow`, node spans, `retrieval` and database CLIENT spans per the conventions.
 - Content is off by default (`OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT=no_content`), and
   Strands is put in redaction mode; a test proves no content leaks.[^test]
+- **Amended 2026-10-20:** traces identify who asked and which question without the question: `user.id`,
+  `session.id` and a keyed hash of the question (`nexo.query.hash`) are always on the request span. The
+  question's text is a separate, narrower opt-in than content capture (`telemetry.queryText`), kept only
+  for self-hosted backends. Review pauses are no longer recorded as exceptions, which exported the
+  question and the draft answer.
 
 # Options considered
 

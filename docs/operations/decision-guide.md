@@ -138,6 +138,10 @@ Both end in the same rendered stack; the flags exist so trying an add-on never n
 |---|---|---|
 | `no_content` (default) | Model, tokens, timings; no prompts or answers | Always, unless the next row applies |
 | `span_only` or `span_and_event` | Prompts and answers too, and `result` payloads in exported logs | Every backend that receives them is cleared for the data (PII, PHI) |
+| `telemetry.queryText: true` (narrower) | Only the question (`nexo.query.text`), on the request span; never sent to LangSmith | You need to read questions in traces, and the self-hosted backends are cleared for them |
+
+Every trace already says who asked (`user.id`) and which question (`nexo.query.hash`, the same for the
+same question) without its text.
 
 The collector also deletes content attributes and events before export, as a second line of defence.
 
