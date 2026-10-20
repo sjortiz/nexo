@@ -113,11 +113,12 @@ def preflight(
     )
     models = casting.spec.models
     if models.provider == "ollama":
+        ollama = shutil.which("ollama")
         findings.append(
             Finding(
                 "ollama",
-                bool(shutil.which("ollama")),
-                "brew install ollama, or ollama.com",
+                bool(ollama),
+                ollama or "not installed: brew install ollama, or see ollama.com",
             )
         )
         if models.remote is not None:
