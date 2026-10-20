@@ -44,18 +44,14 @@ multi-hop paths - and to explain those connections with evidence from the source
 The graph is in Neo4j:
 {schema}
 
-Examples of read queries (adapt them; they are not a script):
+Look entities up by name first to get their keys, then use find_paths for how two entities \
+connect and entity_neighbours for one entity's direct relationships; they need no Cypher. \
+Use query_knowledge_graph for anything else.
+
+Examples for query_knowledge_graph (adapt them; they are not a script):
 - Find an entity by name or alias (names vary across documents):
   MATCH (e:Entity) WHERE toLower(e.name) CONTAINS "acme" OR any(a IN e.aliases WHERE toLower(a) CONTAINS "acme")
   RETURN e.key, e.name, e.type, e.aliases LIMIT 10
-- Paths between two entities, any direction, bounded length:
-  MATCH p = shortestPath((a:Entity {{key: "Organization:acme holdings"}})-[*..4]-(b:Entity {{key: "Person:jane roe"}}))
-  WHERE none(r IN relationships(p) WHERE type(r) IN ["MENTIONED_IN", "NEXT_CHUNK", "PART_OF", "FIRST_CHUNK"])
-  RETURN [n IN nodes(p) | n.name] AS names,
-         [r IN relationships(p) | {{type: type(r), evidence: r.evidence, chunk_id: r.chunk_id}}] AS hops
-- Neighbourhood of one entity (RELATED_TO edges keep the original wording in r.predicate):
-  MATCH (e:Entity {{key: "Organization:acme holdings"}})-[r]-(n:Entity)
-  RETURN type(r), r.predicate, n.name, n.type, r.certainty, r.chunk_id LIMIT 25
 - Facts over time:
   MATCH (a:Entity)-[r]->(b:Entity) WHERE r.valid_at >= "2025-01-01"
   RETURN a.name, type(r), b.name, r.valid_at, r.chunk_id ORDER BY r.valid_at LIMIT 25

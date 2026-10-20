@@ -47,14 +47,17 @@ def _tools(settings, chunk_store, clearance, detector=DETECTOR, budget=10):
         max_tool_calls=budget,
         scope=InvestigationScope(chunk_filter=ChunkFilter(max_sensitivity=clearance)),
     )
-    _, fetch, search = build_investigation_tools(
-        graph=FakeGraph(),
-        chunks=chunk_store,
-        ctx=ctx,
-        settings=settings,
-        redactor=ChunkRedactor(detector),
-    )
-    return ctx, fetch, search
+    tools = {
+        t.tool_name: t
+        for t in build_investigation_tools(
+            graph=FakeGraph(),
+            chunks=chunk_store,
+            ctx=ctx,
+            settings=settings,
+            redactor=ChunkRedactor(detector),
+        )
+    }
+    return ctx, tools["fetch_vector_chunks"], tools["search_chunks"]
 
 
 def _store(chunk_store, *chunks):

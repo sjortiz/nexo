@@ -481,6 +481,66 @@ def test_row_cap_tool_redaction_and_db_span(store, settings, spans):
     )
 
 
+def test_lookup_tools_follow_entity_edges_within_clearance(store, settings):
+    """find_paths and entity_neighbours skip chunk co-mentions and hide PHI."""
+    acme, beta, gamma = _resolved("Acme"), _resolved("Beta"), _resolved("Gamma")
+    jane = _resolved("Jane Roe", "Person")
+    store.replace_source(
+        DocumentMetadata(source_id="a"),
+        _chunks("a", C1, C2),
+        [
+            _row(C1, "a", (acme, "ACQUIRED", beta)),
+            # Gamma shares C1 with Acme: a 2-hop route through the chunk.
+            _row(C1, "a", (gamma, "PARTNERS_WITH", _resolved("Delta"))),
+            _row(C2, "a", (beta, "SUPPLIES", gamma)),
+        ],
+    )
+    store.replace_source(
+        DocumentMetadata(source_id="p"),
+        _chunks("p", C3, sensitivity=Sensitivity.PHI),
+        [_row(C3, "p", (beta, "TREATS", jane), Sensitivity.PHI)],
+    )
+    ctx = InvestigationContext(
+        request_id="r",
+        max_tool_calls=10,
+        scope=InvestigationScope(
+            chunk_filter=ChunkFilter(max_sensitivity=Sensitivity.INTERNAL)
+        ),
+    )
+    tools = {
+        t.tool_name: t
+        for t in build_investigation_tools(
+            graph=store, chunks=None, ctx=ctx, settings=settings
+        )
+    }
+
+    out = json.loads(tools["find_paths"](acme.key, gamma.key))
+    assert [
+        [(h["from"], h["relation"], h["to"]) for h in p["hops"]] for p in out["paths"]
+    ] == [[(acme.key, "ACQUIRED", beta.key), (beta.key, "SUPPLIES", gamma.key)]]
+    assert out["chunk_ids_found"] == [C1, C2]
+
+    out = json.loads(tools["find_paths"](acme.key, jane.key))
+    assert out["paths"] == [] and out["withheld"] == 1
+    assert "unknown" in json.loads(tools["find_paths"](acme.key, "X:none"))["error"]
+
+    out = json.loads(tools["entity_neighbours"](beta.key))
+    assert sorted(
+        (e["edge"]["relation"], e["edge"]["outgoing"], e["neighbour"]["name"])
+        for e in out["edges"]
+    ) == [("ACQUIRED", False, "Acme"), ("SUPPLIES", True, "Gamma")]
+    assert out["withheld"] == 1 and C3 not in out["chunk_ids_found"]
+    assert "unknown" in json.loads(tools["entity_neighbours"](jane.key))["error"]
+
+    # An edge without a rank (written before ranks existed) is treated as PHI.
+    with GraphDatabase.driver(
+        URI, auth=("neo4j", os.environ["NEO4J_TEST_PASSWORD"])
+    ) as driver:
+        driver.execute_query("MATCH ()-[r:SUPPLIES]->() REMOVE r.sensitivity_rank")
+    out = json.loads(tools["find_paths"](acme.key, gamma.key))
+    assert out["paths"] == [] and out["withheld"] == 1
+
+
 def _last_tool_payload(request: dict) -> dict:
     """Decode the JSON tool result carried by the last message of a model request."""
     content = request["messages"][-1]["content"]
