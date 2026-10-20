@@ -35,6 +35,7 @@ sources:
 | `tests/test_service_wiring.py` | nothing | The composition root builds each component from its own model role. |
 | `tests/test_secret_store.py::test_real_keychain_round_trip` | a desktop keychain, the `keychain` extra (`make install-keychain`), `NEXO_KEYCHAIN_TEST=1` | A temporary entry in this machine's real keychain, written and removed. Local only: `keyring` is an optional extra, so the suite and CI run without it; the keychain provider's logic is tested with an injected fake. |
 | `tests/test_live_models.py` | model servers, `NEXO_LIVE=1` | Real models: schema-valid extraction and routing, embeddings ranking (English and Spanish), agent tool calls, GenAI spans. |
+| `tests/test_review_ui.py` | nothing | The demo review page: paused-only list, decisions and reviewer, acknowledgement, escaping, CSRF, loopback bind. |
 | `tests/test_mcp_server.py` | nothing | Every MCP tool over the real protocol (in-process and `nexo mcp` over stdio), clearance, parameterized lookups, rejected writes, JSON-only stdout. |
 | `tests/test_claude_skill.py` | nothing | The skill's frontmatter, tool list and phases, and `.mcp.json`, in sync with the MCP server. |
 | `tests/test_docs_okf.py` | nothing | This bundle conforms to OKF v0.2; links, sources and footnotes resolve; every setting is documented. |
