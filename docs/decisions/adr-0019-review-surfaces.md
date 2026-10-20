@@ -32,7 +32,7 @@ by the read-time redactor), and `review` records the decision. No surface owns r
 |---|---|---|
 | Review over MCP | Supported default | The reviewer is already in an MCP client; the server asks the human to confirm, so the model cannot approve alone. |
 | LangChain Agent Inbox | Opt-in | An inbox UI for teams that already run one. |
-| Local web page | Demo only | Shows the flow without an MCP client; not hardened. |
+| Local web page | Demo only | Shows the flow without an MCP client; no authentication, loopback only (`make review-ui`, [Human review](../operations/human-review.md#demo-review-page)). |
 | `nexo review` | Always available | The fallback every other surface can print. |
 
 # Why MCP is the default

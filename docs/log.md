@@ -1,6 +1,7 @@
 # Bundle Update Log
 
 ## 2026-10-20
+* **Creation**: A [demo review page](operations/human-review.md#demo-review-page) (`make review-ui`): no authentication, loopback only, off unless started.
 * **Update**: Review over MCP: `nexo_pending_reviews`, `nexo_get_review` and `nexo_submit_review` on `nexo mcp` (`MCP_REVIEW_TOOLS`, on by default); the write asks the person to confirm by elicitation and refuses clients that cannot ([MCP server](components/mcp-server.md#review-tools), [ADR-0019](decisions/adr-0019-review-surfaces.md)).
 * **Update**: Review has a shared core: `Runtime.pending_reviews()` lists paused threads and `Runtime.review_passages()` reads the cited chunks for a clearance, masked by the redactor ([Human review](operations/human-review.md), [ADR-0019](decisions/adr-0019-review-surfaces.md)).
 * **Update**: [Judge scores](operations/evaluation.md#judge-scores) on a small Mac: pull a judge, then `JUDGE_MODEL=... nexo eval` or `roles.judge` in `nexo.yaml`; a judge named for a profile that turns it off now runs on that profile's Ollama instead of the vLLM default.
