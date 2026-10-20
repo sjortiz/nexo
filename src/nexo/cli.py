@@ -10,6 +10,8 @@ import sys
 from datetime import date
 from pathlib import Path
 
+from pydantic import BaseModel
+
 from nexo.agents.models import InvestigationScope
 from nexo.agents.redaction import ChunkRedactor
 from nexo.config import get_settings
@@ -59,10 +61,19 @@ from nexo.telemetry import (
 log = logging.getLogger("nexo.cli")
 
 
-def _emit(message: str, model) -> None:
-    log.info(
-        message, extra={"result": model.model_dump(mode="json", exclude_none=True)}
-    )
+def _emit(
+    result, message: str, *args, level: int = logging.INFO, indent: int | None = 2
+) -> None:
+    """Write `result` to stdout as JSON (the command's output) and log `message` to stderr.
+
+    `indent=None` writes one object per line, for commands that emit rows (JSON Lines).
+    The record carries the result too, for OTLP export with content capture.
+    """
+    if isinstance(result, BaseModel):
+        result = result.model_dump(mode="json", exclude_none=True)
+    log.log(level, message, *args, extra={"result": result})
+    sys.stdout.write(json.dumps(result, indent=indent, default=str) + "\n")
+    sys.stdout.flush()
 
 
 def _ingest(args: argparse.Namespace) -> int:
@@ -80,14 +91,15 @@ def _ingest(args: argparse.Namespace) -> int:
     with open_ingestor(get_settings()) as ingestor:
         report = ingestor.ingest(Path(args.file).read_text(encoding="utf-8"), metadata)
     if report.failed_chunk_ids:
-        log.warning(
+        _emit(
+            report.model_dump(mode="json"),
             "ingested %s with %d failed chunks",
             report.source_id,
             len(report.failed_chunk_ids),
-            extra={"result": report.model_dump(mode="json")},
+            level=logging.WARNING,
         )
         return 1
-    _emit(f"ingested {report.source_id}", report)
+    _emit(report, "ingested %s", report.source_id)
     return 0
 
 
@@ -100,7 +112,7 @@ def _ask(args: argparse.Namespace) -> int:
             clearance=args.clearance,
             user=args.user,
         )
-        _emit(f"thread {result.thread_id}: {result.status}", result)
+        _emit(result, "thread %s: %s", result.thread_id, result.status)
     return 0
 
 
@@ -115,8 +127,11 @@ def _review(args: argparse.Namespace) -> int:
     with open_runtime(get_settings()) as runtime:
         result = runtime.review(args.thread_id, decision)
         _emit(
-            f"thread {result.thread_id}: {result.status} ({result.approval_status})",
             result,
+            "thread %s: %s (%s)",
+            result.thread_id,
+            result.status,
+            result.approval_status,
         )
     return 0
 
@@ -148,7 +163,7 @@ def _status(args: argparse.Namespace) -> int:
 
     with open_runtime(get_settings()) as runtime:
         result = runtime.status(args.thread_id)
-        _emit(f"thread {result.thread_id}: {result.status}", result)
+        _emit(result, "thread %s: %s", result.thread_id, result.status)
     return 0
 
 
@@ -203,17 +218,16 @@ def _eval(args: argparse.Namespace) -> int:
                         judge, case["question"], output.answer
                     ).score
                 record_metrics(metrics)
-            log.info(
-                "eval case scored",
-                extra={
-                    "result": {
-                        "question": case["question"],
-                        **metrics,
-                        "answer": output.answer,
-                        "tool_calls": len(output.tool_calls),
-                        "stop_reason": output.stop_reason,
-                    }
+            _emit(
+                {
+                    "question": case["question"],
+                    **metrics,
+                    "answer": output.answer,
+                    "tool_calls": len(output.tool_calls),
+                    "stop_reason": output.stop_reason,
                 },
+                "eval case scored",
+                indent=None,
             )
     finally:
         graph.close()
@@ -258,13 +272,15 @@ def _eval_extraction(args: argparse.Namespace) -> int:
         gold = {triple_key(Triple.model_validate(t), ontology) for t in case["triples"]}
         totals["predicted"] += [(n, *k) for k in pred]
         totals["gold"] += [(n, *k) for k in gold]
-        log.info(
+        _emit(
+            {"case": n, **extraction_scores(pred, gold)},
             "extraction case scored",
-            extra={"result": {"case": n, **extraction_scores(pred, gold)}},
+            indent=None,
         )
-    log.info(
+    _emit(
+        {"case": "overall", **extraction_scores(totals["predicted"], totals["gold"])},
         "extraction overall",
-        extra={"result": extraction_scores(totals["predicted"], totals["gold"])},
+        indent=None,
     )
     return 0
 
@@ -277,7 +293,7 @@ def _graph(args: argparse.Namespace) -> int:
         Path(args.output).write_text(diagram + "\n", encoding="utf-8")
         log.info("wrote workflow diagram to %s", args.output)
     else:
-        log.info("workflow diagram", extra={"result": {"mermaid": diagram}})
+        _emit({"mermaid": diagram}, "workflow diagram")
     return 0
 
 
@@ -302,14 +318,15 @@ def _chunks_status(_args: argparse.Namespace) -> int:
         graph.close()
     result = {"chunk_store": settings.chunk_store, "chunks_without_text": missing}
     if missing:
-        log.warning(
+        _emit(
+            result,
             "%d chunks in the graph have no text: nexo chunks import (from %s) or re-ingest",
             missing,
             settings.vector_store_path,
-            extra={"result": result},
+            level=logging.WARNING,
         )
         return 1
-    log.info("every chunk in the graph has its text", extra={"result": result})
+    _emit(result, "every chunk in the graph has its text")
     return 0
 
 
@@ -325,12 +342,12 @@ def _chunks_import(args: argparse.Namespace) -> int:
         result["chunks_without_text"] = store.missing_text()
     finally:
         graph.close()
-    log.info(
+    _emit(
+        result,
         "imported %d chunks (%d referenced by the graph); %d graph chunks still lack text",
         result["imported"],
         result["referenced_by_graph"],
         result["chunks_without_text"],
-        extra={"result": result},
     )
     return 0
 
@@ -368,18 +385,19 @@ def _models(args: argparse.Namespace) -> int:
         "roles": rows,
     }
     if failed:
-        log.error(
+        _emit(
+            result,
             "models (%s): check failed for %s",
             profiles,
             ", ".join(failed),
-            extra={"result": result},
+            level=logging.ERROR,
         )
         return 1
-    log.info(
+    _emit(
+        result,
         "models (%s)%s",
         profiles,
         ": all reachable" if args.check else "",
-        extra={"result": result},
     )
     return 0
 
@@ -546,10 +564,8 @@ def main(argv: list[str] | None = None) -> int:
     _add_chunk_commands(sub)
 
     args = parser.parse_args(argv)
-    # MCP over stdio uses stdout for the protocol: logs go to stderr there.
-    configure_logging(
-        get_settings(), stream=sys.stderr if args.command == "mcp" else None
-    )
+    # Logs go to stderr: stdout is the command's JSON, or the protocol for MCP over stdio.
+    configure_logging(get_settings())
     try:
         return args.handler(args)
     finally:

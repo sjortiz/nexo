@@ -144,7 +144,7 @@ hosts ([Local on Apple Silicon](local-apple-silicon.md)).
 |---|---|---|
 | `OTEL_SERVICE_NAME` | `nexo` | `service.name` resource attribute. |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | unset | OTLP/HTTP base URL; unset disables export. |
-| `OTEL_CONSOLE_EXPORT` | `false` | Print spans to stdout. |
+| `OTEL_CONSOLE_EXPORT` | `false` | Print spans to stderr. |
 | `OTEL_LOGS_EXPORTER` | `none` | `otlp` also sends log records to the collector, with trace ids; `result` payloads only with content capture on. Stored by SigNoz; `nexo.yaml` sets it (`telemetry.logs`, default `otlp`). |
 | `OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT` | `no_content` | `span_only` / `span_and_event` put prompts, outputs and agent Cypher on spans (may carry PII). Standard GenAI variable. |
 | `OTEL_SEMCONV_STABILITY_OPT_IN` | derived | Strands conventions and redaction; derived from content capture unless set. |
@@ -163,7 +163,7 @@ hosts ([Local on Apple Silicon](local-apple-silicon.md)).
 | Variable | Default | Effect |
 |---|---|---|
 | `LOG_LEVEL` | `INFO` | Root log level. |
-| `LOG_FORMAT` | `text` | `text` or `json` (one object per line, with `trace_id`, `span_id` and `result`). |
+| `LOG_FORMAT` | `text` | `text` or `json` (one object per line, with `trace_id` and `span_id`). Logs go to stderr; stdout is the command's JSON result. |
 
 [^config]: Settings
 [^env]: Environment template

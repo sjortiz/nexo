@@ -1,8 +1,10 @@
-"""Logging configuration: one handler, trace-correlated records.
+"""Logging configuration: one handler on stderr, trace-correlated records.
 
 Every record carries the current OpenTelemetry trace and span ids, so a log
-line can be found from its trace and vice versa. Structured payloads (CLI
-results, eval rows) go in `extra={"result": ...}` rather than the message.
+line can be found from its trace and vice versa. Logs go to stderr so stdout
+carries only a command's output (CLI results and eval rows, as JSON, or the
+MCP stdio protocol). Records also carry that payload in `extra={"result": ...}`
+for OTLP export; the stderr formatters leave it out, since stdout has it.
 """
 
 from __future__ import annotations
@@ -18,7 +20,12 @@ from opentelemetry.instrumentation.logging.handler import LoggingHandler
 
 from nexo.config import Settings
 
-_STANDARD_ATTRS = set(vars(logging.makeLogRecord({}))) | {"message", "asctime"}
+# `result` is the command's stdout output; only the OTLP handler exports it.
+_STANDARD_ATTRS = set(vars(logging.makeLogRecord({}))) | {
+    "message",
+    "asctime",
+    "result",
+}
 
 
 # One public method is logging's interface.
@@ -33,7 +40,7 @@ class TraceContextFilter(logging.Filter):  # pylint: disable=too-few-public-meth
 
 
 class TextFormatter(logging.Formatter):
-    """Human-readable lines with trace ids and any `result` payload as JSON."""
+    """Human-readable lines with trace ids."""
 
     def __init__(self) -> None:
         super().__init__("%(asctime)s %(levelname)s %(name)s %(message)s")
@@ -42,8 +49,6 @@ class TextFormatter(logging.Formatter):
         line = super().format(record)
         if getattr(record, "trace_id", ""):
             line += f" trace_id={record.trace_id} span_id={record.span_id}"
-        if hasattr(record, "result"):
-            line += "\n" + json.dumps(record.result, indent=2, default=str)
         return line
 
 
@@ -70,8 +75,8 @@ class JsonFormatter(logging.Formatter):
 
 
 def configure_logging(settings: Settings, stream=None) -> None:
-    """One handler on stdout, or another stream (e.g. stderr when stdout carries MCP stdio)."""
-    handler = logging.StreamHandler(stream or sys.stdout)
+    """One handler on stderr (or `stream`): stdout is the command's output."""
+    handler = logging.StreamHandler(stream or sys.stderr)
     handler.addFilter(TraceContextFilter())
     handler.setFormatter(
         JsonFormatter() if settings.log_format == "json" else TextFormatter()

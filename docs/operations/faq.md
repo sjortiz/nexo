@@ -52,7 +52,7 @@ self-hosting. Details: [Observability](observability.md);[^observability] memory
 Set `OTEL_LOGS_EXPORTER=otlp` (the local template already does). Log records go through the collector
 to SigNoz with their trace ids, so you can jump from a log line to its trace.
 Structured `result` payloads (which can hold answers) are left out unless content capture is on.
-Logs always go to stdout as well.[^observability]
+Logs always go to stderr as well; stdout carries only the command's JSON.[^observability]
 
 # Why does SigNoz not replace Langfuse?
 
