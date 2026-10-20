@@ -10,6 +10,9 @@ sources:
   - id: cli
     resource: ../../src/nexo/cli.py
     title: nexo eval
+  - id: profiles
+    resource: ../../src/nexo/local_profiles.py
+    title: Local model profiles
 ---
 
 # Golden set
@@ -38,7 +41,7 @@ chunks the reviewer confirmed become `relevant_chunk_ids`.
 
 1. Ingest the corpus the golden set refers to (chunk ids are deterministic, so they stay stable as
    long as the text does).
-2. Optionally set `JUDGE_MODEL` (and `JUDGE_BASE_URL`) to a model different from the generator.
+2. Optionally turn on the judge ([below](#judge-scores)) for faithfulness and relevancy.
 3. Run `LOG_FORMAT=json nexo eval golden.jsonl > results.jsonl`.
 4. Each case is logged with the question plus the [metrics](../components/evaluation.md) in its
    `result` field (`LOG_FORMAT=json` for one object per line), and is also an `eval.case` span with
@@ -46,6 +49,33 @@ chunks the reviewer confirmed become `relevant_chunk_ids`.
 
 `nexo eval` calls the investigator directly. It skips the router and human review, so it measures
 retrieval and generation only.[^cli]
+
+# Judge scores
+
+Faithfulness and relevancy need the judge role. Profiles of 24 GB and less leave it off to save
+memory (`make check` shows `model judge: off`). Use a judge model different from the agent's, so it
+does not grade its own answers. `make up` pulls only the profile's models, so pull the judge first:
+
+```sh
+ollama pull llama3.1:8b-instruct-q4_K_M
+```
+
+For one run, set it on the command:
+
+```sh
+JUDGE_MODEL=llama3.1:8b-instruct-q4_K_M nexo eval golden.jsonl
+```
+
+To keep it on, name it in `nexo.yaml`; it runs on the profile's Ollama unless `base_url` says otherwise:
+
+```yaml
+spec:
+  models:
+    roles: { judge: { model: llama3.1:8b-instruct-q4_K_M } }
+```
+
+The judge adds about 4.9 GB. `make up` lets Ollama keep only the profile's models loaded (two here),
+so with a judge it swaps models during a run: prefer the one-run form on a small Mac.[^profiles]
 
 # Extraction against gold triples
 
@@ -71,3 +101,4 @@ logged as `result` records. Use it before and after changing the extraction prom
 | Low `faithfulness` | Claims beyond the evidence; check `ungrounded_citations` rates in compliance. |
 
 [^cli]: nexo eval
+[^profiles]: Local model profiles

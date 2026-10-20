@@ -135,7 +135,7 @@ hosts ([Local on Apple Silicon](local-apple-silicon.md)).
 | Variable | Default | Effect |
 |---|---|---|
 | `JUDGE_BASE_URL` / `JUDGE_API_KEY` | unset (fall back to `VLLM_*`) | Judge endpoint. |
-| `JUDGE_MODEL` | unset | Enables LLM-as-a-judge in `nexo eval`. |
+| `JUDGE_MODEL` | unset | Enables LLM-as-a-judge in `nexo eval`; with a local profile that turns the judge off, it runs on that profile's Ollama. |
 
 **Observability**
 
