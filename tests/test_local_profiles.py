@@ -190,6 +190,23 @@ def test_small_single_mac_disables_the_judge():
     )
 
 
+def test_a_judge_set_on_a_small_mac_runs_on_the_local_server():
+    """Naming a judge model enables it on the profile's Ollama, not the vLLM default."""
+    judge = "llama3.1:8b-instruct-q4_K_M"
+    settings = Settings(_env_file=None, local_profile="m5-pro-24", judge_model=judge)
+    endpoint = settings.endpoint("judge")
+    assert (endpoint.model, endpoint.base_url) == (judge, settings.local_base_url)
+    assert endpoint.api_key.get_secret_value() == "ollama"
+    explicit = Settings(
+        _env_file=None,
+        local_profile="m5-pro-24",
+        judge_model=judge,
+        judge_base_url="http://judge.local/v1",
+    )
+    assert explicit.endpoint("judge").base_url == "http://judge.local/v1"
+    assert Settings(_env_file=None, local_profile="m5-pro-24").judge_model is None
+
+
 def test_two_mac_profiles_split_roles_between_hosts():
     """With two Macs, agent/extraction go remote and router/judge/embeddings stay local."""
     settings = Settings(
