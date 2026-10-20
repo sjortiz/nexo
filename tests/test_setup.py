@@ -13,7 +13,7 @@ import pytest
 import yaml
 
 from nexo import cli
-from nexo.config import Settings
+from nexo.config import Settings, data_dir
 from nexo.secret_store import FileStore, store_from_options
 from nexo.local_profiles import plan
 from nexo.setup import check
@@ -741,6 +741,29 @@ def test_parse_ps_skips_podman_compose_banners():
     # podman ps indents its array over many lines.
     indented = json.dumps([json.loads(line) for line in lines], indent=4)
     assert parse_ps(banner + "\n" + indented) == [json.loads(line) for line in lines]
+
+
+@pytest.mark.parametrize("stack_has_file", [False, True])
+def test_up_carries_old_checkpoints_to_the_stack_without_overwriting(
+    fake_up, workdir, capfd, stack_has_file
+):
+    """Reviews in a checkout's .data/ move to the stack's data dir once (ADR-0018)."""
+    up, _, _ = fake_up
+    old = workdir / ".data/checkpoints.sqlite"
+    old.parent.mkdir()
+    old.write_bytes(b"old reviews")
+    (old.parent / "checkpoints.sqlite-wal").write_bytes(b"recent writes")
+    new = data_dir() / "nexo" / "checkpoints.sqlite"
+    if stack_has_file:
+        new.parent.mkdir(parents=True)
+        new.write_bytes(b"stack reviews")
+    assert up() == 0
+    captured = capfd.readouterr()
+    copied = "checkpoints: copied" in captured.err + captured.out
+    assert copied is not stack_has_file
+    assert new.read_bytes() == (b"stack reviews" if stack_has_file else b"old reviews")
+    assert Path(f"{new}-wal").exists() is not stack_has_file
+    assert old.read_bytes() == b"old reviews"  # the checkout keeps its copy
 
 
 def test_up_fails_when_neo4j_refuses_the_providers_password(fake_up, capfd):

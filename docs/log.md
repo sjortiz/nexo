@@ -1,6 +1,7 @@
 # Bundle Update Log
 
 ## 2026-10-20
+* **Update**: `make up` copies a checkout's old `.data/checkpoints.sqlite` to `<data dir>/<stack>/` when the stack has none, so reviews paused before the move survive the upgrade; an existing file is never overwritten ([ADR-0018](decisions/adr-0018-chunks-in-neo4j.md)).
 * **Update**: CLI logs go to stderr; stdout carries only the command's JSON (`nexo ask ... | jq`), and `nexo eval` / `eval-extraction` write one JSON object per line ([Observability](operations/observability.md#logs)).
 * **Update**: `spec.ports` in `nexo.yaml` sets the host ports the stack publishes; `nexo.env`, the lock, the Neo4j login probe and the printed links follow, and `check` names whoever holds a port already, so a second stack can run beside the first.
 * **Update**: The investigator has [find_paths and entity_neighbours](components/graph-lookup-tools.md): fixed path and neighbour lookups by entity key, so small models no longer write that Cypher; paths and edges above the caller's clearance are withheld, and unranked edges count as PHI ([Investigator agent](components/investigator-agent.md)).
