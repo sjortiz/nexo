@@ -190,6 +190,50 @@ def test_strands_agent_crawls_graph_then_vectors(settings, chunk_store):
     assert evidence.chunk_id in json.dumps(client.requests[1]["messages"])
 
 
+def _seeded(chunk_store, replies):
+    """A stored seed chunk and a client answering with `replies` ({id} becomes the seed's chunk id)."""
+    seed = make_chunk("kb", 0, "Beta Labs makes diagnostic kits.")
+    chunk_store.upsert([seed], [seed.text])
+    client = ScriptedClient([_completion({"content": c.format(id=seed.chunk_id)}, "stop") for c in replies])
+    return seed, client
+
+
+def _last_user_text(request) -> str:
+    return json.dumps([m for m in request["messages"] if m["role"] == "user"][-1])
+
+
+@pytest.mark.parametrize(("first", "asks_for"), [("", "without writing a final answer"),
+                                                 ("Beta Labs makes kits.", "has no citations")])
+def test_missing_or_uncited_answer_gets_one_follow_up(settings, chunk_store, first, asks_for):
+    seed, client = _seeded(chunk_store, [first, "Beta Labs makes kits [chunk:{id}]."])
+    investigator = Investigator(model=OpenAIModel(client=client, model_id="m", stream=False), graph=FakeGraph(),
+                                chunks=chunk_store, settings=settings)
+    output = investigator.investigate("What does Beta Labs make?", scope=InvestigationScope(strategy="hybrid"))
+    assert len(client.requests) == 2
+    assert asks_for in _last_user_text(client.requests[1])
+    assert output.citations == [seed.chunk_id] and output.answer.startswith("Beta Labs makes kits")
+
+
+def test_cited_answer_and_answer_without_evidence_get_no_follow_up(settings, chunk_store):
+    _, client = _seeded(chunk_store, ["Kits [chunk:{id}]."])
+    Investigator(model=OpenAIModel(client=client, model_id="m", stream=False), graph=FakeGraph(), chunks=chunk_store,
+                 settings=settings).investigate("q", scope=InvestigationScope(strategy="hybrid"))
+    assert len(client.requests) == 1
+
+    nothing = ScriptedClient([_completion({"content": "The knowledge graph has nothing on this."}, "stop")])
+    Investigator(model=OpenAIModel(client=nothing, model_id="m", stream=False), graph=FakeGraph(), chunks=chunk_store,
+                 settings=settings).investigate("q", scope=InvestigationScope(strategy="graph"))
+    assert len(nothing.requests) == 1  # no evidence fetched: nothing to cite
+
+
+def test_follow_up_happens_once(settings, chunk_store):
+    _, client = _seeded(chunk_store, ["", ""])
+    output = Investigator(model=OpenAIModel(client=client, model_id="m", stream=False), graph=FakeGraph(),
+                          chunks=chunk_store, settings=settings).investigate(
+        "q", scope=InvestigationScope(strategy="hybrid"))
+    assert len(client.requests) == 2 and output.answer == ""  # compliance then rejects it
+
+
 def test_investigate_works_inside_a_running_event_loop(settings, chunk_store):
     # Jupyter cells run inside an event loop; investigate() must not call asyncio.run there.
     seed = make_chunk("kb", 0, "Beta Labs makes diagnostic kits.")

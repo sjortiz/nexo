@@ -10,7 +10,9 @@ calling tools or a budget in `Limits` trips.
 from __future__ import annotations
 
 import asyncio
+import logging
 import re
+import time
 import uuid
 from typing import Any
 
@@ -66,6 +68,8 @@ not confirm in fetched text is a lead, not a finding - label it unverified.
 
 Answer format: a direct answer first, then the supporting chain of relationships. Cite every \
 factual sentence with [chunk:<chunk_id>], using only chunk ids whose text you received."""
+
+log = logging.getLogger(__name__)
 
 AGENT_NAME = "relationship-investigator"
 
@@ -152,6 +156,7 @@ class Investigator:
         # The Strands event loop drives vLLM: every turn sends the conversation
         # plus tool specs; vLLM's tool-call parser turns Llama output into
         # tool_calls; Strands executes them and feeds results back.
+        started = time.monotonic()
         result = await asyncio.wait_for(
             agent.invoke_async(
                 _render_prompt(query, seeds, scope.chunk_filter),
@@ -160,8 +165,20 @@ class Investigator:
             ),
             timeout=self._settings.agent_timeout_s,
         )
-
         answer = str(result).strip()
+
+        # Smaller models sometimes end the turn after reasoning without writing the answer, or drop the
+        # citations. One bounded follow-up from the evidence already gathered; compliance still checks it.
+        follow_up = _follow_up(answer, ctx)
+        remaining = self._settings.agent_timeout_s - (time.monotonic() - started)
+        if follow_up and str(result.stop_reason) == "end_turn" and remaining > 5:
+            log.info("investigation %s: asking for %s", ctx.request_id, follow_up[0])
+            result = await asyncio.wait_for(
+                agent.invoke_async(follow_up[1],
+                                   limits=Limits(turns=2, total_tokens=self._settings.agent_max_total_tokens)),
+                timeout=remaining,
+            )
+            answer = str(result).strip() or answer
         return AgentOutput(
             answer=answer,
             citations=extract_citations(answer),
@@ -182,6 +199,19 @@ class Investigator:
         becomes the parent of every Strands span.
         """
         return run_sync(self.ainvestigate(query, request_id=request_id, scope=scope))
+
+
+def _follow_up(answer: str, ctx: InvestigationContext) -> tuple[str, str] | None:
+    """What to ask for when the first answer is missing or uncited: (kind, prompt)."""
+    if not answer:
+        return ("the missing final answer",
+                "You ended without writing a final answer. Write it now from the evidence you already have, "
+                "citing each fact as [chunk:<chunk_id>]. Do not call any more tools.")
+    if ctx.fetched and not extract_citations(answer):
+        return ("citations",
+                "Your answer has no citations. Rewrite it, citing each fact as [chunk:<chunk_id>] using only "
+                "chunks you fetched or were given. Do not call any more tools.")
+    return None
 
 
 def _render_prompt(query: str, seeds: list[ChunkRecord], chunk_filter: ChunkFilter) -> str:
