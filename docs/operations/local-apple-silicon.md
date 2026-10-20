@@ -77,14 +77,15 @@ Sizes are Ollama library download sizes; KV cache and the OS need the rest. `qwe
 
 1. `brew install ollama podman` and `podman machine init` (first time only), `podman machine start`.
 2. `make env PRESET=mac-single` (or `mac-two-machines`, see "Two Macs" below): writes `nexo.yaml`
-   and creates `.env` with `NEO4J_PASSWORD` and the SigNoz secrets.[^env] Set
+   and generates `NEO4J_PASSWORD` and the SigNoz secrets into your keychain (`.env` keeps
+   personal settings).[^env] Set
    `models.local.profile` in `nexo.yaml` to this Mac's profile.[^preset]
 3. `make check`: the container engine, secrets and a memory budget for the models and containers
    against this Mac and the Podman VM.
 4. `make up` - pulls and preloads the profile's models and starts Ollama with the right context
    length, keep-alive and KV-cache settings, bound to `127.0.0.1`;[^setup] then Neo4j on
    `127.0.0.1:7687`, traces, metrics and logs in SigNoz at http://localhost:8080 (log in with `SIGNOZ_USER_EMAIL` /
-   `SIGNOZ_USER_PASSWORD` from `.env`), raw metrics at http://localhost:8889/metrics. Infrastructure metrics
+   `uv run keyring get nexo/nexo SIGNOZ_USER_PASSWORD`), raw metrics at http://localhost:8889/metrics. Infrastructure metrics
    cover the Podman VM, not the Mac. Add Langfuse (evaluation) or Jaeger with `make up LANGFUSE=1` /
    `make up JAEGER=1` for one run, or under `addons:` in `nexo.yaml` ([Observability](observability.md#backends)).
    The default stack measured about 1.9 GB of containers plus 6.5 GB of models on a 24 GB M5 Pro;

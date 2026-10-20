@@ -1,7 +1,7 @@
 ---
 type: Decision Guide
 title: Choosing a setup
-description: Decision matrices for running Nexo - which preset for your hardware, one machine or two, how models are served, which observability add-ons, memory per combination, flags versus nexo.yaml, how to run the services and whether telemetry may hold content.
+description: Decision matrices for running Nexo - which preset for your hardware, one machine or two, how models are served, which observability add-ons, memory per combination, flags versus nexo.yaml, how to run the services, whether telemetry may hold content and where secrets live.
 tags: [operations, setup, decisions, observability, models]
 status: draft
 generated: { by: claude-code/claude-opus-5-5, at: 2026-10-20T17:00:00Z }
@@ -22,6 +22,9 @@ sources:
   - id: adr-0015
     resource: ../decisions/adr-0015-signoz-default-observability.md
     title: "ADR-0015: SigNoz as the default observability backend"
+  - id: adr-0017
+    resource: ../decisions/adr-0017-secrets-from-a-provider.md
+    title: "ADR-0017: Secrets from a provider, not a file"
   - id: adr-0016
     resource: ../decisions/adr-0016-declarative-setup-file.md
     title: "ADR-0016: A declarative setup file"
@@ -86,7 +89,7 @@ stripped, so turning one on or off never changes Nexo itself.[^observability]
 | Data stays on this machine | Yes | Yes | Yes | Yes | No: a cloud service (content stripped first) |
 | Extra memory | 1.2-1.4 GB | - (inside the collector) | 3.0 GB | 0.01 GB | - |
 | Cost and license | Free, open source (MIT) | Free | Free, open source (MIT core) | Free, open source (Apache-2.0) | Account required; free tier, paid plans |
-| Needs | `make env` secrets | Root in the collector container, the engine's socket | `make env` secrets (made when it is on) | Nothing | `LANGSMITH_API_KEY` in `.env` |
+| Needs | Secrets from `make env` | Root in the collector container, the engine's socket | `make env` secrets (made when it is on) | Nothing | `LANGSMITH_API_KEY` in `.env` |
 | Turn on | - | `addons.hostMetrics` | `addons.langfuse` or `LANGFUSE=1` | `addons.jaeger` or `JAEGER=1` | `addons.langsmith` or `LANGSMITH=1` |
 | Choose it when | Always: one place for operations | You want the infrastructure view; turn off to avoid a root container | You are tuning prompts or models and want to score answers | You want a light span view; SigNoz already shows spans | Your team already uses LangSmith, and the data may leave the machine |
 
@@ -138,9 +141,24 @@ Both end in the same rendered stack; the flags exist so trying an add-on never n
 
 The collector also deletes content attributes and events before export, as a second line of defence.
 
+# 9. Where secrets live
+
+Set with `spec.secrets.provider` in `nexo.yaml`. None of them copies a secrets file between machines.[^adr-0017]
+
+| | `keychain` (default) | `env` (opt out) | `sops` (opt in) | `vault` (opt in) |
+|---|---|---|---|---|
+| Stored in | The OS keychain (macOS Keychain, Linux Secret Service); `~/.config/nexo/config` where none is set up | Your environment or `.env`, filled by whatever manages secrets | A SOPS-encrypted file in the checkout (age, PGP or cloud KMS keys) | HashiCorp Vault or OpenBao (KV v2) |
+| `make env` generates | Yes | No: it names what is missing | Yes, encrypted | Yes |
+| Several checkouts, one machine | Share the secrets | Share what the environment gives them | Share the file | Share the secret |
+| Several machines | Each machine's own keychain, its own stack | Each gets them from your secret manager | The encrypted file travels with the repo; keys stay with people | One Vault for all |
+| Kubernetes | - | Kubernetes Secrets, External Secrets Operator | KSOPS, Flux or Argo CD decrypt it | Vault Agent or External Secrets |
+| Needs | Nothing | Something that injects them | `sops` and a `.sops.yaml` creation rule | `VAULT_ADDR`, `VAULT_TOKEN` |
+| Choose it when | One machine (the usual case) | CI, a cluster, or a secret manager you already run | A team sharing one setup through git | You already run Vault or OpenBao |
+
 [^profiles]: Hardware profile catalog (models and sizes per tier)
 [^components]: Components, secrets and measured memory
 [^local-setup]: How local setup works
 [^observability]: Observability
 [^adr-0015]: "ADR-0015: SigNoz as the default observability backend"
 [^adr-0016]: "ADR-0016: A declarative setup file"
+[^adr-0017]: "ADR-0017: Secrets from a provider, not a file"
