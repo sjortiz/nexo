@@ -37,6 +37,7 @@ from nexo.service import (
     build_investigator,
     chunk_store_from_settings,
     open_ingestor,
+    open_review_runtime,
     open_runtime,
 )
 from nexo.storage.graph_store import GraphStore
@@ -363,7 +364,7 @@ def _mcp(args: argparse.Namespace) -> int:
     with ExitStack() as stack:
         stack.callback(graph.close)
         runtime = (
-            stack.enter_context(open_runtime(settings))
+            stack.enter_context(open_review_runtime(settings, chunks))
             if settings.mcp_review_tools
             else None
         )
