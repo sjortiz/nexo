@@ -12,6 +12,7 @@ import pytest
 import yaml
 
 from nexo import cli
+from nexo import local_profiles as lp
 
 ROOT = Path(__file__).resolve().parent.parent
 PAGE = ROOT / "site" / "index.html"
@@ -121,29 +122,72 @@ def test_dark_mode_and_license_are_declared():
     assert f'{REPO_BLOB}LICENSE">MIT License' in text
 
 
+def _compose(command: list[str]) -> tuple[list[str], str, list[str]]:
+    """Files (-f), verb (up/run) and the words after the verb of a `podman compose` command."""
+    files, verb_at = [], None
+    for i, word in enumerate(command[2:], start=2):
+        if command[i - 1] == "-f":
+            files.append(word)
+        elif word in ("up", "run"):
+            verb_at = i
+            break
+    assert verb_at, command
+    return files or ["docker-compose.yml"], command[verb_at], command[verb_at + 1 :]
+
+
+def _nexo_argv(commands: list[list[str]]) -> list[list[str]]:
+    """Arguments of every nexo invocation: direct, or inside `compose run ... nexo`."""
+    argv = [c[1:] for c in commands if c[0] == "nexo"]
+    for command in commands:
+        if command[:2] == ["podman", "compose"]:
+            _, verb, rest = _compose(command)
+            words = [w for w in rest if not w.startswith("-")]
+            if verb == "run" and words[0] == "nexo":
+                argv.append(rest[rest.index("nexo") + 1 :])
+    return argv
+
+
 def test_quickstart_cli_flags_exist(page, capsys):
-    nexo = [c for c in _commands(page) if c[0] == "nexo"]
-    assert {c[1] for c in nexo} >= {"ingest", "ask", "review", "mcp"}
-    for command in nexo:
+    argv = _nexo_argv(_commands(page))
+    assert {a[0] for a in argv} >= {"ingest", "ask", "review", "models"}
+    for args in argv:
         with pytest.raises(SystemExit):
-            cli.main([command[1], "--help"])
+            cli.main([args[0], "--help"])
         help_text = capsys.readouterr().out
-        for flag in (w for w in command[2:] if w.startswith("--")):
-            assert flag in help_text, f"{flag} is not an option of nexo {command[1]}"
+        for flag in (w for w in args[1:] if w.startswith("--")):
+            assert flag in help_text, f"{flag} is not an option of nexo {args[0]}"
 
 
 def test_quickstart_files_settings_and_services_exist(page):
     commands = _commands(page)
     for command in commands:
         for word in command:
-            if word.startswith(("deploy/", "docs/")):
+            if word.startswith(("deploy/", "docs/", "src/")):
                 assert (ROOT / word).exists(), word
     env_example = (ROOT / "deploy/local/local.env.example").read_text()
-    for key in ("LOCAL_PROFILE", "NEO4J_PASSWORD"):
+    for key in ("LOCAL_PROFILE", "NEO4J_PASSWORD", "OTEL_EXPORTER_OTLP_ENDPOINT"):
         assert re.search(rf"^{key}=", env_example, re.MULTILINE), key
-    services = set(yaml.safe_load((ROOT / "docker-compose.yml").read_text())["services"])
     compose = [c for c in commands if c[:2] == ["podman", "compose"]]
-    assert compose
+    assert {_compose(c)[1] for c in compose} == {"up", "run"}
     for command in compose:
-        named = [w for w in command[command.index("up") + 1 :] if not w.startswith("-")]
-        assert named and set(named) <= services, set(named) - services
+        files, verb, rest = _compose(command)
+        services = set()
+        for name in files:
+            assert (ROOT / name).is_file(), name
+            services |= set(yaml.safe_load((ROOT / name).read_text())["services"])
+        named = [w for w in rest if not w.startswith("-")]
+        targets = named if verb == "up" else named[:1]
+        assert targets and set(targets) <= services, set(targets) - services
+
+
+def test_quickstart_profiles_and_role_sets_are_valid(page):
+    uses = []
+    for command in _commands(page):
+        if command[0].endswith("ollama-setup.sh"):
+            uses.append(command[1:])
+        elif command[:2] == ["python3", "src/nexo/local_profiles.py"]:
+            uses.append(command[3:])
+    assert uses
+    for args in uses:
+        if args:
+            lp.plan(*args)  # raises on an unknown profile or role set

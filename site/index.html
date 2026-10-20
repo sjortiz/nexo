@@ -44,7 +44,7 @@
   .btn { display: inline-block; padding: 11px 18px; border-radius: 10px; font-weight: 600; text-decoration: none;
          border: 1px solid var(--border); color: var(--text); background: var(--surface); }
   .btn.primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
-  section { padding: 56px 0; border-top: 1px solid var(--border); }
+  section { padding: 56px 0; border-top: 1px solid var(--border); scroll-margin-top: 60px; }
   h2 { font-size: 1.9rem; margin: 0 0 8px; letter-spacing: -.01em; }
   .section-lede { color: var(--muted); margin: 0 0 32px; max-width: 760px; }
   .steps { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; counter-reset: step; }
@@ -56,10 +56,10 @@
                   margin-bottom: 12px; }
   .card h3 { margin: 0 0 6px; font-size: 1.05rem; }
   .card p { margin: 0; color: var(--muted); font-size: .95rem; }
-  .diagram { margin-top: 28px; padding: 24px; overflow-x: auto; }
+  .diagram { margin: 28px 0 0; padding: 24px; overflow-x: auto; }
   .diagram svg { display: block; width: 100%; min-width: 620px; height: auto; }
   .diagram figcaption { color: var(--muted); font-size: .9rem; margin-top: 12px; }
-  .features { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 16px; }
+  .features { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 16px; }
   .stack { display: flex; flex-wrap: wrap; gap: 10px; list-style: none; padding: 0; margin: 0; }
   .stack li { background: var(--surface); border: 1px solid var(--border); border-radius: 999px; padding: 6px 14px;
               font-size: .92rem; }
@@ -80,6 +80,25 @@
   footer { border-top: 1px solid var(--border); padding: 32px 0 48px; color: var(--muted); font-size: .92rem; }
   footer .wrap { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 12px; }
   .svg-node { fill: var(--surface); stroke: var(--accent); stroke-width: 2; }
+  .run-steps { list-style: none; counter-reset: run; padding: 0; margin: 0; display: grid; gap: 14px;
+               grid-template-columns: minmax(0, 1fr); }
+  .run-steps > li { position: relative; padding-left: 46px; }
+  .run-steps > li::before { counter-increment: run; content: counter(run); position: absolute; left: 0; top: 0;
+                            display: grid; place-items: center; width: 30px; height: 30px; border-radius: 50%;
+                            background: var(--accent-soft); color: var(--accent); font-weight: 700; }
+  .run-steps h3 { margin: 3px 0 6px; font-size: 1.05rem; }
+  .run-steps p { margin: 0 0 10px; color: var(--muted); }
+  .run-steps pre { margin: 0 0 6px; }
+  pre code { background: none; padding: 0; border-radius: 0; font-size: inherit; }
+  .variants { display: grid; gap: 12px; margin-top: 32px; grid-template-columns: minmax(0, 1fr); }
+  .variants details { padding: 14px 18px; }
+  .variants summary { cursor: pointer; font-weight: 600; }
+  .variants details[open] summary { margin-bottom: 10px; }
+  .variants p { color: var(--muted); margin: 0 0 10px; }
+  .variants pre { margin: 0; }
+  p.more { color: var(--muted); margin: 20px 0 0; }
+  .spaced { margin-top: 24px; }
+  .svg-group { fill: var(--surface-2); stroke: var(--border); stroke-width: 1.5; }
   .svg-terminal { fill: var(--accent-soft); stroke: var(--border); stroke-width: 1.5; }
   .svg-label { fill: var(--text); font: 600 15px system-ui, sans-serif; }
   .svg-note { fill: var(--muted); font: 13px system-ui, sans-serif; }
@@ -99,7 +118,7 @@
       <ul>
         <li class="optional"><a href="#how">How it works</a></li>
         <li class="optional"><a href="#features">Features</a></li>
-        <li><a href="#quickstart">Quickstart</a></li>
+        <li><a href="#quickstart">Run it</a></li>
         <li><a href="https://github.com/sjortiz/nexo/blob/main/docs/index.md">Docs</a></li>
         <li><a href="https://github.com/sjortiz/nexo">GitHub</a></li>
       </ul>
@@ -231,30 +250,169 @@
 
   <section id="quickstart" aria-labelledby="quickstart-title">
     <div class="wrap">
-      <h2 id="quickstart-title">Quickstart</h2>
-      <p class="section-lede">Local models on one machine with Ollama. How the pieces connect:
-        <a href="https://github.com/sjortiz/nexo/blob/main/docs/operations/local-setup.md">how local setup works</a>.
-        For two machines or Linux, see the
-        <a href="https://github.com/sjortiz/nexo/blob/main/docs/operations/local-apple-silicon.md">Apple Silicon</a> and
-        <a href="https://github.com/sjortiz/nexo/blob/main/docs/operations/local-linux.md">Linux</a> playbooks.</p>
-      <div class="two">
-        <div>
-          <h3 class="sub">Set up</h3>
+      <h2 id="quickstart-title">Run it</h2>
+      <p class="section-lede">From a clean machine to a reviewed answer, on one Mac or Linux box with local models. The
+        model download is 8 to 33 GB depending on your machine. Other layouts are below the steps.</p>
+      <ol class="run-steps">
+        <li>
+          <h3>Install the prerequisites</h3>
+          <p>Python 3.11 or newer, Ollama for the models, and Podman for Neo4j and tracing.</p>
+<pre><code># macOS
+brew install python@3.12 ollama podman
+podman machine init && podman machine start
+# Linux: curl -fsSL https://ollama.com/install.sh | sh, then podman from your package manager</code></pre>
+        </li>
+        <li>
+          <h3>Get Nexo</h3>
 <pre><code>git clone https://github.com/sjortiz/nexo.git && cd nexo
-python3 -m venv .venv && .venv/bin/pip install -e ".[dev]"
-cp deploy/local/local.env.example .env   # set LOCAL_PROFILE, NEO4J_PASSWORD
-deploy/local/ollama-setup.sh m1-max-64   # pulls and preloads the models
-podman compose up -d neo4j otel-collector jaeger
-nexo models --check                      # every role's model, reachable?</code></pre>
-        </div>
-        <div>
-          <h3 class="sub">Ask</h3>
+python3.12 -m venv .venv && source .venv/bin/activate
+pip install -e .</code></pre>
+        </li>
+        <li>
+          <h3>Name your machine and configure</h3>
+          <p>Your profile is the chip and memory on a Mac (<code>m1-max-64</code>, <code>m5-pro-24</code>), or
+            <code>gpu-&lt;VRAM GB&gt;</code> / <code>cpu-&lt;RAM GB&gt;</code> on Linux. The first command shows the
+            models it picks.</p>
+<pre><code>python3 src/nexo/local_profiles.py plan m1-max-64
+cp deploy/local/local.env.example .env
+# in .env: LOCAL_PROFILE=m1-max-64 and a NEO4J_PASSWORD of your choice</code></pre>
+        </li>
+        <li>
+          <h3>Start the models</h3>
+          <p>Reads the profile from <code>.env</code>, pulls and preloads its models, and starts Ollama with the right
+            context length. If Ollama already runs as an app or service, it prints the settings to apply instead.</p>
+<pre><code>deploy/local/ollama-setup.sh</code></pre>
+        </li>
+        <li>
+          <h3>Start Neo4j and tracing</h3>
+          <p>Neo4j on <code>localhost:7687</code>; traces at <code>http://localhost:16686</code>.</p>
+<pre><code>podman compose up -d neo4j otel-collector jaeger</code></pre>
+        </li>
+        <li>
+          <h3>Check</h3>
+          <p>Every role should say <code>ok</code>. Otherwise the output names the server that did not answer or the
+            model it is missing.</p>
+<pre><code>nexo models --check</code></pre>
+        </li>
+        <li>
+          <h3>Ingest and ask</h3>
+          <p>Put Markdown or text files in <code>corpus/</code>. <code>ask</code> prints
+            <code>thread &lt;id&gt;: awaiting_review</code> with the answer, its citations and any findings; a reviewer
+            then approves or rejects it.</p>
 <pre><code>nexo ingest corpus/memo.md --doc-type memo
 nexo ask "How is Acme Holdings connected to Gamma Clinics?"
-nexo review &lt;thread_id&gt; --approve --reviewer you@example.com
+nexo review &lt;thread_id&gt; --approve --reviewer you@example.com</code></pre>
+        </li>
+        <li>
+          <h3>Or ask from Claude Code</h3>
+          <p>The repository ships <code>.mcp.json</code>, which starts <code>nexo mcp</code>, and a skill that makes
+            Claude cite every claim. Approve the <code>nexo</code> server when asked.</p>
+<pre><code>claude   # started in the nexo directory</code></pre>
+        </li>
+      </ol>
 
-# or from Claude Code: the repo ships .mcp.json and a skill
-nexo mcp</code></pre>
+      <div class="variants">
+        <details class="card">
+          <summary>Two machines: a big one for the agent</summary>
+          <p>The big machine serves the agent and extraction models; this one serves the rest and runs Nexo. Clone the
+            repository on both. On a Mac, enable Remote Login on the big one.</p>
+<pre><code># on the big machine
+deploy/local/ollama-setup.sh m1-max-64 heavy
+# here: .env has LOCAL_PROFILE=m5-pro-24 and REMOTE_PROFILE=m1-max-64
+ssh -N -L 11435:127.0.0.1:11434 you@m1-max.local   # keep it running
+deploy/local/ollama-setup.sh                        # serves the light set
+nexo models --check</code></pre>
+        </details>
+        <details class="card">
+          <summary>Linux notes</summary>
+          <p>The Ollama installer runs it as a systemd service, so apply the settings the setup script prints. The Nexo
+            container needs the Linux override to reach host services.</p>
+<pre><code>sudo systemctl edit ollama      # add the printed OLLAMA_* lines under [Service]
+sudo systemctl restart ollama
+podman compose -f docker-compose.yml -f docker-compose.linux.yml --profile app run --rm nexo models --check</code></pre>
+        </details>
+        <details class="card">
+          <summary>Without containers</summary>
+          <p>Install Neo4j natively instead of step 5. Tracing is optional: run the Jaeger binary, or remove
+            <code>OTEL_EXPORTER_OTLP_ENDPOINT</code> from <code>.env</code>.</p>
+<pre><code>brew install neo4j
+neo4j-admin dbms set-initial-password &lt;password&gt;
+brew services start neo4j</code></pre>
+        </details>
+        <details class="card">
+          <summary>Nexo in a container</summary>
+          <p>Files in <code>./corpus</code> are mounted at <code>/corpus</code>; the container reaches Ollama on the
+            host.</p>
+<pre><code>podman compose --profile app run --rm nexo ingest /corpus/memo.md --doc-type memo</code></pre>
+        </details>
+      </div>
+      <p class="more">Full playbooks: <a href="https://github.com/sjortiz/nexo/blob/main/docs/operations/local-apple-silicon.md">Apple
+        Silicon</a>, <a href="https://github.com/sjortiz/nexo/blob/main/docs/operations/local-linux.md">Linux</a>,
+        <a href="https://github.com/sjortiz/nexo/blob/main/docs/operations/local-stack.md">vLLM on GPU servers</a>.</p>
+    </div>
+  </section>
+
+  <section id="local" aria-labelledby="local-title">
+    <div class="wrap">
+      <h2 id="local-title">How the pieces fit together</h2>
+      <p class="section-lede">Models run in Ollama, picked by a hardware profile. Three choices, each made on its own,
+        and one command to check the result.</p>
+      <div class="features">
+        <article class="card"><h3>Which models</h3><p>Name the machine with a profile: <code>m1-max-64</code>,
+          <code>m5-pro-24</code>, <code>gpu-24</code>, <code>cpu-64</code>. Memory picks the largest model tier that fits.
+          Set <code>LOCAL_PROFILE</code>.</p></article>
+        <article class="card"><h3>One machine or two</h3><p>Add <code>REMOTE_PROFILE</code> and a second machine serves the
+          heavy models (agent, extraction) through an SSH tunnel. The rest stays local.</p></article>
+        <article class="card"><h3>Podman or native</h3><p>Neo4j, tracing and Nexo run as containers or as plain installs.
+          The models stay native either way, so they can use the GPU.</p></article>
+      </div>
+
+      <figure class="card diagram">
+        <svg viewBox="0 0 860 250" role="img" aria-labelledby="local-svg-title local-svg-desc">
+          <title id="local-svg-title">Where each model role runs with two machines</title>
+          <desc id="local-svg-desc">The remote machine runs Ollama with the agent and extraction models, bound to its
+            loopback address. This machine reaches it through an SSH tunnel on local port 11435. This machine runs
+            its own Ollama with the router, judge and embedding models on port 11434, plus Neo4j, tracing and Nexo.</desc>
+          <rect x="10" y="20" width="300" height="210" rx="14" class="svg-group"/>
+          <text x="30" y="48" class="svg-label">Remote machine</text>
+          <text x="30" y="68" class="svg-note">REMOTE_PROFILE · role set heavy</text>
+          <rect x="30" y="90" width="260" height="70" rx="12" class="svg-node"/>
+          <text x="160" y="118" text-anchor="middle" class="svg-label">Ollama 127.0.0.1:11434</text>
+          <text x="160" y="140" text-anchor="middle" class="svg-note">agent · extraction</text>
+          <text x="160" y="200" text-anchor="middle" class="svg-note">no port open on the network</text>
+
+          <rect x="450" y="20" width="400" height="210" rx="14" class="svg-group"/>
+          <text x="470" y="48" class="svg-label">This machine</text>
+          <text x="470" y="68" class="svg-note">LOCAL_PROFILE · role set light</text>
+          <rect x="470" y="84" width="360" height="40" rx="10" class="svg-node"/>
+          <text x="485" y="109" class="svg-note">tunnel: localhost:11435 → remote Ollama</text>
+          <rect x="470" y="132" width="360" height="40" rx="10" class="svg-node"/>
+          <text x="485" y="157" class="svg-note">Ollama :11434 · router · judge · embedding</text>
+          <rect x="470" y="180" width="360" height="40" rx="10" class="svg-node"/>
+          <text x="485" y="205" class="svg-note">Nexo · Neo4j :7687 · tracing :4318</text>
+
+          <path d="M466 104 H294" class="svg-edge dashed" marker-end="url(#arrow)"/>
+          <text x="380" y="94" text-anchor="middle" class="svg-note">SSH tunnel</text>
+        </svg>
+        <figcaption>With one machine, its Ollama serves all five roles and there is no tunnel. Ports, container
+          addresses and failure causes are in
+          <a href="https://github.com/sjortiz/nexo/blob/main/docs/operations/local-setup.md">how local setup works</a>.</figcaption>
+      </figure>
+
+      <div class="two spaced">
+        <div class="card">
+          <h3 class="sub">One catalog, two readers</h3>
+          <p>A single profile catalog decides the models. The <strong>setup script</strong> reads it on each model
+            machine to pull the models and size Ollama (context length, parallelism, memory). <strong>Nexo</strong>
+            reads it to pick the model and server for each role. Anything you set explicitly, like
+            <code>AGENT_MODEL</code>, wins.</p>
+        </div>
+        <div class="card">
+          <h3 class="sub">Keep the role sets matched</h3>
+          <p>One machine uses the <code>single</code> set. With two, run the script with <code>heavy</code> on the
+            remote machine; locally it picks <code>light</code> by itself when <code>.env</code> has
+            <code>REMOTE_PROFILE</code>. Then <code>nexo models --check</code> confirms every role's server answers
+            and has its model, and exits non-zero if not.</p>
         </div>
       </div>
     </div>
