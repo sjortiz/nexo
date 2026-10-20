@@ -152,6 +152,8 @@ hosts ([Local on Apple Silicon](local-apple-silicon.md)).
 | `DEPLOYMENT_ENVIRONMENT` | `dev` | `deployment.environment.name` attribute. |
 | `CHUNK_STORE` | `neo4j` | Where chunk text and embeddings live: `neo4j`, on the graph's `(:Chunk)` nodes with vector and full-text indexes, shared by every checkout of the stack; `local`, an in-process JSON file at `VECTOR_STORE_PATH` (offline runs, tests). |
 | `NEXO_STACK` | `nexo` | The stack's name (`metadata.name`, rendered by `nexo setup`); names its data directory, e.g. `~/.local/share/nexo/nexo/` for review checkpoints. |
+| `REVIEW_INBOX_PORT` | `2024` | Port of `nexo review-inbox`, the Agent Inbox adapter (127.0.0.1 only). |
+| `AGENT_INBOX_PORT` | `3030` | Port of the Agent Inbox page, the adapter's only allowed origin; `nexo.yaml` sets both ([Review in Agent Inbox](agent-inbox.md)). |
 | `NEXO_USER` | login name | `user.id` on request and MCP spans; `nexo ask --user` and a reviewer override it. |
 | `QUERY_HASH_KEY` | generated | Key for `nexo.query.hash` (HMAC of the question) on traces; generated into the secrets store by `make env`, never exported. Unset: no hash. |
 | `TRACE_QUERY_TEXT` | `false` | `true` puts the question on the request span (`nexo.query.text`); `nexo.yaml` sets it (`telemetry.queryText`). Self-hosted backends only: LangSmith never receives it. |
