@@ -18,7 +18,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v7
-      - uses: astral-sh/setup-uv@v10
+      - uses: astral-sh/setup-uv@v10.3.0  # the project publishes exact tags only
         with:
           enable-cache: true
       # Python from .python-version, dependencies exactly as in uv.lock.
