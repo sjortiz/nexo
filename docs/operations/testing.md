@@ -66,7 +66,8 @@ safeguard is removed (a mutation check). The last check broke 36 safeguards one 
 suite failed for every one, including:
 
 - evidence grounding, graph redaction, chunk clearance, the Cypher guard, the evidence ledger
-- ungrounded citations, the acknowledgement requirement, the clearance clamp, review validation
+- ungrounded citations, the acknowledgement requirement, the clearance clamp, review validation,
+  no auto-approval with blocking findings under any review policy
 - transient retries, router fail-closed, stale-delete keep set, Luhn filter
 - previous-chunk context, inverse swaps, ontology type constraints, the RELATED_TO fallback,
   name normalization

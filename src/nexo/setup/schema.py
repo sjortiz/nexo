@@ -190,6 +190,9 @@ class Spec(_Strict):
     telemetry: Telemetry = Field(default_factory=Telemetry)
     secrets: Secrets = Field(default_factory=Secrets)
     ports: Ports = Field(default_factory=Ports)
+    # Which answers wait for a person: always; on-findings (no findings and grounded
+    # citations are approved as system:auto); never (blocking findings still wait).
+    review: Literal["always", "on-findings", "never"] = "always"
     patches: list[Patch] = Field(default_factory=list)
 
     @model_validator(mode="after")

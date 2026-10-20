@@ -254,6 +254,30 @@ def secrets_finding(store: SecretStore, on: set[str], env_path: Path) -> Finding
     return Finding("secrets", not missing, detail)
 
 
+REVIEW_POLICIES = {
+    "always": "every answer waits for a person",
+    "on-findings": (
+        "answers with no findings and grounded citations are approved as system:auto;"
+        " the rest wait for a person"
+    ),
+    "never": "only answers with blocking findings wait for a person",
+}
+
+
+def review_finding(casting: Casting, env_path: Path) -> Finding:
+    """The review policy answers will run under (spec.review, unless the environment wins)."""
+    declared = casting.spec.review
+    effective = os.environ.get("REVIEW_POLICY")
+    if not effective:
+        # nexo.env only carries a policy other than always, so .env can still set one.
+        fallback = read_env(env_path).get("REVIEW_POLICY") or declared
+        effective = declared if declared != "always" else fallback
+    detail = f"{effective}: {REVIEW_POLICIES.get(effective, 'not a policy Nexo knows')}"
+    if effective != declared:
+        detail += f" (REVIEW_POLICY overrides spec.review {declared})"
+    return Finding("review", effective in REVIEW_POLICIES, detail)
+
+
 def preflight(
     casting: Casting,
     lock: dict[str, Any],
@@ -269,6 +293,7 @@ def preflight(
             f"{host.engine} compose ({host.os})",
         ),
         secrets_finding(store, on, Path.cwd() / ".env"),
+        review_finding(casting, Path.cwd() / ".env"),
     ]
     bolt = casting.spec.ports.bolt
     if "neo4j" in on and (neo4j := neo4j_finding(store, host, lock["name"], bolt)):

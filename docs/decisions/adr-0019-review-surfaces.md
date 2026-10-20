@@ -49,5 +49,10 @@ needed" is now: the tools are read-only except that confirmed write.
 A new surface needs no change to the graph or the checkpoints.[^review] Each surface must show the compliance
 findings and require acknowledgement to approve a blocked draft; the graph enforces that either way.
 
+- **Amended 2026-10-20:** the review policy (`spec.review`, [ADR-0003](adr-0003-durable-checkpoints-for-review.md))
+  decides which threads reach these surfaces. Under `on-findings` or `never`, answers the policy
+  approves complete without a pause, are never listed by `pending_reviews`, and show
+  `reviewer: system:auto` in their `review` state. Blocking findings always reach a surface.
+
 [^service]: Runtime
 [^review]: Human review
