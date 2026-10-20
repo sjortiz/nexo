@@ -38,24 +38,24 @@ ROLE_SETS = {"single": AGENT_ROLES + LIGHT_ROLES, "heavy": AGENT_ROLES, "light":
 
 # Models that reason before answering; their JSON roles get reasoning_effort=none
 # because the schema is only enforced after the reasoning section.
-THINKING_MODELS = frozenset({"qwen3.5:9b", "qwen3.6:35b-a3b-q4_K_M"})
+THINKING_MODELS = frozenset({"qwen3.5:9b-q4_K_M", "qwen3.6:35b-a3b-q4_K_M"})
 
 # Approximate download sizes (GB) from the Ollama library, for memory planning.
 MODEL_SIZES_GB = {
-    "qwen3.5:9b": 6.6,
-    "qwen3:4b-instruct-2507": 2.5,
+    "qwen3.5:9b-q4_K_M": 6.6,
+    "qwen3:4b-instruct-2507-q4_K_M": 2.5,
     "qwen3:30b-a3b-instruct-2507-q4_K_M": 19.0,
     "qwen3.6:35b-a3b-q4_K_M": 24.0,
-    "llama3.1:8b": 4.9,
+    "llama3.1:8b-instruct-q4_K_M": 4.9,
     "bge-m3": 1.2,
 }
 
 SMALL, MID, LARGE, ROUTER, JUDGE, EMBED = (
-    "qwen3.5:9b",
+    "qwen3.5:9b-q4_K_M",
     "qwen3:30b-a3b-instruct-2507-q4_K_M",
     "qwen3.6:35b-a3b-q4_K_M",
-    "qwen3:4b-instruct-2507",
-    "llama3.1:8b",
+    "qwen3:4b-instruct-2507-q4_K_M",
+    "llama3.1:8b-instruct-q4_K_M",
     "bge-m3",
 )
 

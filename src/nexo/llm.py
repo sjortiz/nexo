@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 import re
+import urllib.error
 import urllib.request
 from collections.abc import Sequence
 from typing import TYPE_CHECKING, TypeVar
@@ -157,14 +158,24 @@ def resolved_models(settings: Settings) -> list[dict]:
     return rows
 
 
+JSON_ROLES = ("extraction", "router", "judge")
+_PROBE_SCHEMA = {"type": "object", "properties": {"ok": {"type": "boolean"}}, "required": ["ok"],
+                 "additionalProperties": False}
+
+
 def check_model_servers(settings: Settings, rows: list[dict], *, timeout_s: float = 5.0) -> list[dict]:
-    """Mark each row with whether its server answers and lists its model (GET /models, OpenAI protocol)."""
+    """Mark each row with whether its server answers and lists its model (GET /models, OpenAI protocol).
+
+    JSON roles also get one tiny schema-constrained request: a server can list a model and still be
+    unable to constrain its output (e.g. Ollama MLX builds), which breaks extraction and routing.
+    """
     listings: dict[str, set[str] | str] = {}
+    probes: dict[tuple, str | None] = {}
     for row in rows:
         if not row.get("model"):
             continue
+        key = settings.embedding_api_key if row["role"] == "embedding" else settings.endpoint(row["role"]).api_key
         if row["base_url"] not in listings:
-            key = settings.embedding_api_key if row["role"] == "embedding" else settings.endpoint(row["role"]).api_key
             listings[row["base_url"]] = _served_models(row["base_url"], key.get_secret_value(), timeout_s)
         served = listings[row["base_url"]]
         if isinstance(served, str):
@@ -174,7 +185,40 @@ def check_model_servers(settings: Settings, rows: list[dict], *, timeout_s: floa
         else:
             row["check"] = "model not served here"
             row["served"] = sorted(served)
+        if row["check"] == "ok" and row["role"] in JSON_ROLES:
+            probe = (row["base_url"], row["model"], row.get("reasoning_effort"))
+            if probe not in probes:
+                probes[probe] = _probe_structured_output(*probe, key.get_secret_value(), settings.llm_timeout_s)
+            if probes[probe]:
+                row["check"] = "structured output failed"
+                row["detail"] = probes[probe]
     return rows
+
+
+def _probe_structured_output(base_url: str, model: str, reasoning_effort: str | None, api_key: str,
+                             timeout_s: float) -> str | None:
+    """None when the server returns schema-valid JSON for a minimal request, else what went wrong."""
+    body = {"model": model, "temperature": 0, "max_tokens": 64,
+            "messages": [{"role": "user", "content": 'Reply with the JSON object {"ok": true}.'}],
+            "response_format": {"type": "json_schema", "json_schema": {"name": "probe", "schema": _PROBE_SCHEMA}}}
+    if reasoning_effort:
+        body["reasoning_effort"] = reasoning_effort
+    request = urllib.request.Request(base_url.rstrip("/") + "/chat/completions", data=json.dumps(body).encode(),
+                                     headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"})
+    try:
+        with urllib.request.urlopen(request, timeout=timeout_s) as response:
+            content = json.load(response)["choices"][0]["message"]["content"] or ""
+    except urllib.error.HTTPError as exc:
+        return f"HTTP {exc.code}: {exc.read().decode(errors='replace')[:200]}"
+    except (OSError, ValueError, KeyError, IndexError, TypeError) as exc:
+        return f"{type(exc).__name__}: {exc}"
+    try:
+        parsed = json.loads(content)
+    except ValueError:
+        parsed = None
+    if isinstance(parsed, dict) and isinstance(parsed.get("ok"), bool):
+        return None
+    return f"reply is not schema-valid JSON: {content[:80]!r}"
 
 
 def _served_models(base_url: str, api_key: str, timeout_s: float) -> set[str] | str:

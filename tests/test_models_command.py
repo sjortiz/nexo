@@ -18,10 +18,30 @@ from nexo.llm import check_model_servers, resolved_models
 
 
 class _ModelsAPI(BaseHTTPRequestHandler):
-    """OpenAI-style GET /v1/models; `served` maps a URL prefix to the model ids listed there."""
+    """OpenAI-style GET /v1/models and POST /v1/chat/completions.
+
+    `served` maps a URL prefix to the model ids listed there; `replies` maps a model to how its
+    chat completion answers: "json" (default), "http-501", "prose" or "truncated".
+    """
 
     served: dict[str, list[str]] = {}
+    replies: dict[str, str] = {}
     requests: list[tuple[str, str]] = []
+    posts: list[dict] = []
+
+    def do_POST(self):  # noqa: N802 - http.server API
+        body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+        type(self).posts.append(body)
+        mode = self.replies.get(body["model"], "json")
+        if mode == "http-501":
+            self.send_error(501, "structured output is unavailable")
+            return
+        content = {"json": '{"ok": true}', "prose": 'Sure! {"ok": true}', "truncated": '{"ok": tr'}[mode]
+        reply = json.dumps({"choices": [{"index": 0, "message": {"role": "assistant", "content": content}}]})
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.end_headers()
+        self.wfile.write(reply.encode())
 
     def do_GET(self):  # noqa: N802 - http.server API
         type(self).requests.append((self.path, self.headers.get("Authorization", "")))
@@ -42,7 +62,7 @@ class _ModelsAPI(BaseHTTPRequestHandler):
 @pytest.fixture
 def models_api():
     server = ThreadingHTTPServer(("127.0.0.1", 0), _ModelsAPI)
-    _ModelsAPI.served, _ModelsAPI.requests = {}, []
+    _ModelsAPI.served, _ModelsAPI.replies, _ModelsAPI.requests, _ModelsAPI.posts = {}, {}, [], []
     threading.Thread(target=server.serve_forever, daemon=True).start()
     yield f"http://127.0.0.1:{server.server_port}"
     server.shutdown()
@@ -108,7 +128,7 @@ def test_output_never_contains_api_keys():
 
 
 def test_check_marks_served_missing_and_unreachable(models_api):
-    _ModelsAPI.served = {"/local/v1": ["qwen3:4b-instruct-2507", "bge-m3:latest"], "/remote/v1": ["other-model"]}
+    _ModelsAPI.served = {"/local/v1": ["qwen3:4b-instruct-2507-q4_K_M", "bge-m3:latest"], "/remote/v1": ["other-model"]}
     settings = Settings(_env_file=None, local_profile="m5-pro-24", remote_profile="m1-max-64",
                         local_base_url=f"{models_api}/local/v1", remote_base_url=f"{models_api}/remote/v1",
                         judge_base_url=_closed_port_url())
@@ -126,7 +146,7 @@ def test_check_marks_served_missing_and_unreachable(models_api):
 
 def test_check_does_not_accept_a_different_tag(models_api):
     _ModelsAPI.served = {"/v1": ["qwen3.5:9b-q8_0"]}
-    settings = Settings(_env_file=None, vllm_base_url=f"{models_api}/v1", vllm_model="qwen3.5:9b",
+    settings = Settings(_env_file=None, vllm_base_url=f"{models_api}/v1", vllm_model="qwen3.5:9b-q4_K_M",
                         embedding_provider="fake")
     rows = _by_role(check_model_servers(settings, resolved_models(settings)))
     assert rows["agent"]["check"] == "model not served here"
@@ -136,6 +156,45 @@ def test_check_reports_a_server_that_is_not_an_openai_api(models_api):
     settings = Settings(_env_file=None, vllm_base_url=f"{models_api}/nothing-here/v1", embedding_provider="fake")
     rows = _by_role(check_model_servers(settings, resolved_models(settings)))
     assert rows["agent"]["check"].startswith("unreachable: HTTPError")
+
+
+def _one_machine(models_api, model="qwen3.5:9b-q4_K_M"):
+    _ModelsAPI.served = {"/v1": [model, "bge-m3:latest"]}
+    return Settings(_env_file=None, local_profile="m5-pro-24", local_base_url=f"{models_api}/v1")
+
+
+def test_check_probes_structured_output_once_per_json_model(models_api):
+    settings = _one_machine(models_api)
+    rows = _by_role(check_model_servers(settings, resolved_models(settings)))
+    assert {r: rows[r]["check"] for r in ("agent", "extraction", "router", "embedding")} == dict.fromkeys(
+        ("agent", "extraction", "router", "embedding"), "ok")
+    # extraction and router share the model, server and reasoning setting: one probe.
+    assert len(_ModelsAPI.posts) == 1
+    probe = _ModelsAPI.posts[0]
+    assert probe["model"] == "qwen3.5:9b-q4_K_M"
+    assert probe["response_format"]["type"] == "json_schema"
+    assert probe["response_format"]["json_schema"]["schema"]["required"] == ["ok"]
+    assert probe["reasoning_effort"] == "none"  # thinking model on a JSON role
+
+
+@pytest.mark.parametrize(("mode", "detail"), [("http-501", "HTTP 501"), ("prose", "not schema-valid"),
+                                              ("truncated", "not schema-valid")])
+def test_check_fails_json_roles_whose_server_cannot_constrain_output(models_api, mode, detail):
+    settings = _one_machine(models_api)
+    _ModelsAPI.replies = {"qwen3.5:9b-q4_K_M": mode}
+    rows = _by_role(check_model_servers(settings, resolved_models(settings)))
+    for role in ("extraction", "router"):
+        assert rows[role]["check"] == "structured output failed"
+        assert detail in rows[role]["detail"]
+    assert rows["agent"]["check"] == "ok"  # the agent calls tools; it is not probed for JSON
+    assert rows["embedding"]["check"] == "ok"
+
+
+def test_check_does_not_probe_a_model_that_is_not_served(models_api):
+    settings = _one_machine(models_api, model="something-else")
+    rows = _by_role(check_model_servers(settings, resolved_models(settings)))
+    assert rows["router"]["check"] == "model not served here"
+    assert _ModelsAPI.posts == []
 
 
 @pytest.fixture

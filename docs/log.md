@@ -1,6 +1,7 @@
 # Bundle Update Log
 
 ## 2026-10-19
+* **Update**: Profiles pin GGUF Ollama tags (MLX builds cannot do structured output); `nexo models --check` probes structured output for JSON roles ([How local setup works](operations/local-setup.md)).
 * **Update**: vLLM services moved to `docker-compose.gpu.yml`; local runs no longer need GPU secrets for `compose up neo4j` ([Compose stack with vLLM](operations/local-stack.md)).
 * **Creation**: [How local setup works](operations/local-setup.md): roles, one profile catalog with two readers, setting precedence, who listens where, `nexo models --check`. Playbooks link to it; stale "script stops if Ollama runs" gotcha corrected; "Local stack" retitled [Compose stack with vLLM](operations/local-stack.md).
 * **Creation**: [MCP server](components/mcp-server.md), [Use from Claude Code](operations/claude-code.md) (skill + `.mcp.json`), [MCP reference](references/model-context-protocol.md), [ADR-0013](decisions/adr-0013-read-only-mcp-and-skill.md).

@@ -59,13 +59,13 @@ the same catalog, and explicit settings win over it: see
 
 | Tier | One Mac (`single`) | Agent Mac (`heavy`) | Nexo Mac (`light`) | Context |
 |---|---|---|---|---|
-| 16 GB | `qwen3.5:9b` for all chat roles, `bge-m3`, no judge (≈7.8 GB) | `qwen3.5:9b` | `qwen3:4b-instruct-2507`, `bge-m3`, no judge | 8K |
-| 24 GB | `qwen3.5:9b` for all chat roles, `bge-m3`, no judge (≈7.8 GB) | `qwen3.5:9b` | `qwen3:4b-instruct-2507`, `bge-m3`, `llama3.1:8b` judge (≈8.6 GB) | 16K |
+| 16 GB | `qwen3.5:9b-q4_K_M` for all chat roles, `bge-m3`, no judge (≈7.8 GB) | `qwen3.5:9b-q4_K_M` | `qwen3:4b-instruct-2507-q4_K_M`, `bge-m3`, no judge | 8K |
+| 24 GB | `qwen3.5:9b-q4_K_M` for all chat roles, `bge-m3`, no judge (≈7.8 GB) | `qwen3.5:9b-q4_K_M` | `qwen3:4b-instruct-2507-q4_K_M`, `bge-m3`, `llama3.1:8b-instruct-q4_K_M` judge (≈8.6 GB) | 16K |
 | 32 GB | `qwen3:30b-a3b-instruct-2507-q4_K_M` for all chat roles, `bge-m3`, no judge (≈20 GB) | `qwen3:30b-a3b-instruct-2507-q4_K_M` | as 24 GB | 16K |
-| 48 GB | `qwen3:30b-a3b-instruct-2507-q4_K_M`, router `qwen3:4b-instruct-2507`, `llama3.1:8b`, `bge-m3` (≈28 GB) | `qwen3:30b-a3b-instruct-2507-q4_K_M` | as 24 GB | 32K |
-| 64 GB | `qwen3.6:35b-a3b-q4_K_M`, router `qwen3:4b-instruct-2507`, `llama3.1:8b`, `bge-m3` (≈33 GB) | `qwen3.6:35b-a3b-q4_K_M` | as 24 GB | 32K |
+| 48 GB | `qwen3:30b-a3b-instruct-2507-q4_K_M`, router `qwen3:4b-instruct-2507-q4_K_M`, `llama3.1:8b-instruct-q4_K_M`, `bge-m3` (≈28 GB) | `qwen3:30b-a3b-instruct-2507-q4_K_M` | as 24 GB | 32K |
+| 64 GB | `qwen3.6:35b-a3b-q4_K_M`, router `qwen3:4b-instruct-2507-q4_K_M`, `llama3.1:8b-instruct-q4_K_M`, `bge-m3` (≈33 GB) | `qwen3.6:35b-a3b-q4_K_M` | as 24 GB | 32K |
 
-Sizes are Ollama library download sizes; KV cache and the OS need the rest. `qwen3.5:9b` and
+Sizes are Ollama library download sizes; KV cache and the OS need the rest. `qwen3.5:9b-q4_K_M` and
 `qwen3.6:35b-a3b-q4_K_M` are thinking models: the profile sets reasoning off for their JSON roles
 (`EXTRACTION_REASONING_EFFORT=none`, ...) and leaves the agent's reasoning on. Inspect any profile with
 `python3 src/nexo/local_profiles.py plan m1-max-64 heavy`.
@@ -136,6 +136,10 @@ models at 100% GPU.
 - **Speed.** Expect tens of tokens per second; profiles raise `LLM_TIMEOUT_S` (300) and
   `AGENT_TIMEOUT_S` (900) and lower `EXTRACTION_CONCURRENCY` to the tier's parallelism.
 - **Changing embedding models** requires re-ingesting everything.[^ollama]
+- **MLX builds.** On Apple Silicon some Ollama tags (`-mlx`, `-nvfp4`, and defaults such as
+  `qwen3.5:9b`) are MLX builds, which cannot constrain output to a JSON schema (verified: HTTP 501 with
+  Ollama 0.40.6 from Homebrew), so extraction and routing fail. The profiles pin GGUF tags (`-q4_K_M`);
+  `nexo models --check` catches an MLX model set by hand.
 
 On Linux, or to use a Linux GPU machine as the remote, see [Local on Linux](local-linux.md).
 See [ADR-0012](../decisions/adr-0012-local-apple-silicon.md).

@@ -105,7 +105,8 @@ SSH provides it.
 # Check
 
 1. `nexo models` prints the model and server each role resolved to (no secrets).
-2. `nexo models --check` asks each server whether it serves that model; it exits 1 otherwise.[^models]
+2. `nexo models --check` asks each server whether it serves that model, and sends the JSON roles
+   (extraction, router, judge) one tiny schema-constrained request; it exits 1 if either fails.[^models]
 3. `ollama ps` on each model machine lists the resident models (100% GPU on a Mac).
 4. `NEXO_LIVE=1 pytest -m live -v` exercises the real models.
 
@@ -117,6 +118,7 @@ SSH provides it.
 | The same on 11435 | The SSH tunnel is down | Re-run the `ssh -N -L ...` command. |
 | Works natively, unreachable from the Nexo container on Linux | The macOS URLs are in use | Add `-f docker-compose.linux.yml`. |
 | `model not served here` | Role sets do not match, the model was not pulled, or an explicit `*_MODEL` has a typo | Re-run the setup with the role set from the table; the output lists what the server has. |
+| `structured output failed` (e.g. `HTTP 501`) | The server cannot constrain output to a JSON schema; Ollama MLX builds (`-mlx`, `-nvfp4` and some default tags on Apple Silicon) cannot | Use a GGUF tag such as `qwen3.5:9b-q4_K_M`; the profiles pin these. |
 | Checks pass, but long chunks or later sections are ignored | Ollama's 4096-token default context | Apply the printed `OLLAMA_CONTEXT_LENGTH` to the service and restart it. |
 | Changed the embedding model; search results are poor | Old vectors from another model | Re-ingest every document. |
 

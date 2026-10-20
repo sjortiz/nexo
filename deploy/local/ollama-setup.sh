@@ -19,10 +19,11 @@
 set -euo pipefail
 
 repo="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-env_value() {  # value of KEY from the environment, else from .env
+env_file="${NEXO_ENV_FILE:-$repo/.env}"
+env_value() {  # value of KEY from the environment, else from the env file
   local key="$1"
   if [[ -n "${!key:-}" ]]; then printf '%s' "${!key}"; return 0; fi
-  if [[ -f "$repo/.env" ]]; then sed -n "s/^${key}=//p" "$repo/.env" | tail -1; fi
+  if [[ -f "$env_file" ]]; then sed -n "s/^${key}=//p" "$env_file" | tail -1; fi
   return 0
 }
 

@@ -84,7 +84,8 @@ def test_heavy_and_light_split_the_single_role_set():
 def test_cli_prints_a_shell_plan_and_rejects_bad_profiles(capsys):
     assert lp._main(["plan", "m5-pro-24", "light", "--format", "shell"]) == 0
     out = capsys.readouterr().out
-    assert "MODELS='bge-m3 llama3.1:8b qwen3:4b-instruct-2507'" in out and "EMBEDDING_MODELS='bge-m3'" in out
+    assert "MODELS='bge-m3 llama3.1:8b-instruct-q4_K_M qwen3:4b-instruct-2507-q4_K_M'" in out
+    assert "EMBEDDING_MODELS='bge-m3'" in out
     assert lp._main(["plan", "m1-max-8"]) == 2
 
 
@@ -111,7 +112,7 @@ def test_single_mac_profile_serves_every_role_locally():
 def test_small_single_mac_disables_the_judge():
     settings = Settings(_env_file=None, local_profile="m1-pro-16")
     assert settings.judge_model is None
-    assert settings.endpoint("router").model == settings.endpoint("agent").model == "qwen3.5:9b"
+    assert settings.endpoint("router").model == settings.endpoint("agent").model == "qwen3.5:9b-q4_K_M"
 
 
 def test_two_mac_profiles_split_roles_between_hosts():
@@ -120,7 +121,7 @@ def test_two_mac_profiles_split_roles_between_hosts():
     assert agent.base_url == extraction.base_url == "http://localhost:11435/v1"
     assert agent.model == "qwen3:30b-a3b-instruct-2507-q4_K_M"
     assert router.base_url == judge.base_url == settings.embedding_base_url == "http://localhost:11434/v1"
-    assert (router.model, judge.model) == ("qwen3:4b-instruct-2507", "llama3.1:8b")
+    assert (router.model, judge.model) == ("qwen3:4b-instruct-2507-q4_K_M", "llama3.1:8b-instruct-q4_K_M")
     assert judge.model.split(":")[0] != agent.model.split(":")[0]  # judge from another family
 
 
@@ -159,16 +160,24 @@ def _run_script(*args: str, **env: str) -> subprocess.CompletedProcess[str]:
     path = os.pathsep.join([str(Path(sys.executable).parent), "/usr/bin", "/bin"])
     if shutil.which("ollama", path=path):
         pytest.skip("ollama is on the test PATH; cannot check the not-installed path")
-    clean = {"PATH": path, "HOME": os.environ.get("HOME", "/tmp"), **env}
+    # NEXO_ENV_FILE: never read the developer's own .env from the repository.
+    clean = {"PATH": path, "HOME": os.environ.get("HOME", "/tmp"), "NEXO_ENV_FILE": os.devnull, **env}
     return subprocess.run(["bash", str(SCRIPT), *args], capture_output=True, text=True, env=clean, cwd=ROOT,
                           timeout=60)
 
 
 def test_setup_script_pulls_exactly_the_catalog_models():
     result = _run_script(LOCAL_PROFILE="m5-pro-24", REMOTE_PROFILE="m1-max-64")
-    assert "role set light: bge-m3 llama3.1:8b qwen3:4b-instruct-2507" in result.stdout
+    assert "role set light: bge-m3 llama3.1:8b-instruct-q4_K_M qwen3:4b-instruct-2507-q4_K_M" in result.stdout
     heavy = _run_script("m1-max-64", "heavy")
     assert f"role set heavy: {' '.join(lp.plan('m1-max-64', 'heavy').models)}" in heavy.stdout
+
+
+def test_setup_script_reads_profiles_from_the_env_file(tmp_path):
+    env_file = tmp_path / ".env"
+    env_file.write_text("LOCAL_PROFILE=m5-pro-24\nREMOTE_PROFILE=m1-max-64\n")
+    result = _run_script(NEXO_ENV_FILE=str(env_file))
+    assert "profile m5-pro-24, role set light:" in result.stdout
 
 
 def test_setup_script_fails_clearly_without_a_profile_or_with_a_bad_one():
@@ -222,8 +231,8 @@ def test_setup_script_pulls_and_preloads_through_an_already_running_server(tmp_p
     expected = lp.plan("m5-pro-24", "light").models
     assert log.read_text().splitlines() == [f"pull {m}" for m in expected] + ["ps"]
     preloads = {(path, model) for method, path, model in _FakeOllamaAPI.calls if method == "POST"}
-    assert preloads == {("/api/embed", "bge-m3"), ("/api/generate", "llama3.1:8b"),
-                        ("/api/generate", "qwen3:4b-instruct-2507")}
+    assert preloads == {("/api/embed", "bge-m3"), ("/api/generate", "llama3.1:8b-instruct-q4_K_M"),
+                        ("/api/generate", "qwen3:4b-instruct-2507-q4_K_M")}
 
 
 def test_docs_list_every_catalog_model_and_tier():
