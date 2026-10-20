@@ -27,9 +27,16 @@ import yaml
 from nexo.config import Settings
 from nexo.llm import check_model_servers, resolved_models
 from nexo.secret_store import SecretStore, SecretStoreError, store_from_options
-from nexo.setup.check import FORCEABLE, detect_host, preflight
+from nexo.setup.check import (
+    FORCEABLE,
+    NEO4J_BOLT,
+    detect_host,
+    neo4j_login,
+    preflight,
+    stale_neo4j_hint,
+)
 from nexo.setup.components import COMPONENTS, UIS
-from nexo.setup.envfile import ensure_secrets, stack_secrets
+from nexo.setup.envfile import ensure_secrets, read_env, stack_secrets
 from nexo.setup.lock import lock as resolve_lock
 from nexo.setup.render import (
     RENDER_DIR,
@@ -136,6 +143,26 @@ def _wait_for_services(stack: _Stack) -> int:
             log.error("still starting after %ss: %s", WAIT_S, ", ".join(waiting))
             return 1
         time.sleep(3)
+
+
+def _neo4j_accepts(stack: _Stack, store: SecretStore, name: str) -> int:
+    """0 when Neo4j takes the provider's password; its healthcheck only probes HTTP."""
+    password = stack.secrets.get("NEO4J_PASSWORD")
+    if not password:
+        return 0
+    user = read_env(Path.cwd() / ".env").get("NEO4J_USER") or "neo4j"
+    for _ in range(10):
+        result = neo4j_login(NEO4J_BOLT, user, password)
+        if result != "unreachable":
+            break
+        time.sleep(2)
+    if result is None:
+        return 0
+    if result == "refused":
+        log.error("%s", stale_neo4j_hint(store, stack.host, name))
+    else:
+        log.error("Neo4j does not answer at %s", NEO4J_BOLT)
+    return 1
 
 
 def _ensure_render(args: argparse.Namespace) -> _Stack:
@@ -280,7 +307,11 @@ def _up(args: argparse.Namespace) -> int:
     if casting.spec.models.provider == "ollama" and not args.skip_models:
         if code := _start_models(casting):
             return code
-    if code := _compose(stack, UP) or _wait_for_services(stack):
+    if code := (
+        _compose(stack, UP)
+        or _wait_for_services(stack)
+        or _neo4j_accepts(stack, store, lock["name"])
+    ):
         return code
     for name in sorted(on & UIS.keys()):
         log.info("%s: %s", name, UIS[name])
