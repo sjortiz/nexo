@@ -17,7 +17,7 @@ from nexo.local_profiles import parse_profile
 
 API_VERSION = "nexo/v1alpha1"
 CORE = ("neo4j", "collector", "signoz")
-ADDONS = ("langfuse", "jaeger", "langsmith", "hostMetrics")
+ADDONS = ("langfuse", "jaeger", "langsmith", "hostMetrics", "agentInbox")
 ROLES = ("agent", "extraction", "router", "judge", "embedding")
 
 
