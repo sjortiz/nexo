@@ -17,7 +17,10 @@ import logging
 import platform
 import shutil
 import subprocess
+import time
 from pathlib import Path
+
+import yaml
 
 from nexo.config import Settings
 from nexo.llm import check_model_servers, resolved_models
@@ -34,11 +37,14 @@ from nexo.setup.render import (
     write_files,
 )
 from nexo.setup.schema import ADDONS, Casting, SetupError, load_casting
+from nexo.setup.status import assess, parse_ps, stale_volume_hint
 
 log = logging.getLogger(__name__)
 PRESETS = "examples/setups"
 # Containers of add-ons a previous run enabled are orphans of this render: remove them.
 UP = ["up", "-d", "--remove-orphans"]
+# How long up waits for every service to run (images are pulled before this starts).
+WAIT_S = 300
 
 
 def _context(args: argparse.Namespace):
@@ -54,13 +60,50 @@ def _addons(args: argparse.Namespace) -> frozenset[str]:
     return frozenset(getattr(args, "addon", None) or ())
 
 
-def _compose(host: Host, args: list[str]) -> int:
+def _compose_command(host: Host) -> list[str]:
     root = Path.cwd()
     command = [host.engine, "compose", "-f", str(root / RENDER_DIR / "compose.yaml")]
     if (root / ".env").exists():
         command += ["--env-file", str(root / ".env")]
-    log.info("%s", " ".join(command + args))
-    return subprocess.run(command + args, check=False).returncode
+    return command
+
+
+def _compose(host: Host, args: list[str]) -> int:
+    command = _compose_command(host) + args
+    log.info("%s", " ".join(command))
+    return subprocess.run(command, check=False).returncode
+
+
+def _captured(command: list[str]) -> str:
+    result = subprocess.run(command, capture_output=True, text=True, check=False)
+    return (result.stdout or "") + (result.stderr or "")
+
+
+def _explain(host: Host, failed: list[str]) -> None:
+    """Each failed service's last log lines, and a fix when it is a stale data volume."""
+    compose = yaml.safe_load((Path.cwd() / RENDER_DIR / "compose.yaml").read_text())
+    for service in failed:
+        logs = _captured(_compose_command(host) + ["logs", "--tail", "20", service])
+        log.error("%s did not start; its last log lines:\n%s", service, logs.rstrip())
+        if hint := stale_volume_hint(service, logs, compose, host.engine):
+            log.error("%s", hint)
+
+
+def _wait_for_services(host: Host) -> int:
+    """Until every service runs (one-shot jobs may exit 0); 1 when one fails or hangs."""
+    deadline = time.monotonic() + WAIT_S
+    while True:
+        ps = _captured(_compose_command(host) + ["ps", "--all", "--format", "json"])
+        failed, waiting = assess(parse_ps(ps))
+        if failed:
+            _explain(host, failed)
+            return 1
+        if not waiting:
+            return 0
+        if time.monotonic() > deadline:
+            log.error("still starting after %ss: %s", WAIT_S, ", ".join(waiting))
+            return 1
+        time.sleep(3)
 
 
 def _ensure_render(args: argparse.Namespace) -> Host:
@@ -200,7 +243,7 @@ def _up(args: argparse.Namespace) -> int:
     if casting.spec.models.provider == "ollama" and not args.skip_models:
         if code := _start_models(casting):
             return code
-    if code := _compose(host, UP):
+    if code := _compose(host, UP) or _wait_for_services(host):
         return code
     for name in sorted(on & UIS.keys()):
         log.info("%s: %s", name, UIS[name])

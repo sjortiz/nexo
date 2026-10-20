@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import re
 import shutil
 import stat
@@ -30,6 +31,7 @@ from nexo.setup.render import (
     render,
 )
 from nexo.setup.schema import SetupError, load_casting
+from nexo.setup.status import assess, stale_volume_hint
 
 ROOT = Path(__file__).resolve().parent.parent
 PRESETS = ROOT / "examples/setups"
@@ -381,8 +383,16 @@ def _recording_run(seen: list[list[str]], stdout=lambda _command: ""):
 def _fake_up(workdir, monkeypatch):
     """`nexo setup up` in workdir with the engine, preflight and model start faked."""
     seen: list[list[str]] = []
+    output: dict[str, str] = {}  # compose verb -> what the fake engine prints
     monkeypatch.chdir(workdir)
-    monkeypatch.setattr(commands.subprocess, "run", _recording_run(seen))
+    monkeypatch.setattr(
+        commands.subprocess,
+        "run",
+        _recording_run(
+            seen, lambda c: next((v for k, v in output.items() if k in c), "")
+        ),
+    )
+    monkeypatch.setattr(commands.time, "sleep", lambda _s: None)
     monkeypatch.setattr(commands, "detect_host", lambda _casting: MAC)
     findings: list[Finding] = []
     monkeypatch.setattr(commands, "preflight", lambda *_args: findings)
@@ -392,6 +402,7 @@ def _fake_up(workdir, monkeypatch):
         argv = ["setup", "up", "--skip-models", *(f"--addon={a}" for a in addons)]
         return cli.main(argv + (["--force"] if force else []))
 
+    up.output = output
     return up, seen, findings
 
 
@@ -510,7 +521,7 @@ def test_linux_presets_render_host_networking_even_on_a_mac(workdir, monkeypatch
 
 
 def test_check_names_the_models_up_will_pull(workdir):
-    """Two machines serve a different light set here than one machine; check says what is missing."""
+    """Two machines serve another light set than one machine; check says what is missing."""
     single = load_casting(_setup(workdir, "mac-single"))
     single_lock = lock(single, workdir / "nexo.yaml", workdir)
     have = {"qwen3.5:9b-q4_K_M", "bge-m3:latest"}
@@ -531,4 +542,56 @@ def test_check_names_the_models_up_will_pull(workdir):
     vllm = load_casting(_setup(workdir, "linux-vllm"))
     assert (
         check.models_finding(vllm, lock(vllm, workdir / "nexo.yaml", workdir)) is None
+    )
+
+
+SIGNOZ_FAILED = "\n".join(
+    json.dumps(c)
+    for c in (
+        {"Service": "neo4j", "State": "running", "Health": "healthy", "ExitCode": 0},
+        {"Service": "signoz-migrator", "State": "exited", "Health": "", "ExitCode": 0},
+        {"Service": "signoz", "State": "exited", "Health": "", "ExitCode": 1},
+    )
+)
+
+
+def test_up_fails_when_a_service_exits_and_names_a_stale_volume(fake_up, capfd):
+    """SigNoz refused by Postgres (an older .env made the volume): up returns 1 with the fix."""
+    up, _, _ = fake_up
+    up.output.update(ps=SIGNOZ_FAILED, logs="FATAL: failed SASL auth (password)")
+    assert up() == 1
+    captured = capfd.readouterr()
+    errors = captured.out + captured.err
+    assert "signoz did not start" in errors
+    assert "volume rm nexo_signoz-postgres-data" in errors
+    assert "clickhouse" not in errors.split("volume rm")[1]
+
+
+def test_up_succeeds_when_one_shot_jobs_exit_zero(fake_up):
+    """Exited migrators are done, not failed; an unrelated failure gives no volume hint."""
+    up, _, _ = fake_up
+    up.output["ps"] = "[" + ",".join(SIGNOZ_FAILED.splitlines()[:2]) + "]"  # array form
+    assert up() == 0
+
+
+@pytest.mark.parametrize(
+    "containers, expected",
+    [
+        ([{"Service": "a", "State": "running", "Health": "starting"}], ([], ["a"])),
+        ([{"Service": "a", "State": "restarting"}], (["a"], [])),
+        ([{"Service": "a", "State": "running", "Health": "unhealthy"}], (["a"], [])),
+        ([{"Service": "a", "State": "exited", "ExitCode": 0}], ([], [])),
+        ([{"Service": "a", "State": "running", "Health": ""}], ([], [])),
+    ],
+)
+def test_assess_container_states(containers, expected):
+    """Starting waits; restarting, unhealthy or a non-zero exit fails; exit 0 is done."""
+    assert assess(containers) == expected
+
+
+def test_no_volume_hint_without_an_auth_failure():
+    """Other crashes get their logs, not advice to delete data."""
+    compose = {"name": "nexo", "services": {"signoz": {}}, "volumes": {}}
+    assert (
+        stale_volume_hint("signoz", "panic: out of memory", compose, "podman") is None
     )

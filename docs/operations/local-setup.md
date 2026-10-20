@@ -88,7 +88,7 @@ Kubernetes comes after the compose target. Presets live in `examples/setups/`.[^
 | `make lock` | `nexo setup lock` | `nexo.lock`: the components on, every service's image and each role's model. Pins stay when `nexo.yaml` changes; `UPGRADE=1` moves them to the current defaults |
 | `make render` | `nexo setup render` | `.nexo/render/`: `compose.yaml` (only the enabled services), `otel-collector.yaml` (the base plus each add-on's pipeline), `nexo.env` |
 | `make check` | `nexo setup check` | Preflight (engine, secrets, Ollama, the profile against this machine's memory, memory budget, Podman VM limit), then each role's server and model; a failed memory check stops `check` and `up` unless `FORCE=1` |
-| `make up` | `nexo setup up` | Secrets, render, preflight, `ollama-setup.sh` for this machine's roles, `compose up -d` |
+| `make up` | `nexo setup up` | Secrets, render, preflight, `ollama-setup.sh` for this machine's roles, `compose up -d` (removing add-ons a previous run enabled), then waits until every service runs; fails with the service's last log lines when one exits |
 | `make down` / `make app` | `nexo setup down` / `compose run nexo` | Stop (volumes kept) / the CLI in a container |
 
 `LANGFUSE=1`, `JAEGER=1` and `LANGSMITH=1` turn an add-on on for one run without editing
@@ -184,6 +184,7 @@ authentication, SSH provides it.
 | `FAIL profile: ... is for 64 GB; this machine has 24 GB` | The profile names more memory than the machine has | Set the profile for this machine; `FORCE=1` to go ahead anyway. |
 | `FAIL host: rendered for linux; this machine runs macos` | A Linux preset on a Mac (or the reverse) | Use a preset for this OS, or set `target.host`; `FORCE=1` to render anyway. |
 | `FAIL gpu` | A `gpu-*` profile without `nvidia-smi`/`rocm-smi`, or vLLM without NVIDIA GPUs usable by containers | Install the driver tools; for vLLM the NVIDIA Container Toolkit (Docker) or a CDI spec (Podman). |
+| `signoz did not start` ... `refused the password in .env` | A data volume made with an older `.env` (a regenerated password) | Restore the old value in `.env`, or delete the named volume (its data goes) and `make up` again. |
 | `FAIL memory` | Models plus containers need more than 85% of this machine's memory | A smaller profile, fewer add-ons, or `FORCE=1`. |
 | `FAIL podman vm` | The enabled containers need more than 90% of the Podman VM | `podman machine set --memory 10240`, turn off an add-on, or `FORCE=1`. |
 | `unreachable ... Connection refused` on 11434 | Ollama is not running | `make up` (or `make models`), or start the service. |
