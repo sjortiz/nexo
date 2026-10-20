@@ -22,6 +22,7 @@ from strands.types.agent import Limits
 
 from nexo.agents.models import AgentOutput, InvestigationScope
 from nexo.agents.tools import GraphReader, InvestigationContext, build_investigation_tools
+from nexo.aio import run_sync
 from nexo.config import Settings
 from nexo.storage.graph_store import DATA_MODEL
 from nexo.storage.schemas import CHUNK_ID_RE, ChunkRecord
@@ -175,12 +176,12 @@ class Investigator:
 
     def investigate(self, query: str, *, request_id: str | None = None,
                     scope: InvestigationScope | None = None) -> AgentOutput:
-        """Sync entry point for LangGraph sync nodes/tasks (no running loop there).
+        """Sync entry point for LangGraph sync nodes/tasks, scripts and notebooks.
 
-        `asyncio.run` copies the caller's contextvars, so the active OTEL span
+        The caller's contextvars are carried over, so the active OTEL span
         becomes the parent of every Strands span.
         """
-        return asyncio.run(self.ainvestigate(query, request_id=request_id, scope=scope))
+        return run_sync(self.ainvestigate(query, request_id=request_id, scope=scope))
 
 
 def _render_prompt(query: str, seeds: list[ChunkRecord], chunk_filter: ChunkFilter) -> str:

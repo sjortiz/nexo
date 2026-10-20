@@ -3,6 +3,7 @@ scripted OpenAI-compatible client (stands in for vLLM)."""
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 from typing import Any
@@ -187,6 +188,21 @@ def test_strands_agent_crawls_graph_then_vectors(settings, chunk_store):
     assert {t["function"]["name"] for t in client.requests[0]["tools"]} == {
         "query_knowledge_graph", "fetch_vector_chunks"}
     assert evidence.chunk_id in json.dumps(client.requests[1]["messages"])
+
+
+def test_investigate_works_inside_a_running_event_loop(settings, chunk_store):
+    # Jupyter cells run inside an event loop; investigate() must not call asyncio.run there.
+    seed = make_chunk("kb", 0, "Beta Labs makes diagnostic kits.")
+    chunk_store.upsert([seed], [seed.text])
+    client = ScriptedClient([_completion({"content": f"Beta Labs makes kits [chunk:{seed.chunk_id}]."}, "stop")])
+    investigator = Investigator(model=OpenAIModel(client=client, model_id="m", stream=False), graph=FakeGraph(),
+                                chunks=chunk_store, settings=settings)
+
+    async def notebook_cell():
+        return investigator.investigate("What does Beta Labs make?", scope=InvestigationScope(strategy="hybrid"))
+
+    output = asyncio.run(notebook_cell())
+    assert output.error is None and output.citations == [seed.chunk_id]
 
 
 def test_hybrid_strategy_seeds_vector_hits_into_prompt(settings, chunk_store):
