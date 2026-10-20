@@ -38,11 +38,11 @@ from nexo.review_inbox import InboxAdapter, build_server
 from nexo.review_ui import ReviewApp, check_loopback, make_server
 from nexo.setup.commands import add_parser as add_setup_parser
 from nexo.service import (
+    RunResult,
     build_investigator,
     chunk_store_from_settings,
     open_ingestor,
     open_review_runtime,
-    RunResult,
     open_runtime,
 )
 from nexo.storage.graph_store import GraphStore
