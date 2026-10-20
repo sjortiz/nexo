@@ -25,6 +25,7 @@ sources:
 | `retrieval.context_precision` | Fetched chunks that are relevant / fetched chunks. |
 | `retrieval.context_recall` | Fetched chunks that are relevant / relevant chunks. |
 | `generation.citation_precision` | Cited chunks that are relevant / cited chunks. |
+| `generation.answer_contains` | Share of the case's `answer_contains` phrases found in the answer (case-insensitive). Needs no judge model. |
 | `generation.faithfulness` | Judge score 1–5: is every claim supported by the cited text? |
 | `generation.relevancy` | Judge score 1–5: does the answer address the question? |
 

@@ -20,6 +20,17 @@ One JSON object per line:
 {"question": "How is Acme Holdings connected to Gamma Clinics?", "relevant_chunk_ids": ["chk_3f1a..."], "reference_answer": "Acme owns Beta Labs, which supplies Gamma Clinics."}
 ```
 
+Optional fields: `answer_contains` (phrases a correct answer states; scored without a judge),
+`strategy` (`graph`, `vector` or `hybrid`, default `hybrid`) and `clearance` (`public`, `internal`, `pii`,
+`phi`; default `DEFAULT_CLEARANCE`). `nexo eval` skips the router, so `strategy` and `clearance` replay what
+the router chose and who is asking. Each result also logs the answer, the tool call count and the stop reason.
+
+[`examples/golden/acme-gamma.jsonl`](../../examples/golden/acme-gamma.jsonl) covers the two sample documents
+in `examples/corpus`: a multi-hop chain through a missing entity (Delta Devices), a direct lookup, a
+question that needs both documents and a question the documents do not answer. Ingest both documents
+first. The first three cases need `pii` clearance because the leadership chunk (it has an email address)
+is classified `pii`.
+
 Build it from real reviewer-approved threads: the approved answer becomes `reference_answer`, and the
 chunks the reviewer confirmed become `relevant_chunk_ids`.
 
@@ -56,6 +67,7 @@ logged as `result` records. Use it before and after changing the extraction prom
 | Low `context_recall` | Entity names do not match graph keys; extraction missed relations; `AGENT_MAX_TOOL_CALLS` too low. |
 | Low `context_precision` | Unbounded path queries; too many seeds (`SEED_CHUNKS`). |
 | Low `citation_precision`, high recall | The agent cites everything it read; tighten the prompt's citation rule. |
+| Answers say an entity "does not exist" that the text mentions | The agent never searched the text; check for `search_chunks` calls in the trace. |
 | Low `faithfulness` | Claims beyond the evidence; check `ungrounded_citations` rates in compliance. |
 
 [^cli]: nexo eval
