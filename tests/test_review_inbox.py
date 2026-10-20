@@ -112,6 +112,7 @@ def run(adapter: InboxAdapter, response: dict[str, Any], thread_id="t1"):
 
 
 def test_a_packet_becomes_an_acceptable_interrupt_with_its_passages():
+    """A packet becomes an acceptable interrupt with its passages."""
     item = to_human_interrupt(packet(), passages(), "internal")
     assert item["action_request"]["args"]["draft_answer"].startswith("Acme acquired")
     assert item["config"] == {
@@ -125,6 +126,7 @@ def test_a_packet_becomes_an_acceptable_interrupt_with_its_passages():
 
 
 def test_blocking_findings_cannot_be_accepted_only_acknowledged():
+    """Blocking findings cannot be accepted only acknowledged."""
     item = to_human_interrupt(packet(blocking=True), passages(), "internal")
     assert item["config"]["allow_accept"] is False
     assert item["config"]["allow_edit"] is True
@@ -133,10 +135,13 @@ def test_blocking_findings_cannot_be_accepted_only_acknowledged():
 
 
 def test_a_withheld_passage_never_reaches_the_description():
+    """A withheld passage never reaches the description."""
     withheld = passages("withheld")
     withheld[0]["text"] = None
     item = to_human_interrupt(packet(), withheld, "internal")
-    assert "withheld" in item["description"] and SECRET not in json.dumps(item)
+    assert "withheld at your clearance" in item[
+        "description"
+    ] and SECRET not in json.dumps(item)
     # the mapping prints text only for status shown, whatever the dict carries
     sneaky = passages("withheld")
     sneaky[0]["text"] = SECRET
@@ -147,6 +152,7 @@ def test_a_withheld_passage_never_reaches_the_description():
 
 
 def test_accept_approves_as_the_configured_reviewer():
+    """Accept approves as the configured reviewer."""
     backend = FakeBackend({"t1": packet()})
     run(adapter_for(backend), {"type": "accept", "args": None})
     ((thread_id, decision),) = backend.reviews
@@ -157,6 +163,7 @@ def test_accept_approves_as_the_configured_reviewer():
 
 
 def test_accept_on_blocking_findings_is_refused_and_sends_nothing():
+    """Accept on blocking findings is refused and sends nothing."""
     backend = FakeBackend({"t1": packet(blocking=True)})
     with pytest.raises(InboxError) as err:
         run(adapter_for(backend), {"type": "accept", "args": None})
@@ -164,6 +171,7 @@ def test_accept_on_blocking_findings_is_refused_and_sends_nothing():
 
 
 def test_respond_rejects_with_the_text_as_comment():
+    """Respond rejects with the text as comment."""
     backend = FakeBackend({"t1": packet()})
     run(adapter_for(backend), {"type": "response", "args": "path is unverified"})
     assert backend.reviews[0][1]["approval_status"] == "rejected"
@@ -171,6 +179,7 @@ def test_respond_rejects_with_the_text_as_comment():
 
 
 def test_a_response_is_never_an_approval_and_a_long_one_is_refused():
+    """A response is never an approval and a long one is refused."""
     backend = FakeBackend({"t1": packet()})
     adapter = adapter_for(backend)
     with pytest.raises(InboxError):
@@ -181,6 +190,7 @@ def test_a_response_is_never_an_approval_and_a_long_one_is_refused():
 
 
 def test_ignore_is_an_explicit_rejection():
+    """Ignore is an explicit rejection."""
     backend = FakeBackend({"t1": packet()})
     run(adapter_for(backend), {"type": "ignore", "args": None})
     decision = backend.reviews[0][1]
@@ -195,6 +205,7 @@ def edit(adapter_packet: dict[str, Any], **changes: Any) -> dict[str, Any]:
 
 
 def test_blocked_findings_are_approved_only_by_an_explicit_acknowledgement():
+    """Blocked findings are approved only by an explicit acknowledgement."""
     blocked = packet(blocking=True)
     backend = FakeBackend({"t1": blocked})
     run(adapter_for(backend), edit(blocked, **{ACK_FIELD: "yes", "comment": "ok"}))
@@ -214,6 +225,7 @@ def test_blocked_findings_are_approved_only_by_an_explicit_acknowledgement():
     ],
 )
 def test_an_edit_without_acknowledgement_or_with_a_changed_answer_is_refused(changes):
+    """An edit without acknowledgement or with a changed answer is refused."""
     blocked = packet(blocking=True)
     backend = FakeBackend({"t1": blocked})
     with pytest.raises(InboxError) as err:
@@ -222,12 +234,14 @@ def test_an_edit_without_acknowledgement_or_with_a_changed_answer_is_refused(cha
 
 
 def test_an_edit_of_an_unblocked_answer_is_refused():
+    """An edit of an unblocked answer is refused."""
     clean = packet()
     with pytest.raises(InboxError):
         to_decision(edit(clean, **{ACK_FIELD: "yes"}), clean, "rev@corp")
 
 
 def test_only_a_resume_command_is_accepted():
+    """Only a resume command is accepted."""
     backend = FakeBackend({"t1": packet()})
     adapter = adapter_for(backend)
     for body in (
@@ -244,6 +258,7 @@ def test_only_a_resume_command_is_accepted():
 
 
 def test_a_reviewer_is_required():
+    """A reviewer is required."""
     with pytest.raises(ValueError):
         InboxAdapter(FakeBackend({}), reviewer="", clearance="internal")
 
@@ -298,20 +313,24 @@ def test_a_state_update_cannot_release_an_answer(serve, settings):
     rt.start("q", thread_id="t9")
     reviews = []
 
-    class Backend:
+    class Backend:  # pylint: disable=unused-argument
         """The real runtime behind the adapter's interface, counting reviews."""
 
         def pending_reviews(self, limit=50):
+            """The one paused thread."""
             return [rt.status("t9")]
 
         def review_passages(self, thread_id, clearance):
+            """No passages."""
             return []
 
         def review(self, thread_id, decision):
+            """Count, then review for real."""
             reviews.append(decision)
             return rt.review(thread_id, decision)
 
         def status(self, thread_id):
+            """The real runtime's result."""
             return rt.status(thread_id)
 
     port = serve(Backend())
@@ -335,6 +354,7 @@ def test_a_state_update_cannot_release_an_answer(serve, settings):
 
 
 def test_the_inbox_lists_and_reads_paused_threads(serve):
+    """The inbox lists and reads paused threads."""
     port = serve(FakeBackend({"t1": packet(), "t2": packet(blocking=True)}))
     status, headers, listed = call(port, "POST", "/threads/search", {"limit": 10})
     assert status == 200 and [t["thread_id"] for t in listed] == ["t1", "t2"]
@@ -347,6 +367,7 @@ def test_the_inbox_lists_and_reads_paused_threads(serve):
 
 
 def test_only_the_inbox_origin_may_call_and_never_with_a_wildcard(serve):
+    """Only the inbox origin may call and never with a wildcard."""
     backend = FakeBackend({"t1": packet()})
     port = serve(backend)
     ok = call(port, "OPTIONS", "/threads/search")
@@ -361,6 +382,7 @@ def test_only_the_inbox_origin_may_call_and_never_with_a_wildcard(serve):
 
 
 def test_a_web_page_cannot_post_a_decision_by_other_means(serve):
+    """A web page cannot post a decision by other means."""
     backend = FakeBackend({"t1": packet()})
     port = serve(backend)
     accept = {"command": {"resume": [{"type": "accept", "args": None}]}}
@@ -375,6 +397,7 @@ def test_a_web_page_cannot_post_a_decision_by_other_means(serve):
 
 
 def test_the_server_binds_loopback_only(serve):
+    """The server binds loopback only."""
     port = serve(FakeBackend({}))
     server = build_server(adapter_for(FakeBackend({})), port=free_port(), inbox_port=1)
     try:
