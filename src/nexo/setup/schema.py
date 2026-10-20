@@ -106,6 +106,8 @@ class Telemetry(_Strict):
     """What Nexo itself sends to the collector."""
 
     logs: Literal["otlp", "none"] = "otlp"
+    # The question's text on traces (self-hosted backends only; LangSmith never gets it).
+    query_text: bool = Field(default=False, alias="queryText")
 
 
 class FileSecrets(_Strict):

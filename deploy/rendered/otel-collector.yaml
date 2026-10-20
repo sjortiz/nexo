@@ -46,6 +46,8 @@ processors:
         action: delete
       - key: db.query.text
         action: delete
+      - key: nexo.query.text
+        action: delete
   filter/strip-content-events:
     error_mode: ignore
     traces:

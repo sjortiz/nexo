@@ -15,6 +15,8 @@ from mcp.client.stdio import StdioServerParameters
 from mcp.types import LATEST_PROTOCOL_VERSION
 from neo4j.exceptions import ServiceUnavailable
 
+from pydantic import SecretStr
+from nexo.telemetry import SESSION_ID, query_attributes
 from nexo.mcp_server import build_mcp_server
 from nexo.storage.graph_store import ReadResult
 from nexo.storage.schemas import Sensitivity
@@ -415,3 +417,23 @@ def test_nexo_mcp_speaks_clean_stdio(settings, tmp_path, stored):
     tools, hits = asyncio.run(run())
     assert tools == TOOLS
     assert [h["chunk_id"] for h in data(hits)] == [stored[0].chunk_id]
+
+
+def test_tool_spans_say_who_called_and_which_question(settings, chunk_store, spans):
+    """Every MCP tool span has user.id and session.id; nexo_search adds the query hash."""
+    keyed = settings.model_copy(
+        update={"query_hash_key": SecretStr("k1"), "nexo_user": "claude-user"}
+    )
+    server = build_mcp_server(graph=RoutedGraph(), chunks=chunk_store, settings=keyed)
+    call(server, "nexo_search", {"query": "XR-7731 order"})
+    call(server, "nexo_index")
+    finished = {s.name: s for s in spans.get_finished_spans()}
+    search = finished["execute_tool nexo_search"]
+    assert search.attributes["user.id"] == "claude-user"
+    assert search.attributes["session.id"] == SESSION_ID
+    assert (
+        search.attributes["nexo.query.hash"]
+        == query_attributes(keyed, "XR-7731 order")["nexo.query.hash"]
+    )
+    assert "XR-7731 order" not in str(dict(search.attributes))
+    assert finished["execute_tool nexo_index"].attributes["user.id"] == "claude-user"

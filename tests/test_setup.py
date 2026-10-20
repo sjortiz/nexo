@@ -272,7 +272,11 @@ def test_secrets_live_in_the_provider_not_in_dot_env(workdir, caplog):
     assert (
         values["NEO4J_PASSWORD"] == "keep-me"
     )  # the volume made with it keeps working
-    assert set(values) == {"NEO4J_PASSWORD", *COMPONENTS["signoz"].secrets}
+    assert set(values) == {
+        "NEO4J_PASSWORD",
+        "QUERY_HASH_KEY",
+        *COMPONENTS["signoz"].secrets,
+    }
     assert store.get(values) == values
     assert read_env(env)["NEO4J_PASSWORD"] == ""  # no secret left in the checkout
     assert "LANGFUSE" not in store.path.read_text()
@@ -284,12 +288,12 @@ def test_secrets_live_in_the_provider_not_in_dot_env(workdir, caplog):
 def test_a_read_only_mount_must_hold_every_secret(workdir, tmp_path):
     """Mounted by the platform: nothing is generated; missing keys are named."""
     mounted = tmp_path / "mounted.ini"
-    mounted.write_text("[nexo]\nNEO4J_PASSWORD = from-csi\n")
+    mounted.write_text("[nexo]\nNEO4J_PASSWORD = from-csi\nQUERY_HASH_KEY = k\n")
     store = FileStore(mounted, "nexo")
     with pytest.raises(SetupError, match="read-only and lacks SIGNOZ"):
         ensure_secrets(workdir / ".env", workdir, {"neo4j", "signoz"}, store)
     values = ensure_secrets(workdir / ".env", workdir, {"neo4j"}, store)
-    assert values == {"NEO4J_PASSWORD": "from-csi"}
+    assert values == {"NEO4J_PASSWORD": "from-csi", "QUERY_HASH_KEY": "k"}
 
 
 def test_every_required_variable_in_a_fragment_is_generated_or_declared():
@@ -740,3 +744,32 @@ def test_neo4j_login_tells_a_refused_password_from_an_absent_server(monkeypatch)
 
     monkeypatch.setattr(check.GraphDatabase, "driver", lambda *_a, **_k: Refusing())
     assert check.neo4j_login("bolt://localhost:7687", "neo4j", "s3cret") == "refused"
+
+
+def test_question_text_reaches_only_self_hosted_backends_when_opted_in(workdir):
+    """Stripped everywhere by default; with queryText kept for Langfuse/Jaeger, never LangSmith."""
+    addons = {"langfuse", "jaeger", "langsmith"}
+    _, collector, env = _render(workdir, _setup(workdir, "mac-single"), addons=addons)
+    deleted = {
+        a["key"] for a in collector["processors"]["attributes/strip-content"]["actions"]
+    }
+    assert "nexo.query.text" in deleted and env["TRACE_QUERY_TEXT"] == "false"
+    for name in ("traces", "traces/langfuse", "traces/jaeger", "traces/langsmith"):
+        assert (
+            "attributes/strip-content"
+            in collector["service"]["pipelines"][name]["processors"]
+        )
+
+    path = _setup(
+        workdir, "mac-single", lambda d: d["spec"].update(telemetry={"queryText": True})
+    )
+    _, collector, env = _render(workdir, path, addons=addons)
+    deleted = {
+        a["key"] for a in collector["processors"]["attributes/strip-content"]["actions"]
+    }
+    assert "nexo.query.text" not in deleted and env["TRACE_QUERY_TEXT"] == "true"
+    langsmith = collector["service"]["pipelines"]["traces/langsmith"]["processors"]
+    assert langsmith[0] == "attributes/strip-query"
+    assert collector["processors"]["attributes/strip-query"]["actions"] == [
+        {"key": "nexo.query.text", "action": "delete"}
+    ]
