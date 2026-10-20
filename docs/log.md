@@ -1,6 +1,7 @@
 # Bundle Update Log
 
 ## 2026-10-20
+* **Creation**: [Choosing a setup](operations/decision-guide.md): decision matrices for presets per hardware, one or two machines, model serving, observability add-ons, memory per combination, flags versus `nexo.yaml`, how to run the services and content in telemetry.
 * **Update**: One setup file, `nexo.yaml`, rendered by `nexo setup` (lock, preflight with a memory budget, presets for five setups); `make` keeps its targets and add-on flags; `docker-compose.yml` is generated from the mac-single preset; the GPU and Linux overrides are gone ([How local setup works](operations/local-setup.md), [ADR-0016](decisions/adr-0016-declarative-setup-file.md)).
 * **Update**: SigNoz is the default observability backend (traces, metrics, logs, alerts, host and container metrics); Langfuse becomes the `LANGFUSE=1` add-on for evaluation work; the Grafana LGTM add-on is removed ([SigNoz](references/signoz.md), [ADR-0015](decisions/adr-0015-signoz-default-observability.md) supersedes ADR-0014).
 * **Update**: Opt-in log export (`OTEL_LOGS_EXPORTER=otlp`) and a Grafana LGTM add-on (`make up LGTM=1`) for traces, stored metrics and logs; new [FAQ](operations/faq.md).

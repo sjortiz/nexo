@@ -1,5 +1,6 @@
 # Run
 
+* [Choosing a setup](decision-guide.md) - Decision matrices: preset per hardware, one or two machines, model serving, observability add-ons, memory per combination.
 * [Configuration reference](configuration.md) - Every environment variable, with defaults and effects.
 * [Compose stack with vLLM](local-stack.md) - Bring up Neo4j, vLLM on GPUs, tracing and the CLI with Docker Compose.
 * [How local setup works](local-setup.md) - Model roles, the profile catalog, who listens where, and `nexo models --check`.

@@ -103,7 +103,9 @@ Presets: `mac-single`, `mac-two-machines`, `linux-cpu`, `linux-gpu`, `linux-vllm
 (`examples/setups/`). `docker-compose.yml` is generated from `mac-single` (`make compose-file`) for
 plain `podman compose up -d`.
 
-How it fits together (roles, the profile catalog, ports): [How local setup works](docs/operations/local-setup.md).
+Which preset, models and add-ons to pick, with memory per combination:
+[Choosing a setup](docs/operations/decision-guide.md). How it fits together (roles, the profile
+catalog, ports): [How local setup works](docs/operations/local-setup.md).
 Step by step: [Local on Apple Silicon](docs/operations/local-apple-silicon.md) and
 [Local on Linux](docs/operations/local-linux.md) (`nexo setup` puts the Nexo container on the host
 network there).
@@ -147,7 +149,7 @@ Opt-in add-ons, each its own collector pipeline behind the same content strippin
 | LangSmith | `make up LANGSMITH=1` | Needs `LANGSMITH_API_KEY` in `.env`; the project is `addons.langsmith.project`. |
 
 Add-ons can be combined. `make up LANGFUSE=1` turns one on for one run; `addons:` in `nexo.yaml`
-keeps it on. Which to use when: [FAQ](docs/operations/faq.md).
+keeps it on. Which to use when: [Choosing a setup](docs/operations/decision-guide.md#4-which-observability-to-turn-on).
 
 LangSmith also offers Studio for local graph debugging (`langgraph dev`) and evaluation tooling
 (datasets, experiments, `openevals` judges); see [the reference](docs/references/langsmith.md). No PHI
