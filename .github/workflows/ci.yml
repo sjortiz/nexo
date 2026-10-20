@@ -16,6 +16,10 @@ jobs:
       matrix:
         os: [ubuntu-latest, macos-latest]
     runs-on: ${{ matrix.os }}
+    env:
+      # The keychain is for local machines: CI never touches one (an unattended macOS
+      # keychain blocks on its unlock prompt). Any keychain call fails fast instead.
+      PYTHON_KEYRING_BACKEND: keyring.backends.fail.Keyring
     steps:
       - uses: actions/checkout@v7
       - uses: astral-sh/setup-uv@v10.3.0  # the project publishes exact tags only

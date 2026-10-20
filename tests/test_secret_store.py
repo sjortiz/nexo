@@ -7,6 +7,9 @@ import io
 import json
 import os
 import stat
+import sys
+import threading
+import uuid
 import subprocess
 import urllib.error
 from pathlib import Path
@@ -249,3 +252,46 @@ def test_tests_never_touch_the_real_config_dir():
     """The conftest fixture isolates ~/.config/nexo for every test."""
     assert os.environ.get("NEXO_CONFIG_DIR")
     assert str(secret_store.config_dir()) == os.environ["NEXO_CONFIG_DIR"]
+
+
+def test_a_keychain_that_does_not_answer_times_out(memory_keychain, monkeypatch):
+    """A locked keychain waiting on a prompt becomes an error, not a hang."""
+    release = threading.Event()
+    answer = memory_keychain.get_password
+
+    def stuck(
+        service, username
+    ):  # waits (up to 2 s) as an unanswered unlock prompt would
+        release.wait(2)
+        return answer(service, username)
+
+    monkeypatch.setattr(memory_keychain, "get_password", stuck)
+    monkeypatch.setattr(KeychainStore, "timeout_s", 0.05)
+    try:
+        with pytest.raises(SecretStoreError, match="no answer"):
+            KeychainStore("nexo").get(["NEO4J_PASSWORD"])
+    finally:
+        release.set()
+
+
+@pytest.mark.skipif(
+    os.environ.get("NEXO_KEYCHAIN_TEST") != "1",
+    reason="uses this machine's real keychain: run locally with NEXO_KEYCHAIN_TEST=1",
+)
+def test_real_keychain_round_trip():
+    """Opt-in, local only: a temporary entry in the real keychain, written then removed."""
+    if sys.platform == "darwin":
+        from keyring.backends.macOS import (  # pylint: disable=import-outside-toplevel  # macOS only
+            Keyring as Real,
+        )
+    else:
+        from keyring.backends.SecretService import (  # pylint: disable=import-outside-toplevel  # Linux only
+            Keyring as Real,
+        )
+    keyring.set_keyring(Real())
+    store = KeychainStore(f"test-{uuid.uuid4().hex[:8]}")
+    try:
+        store.put({"NEXO_TEST": "value"})
+        assert store.get(["NEXO_TEST"]) == {"NEXO_TEST": "value"}
+    finally:
+        keyring.delete_password(store.service, "NEXO_TEST")

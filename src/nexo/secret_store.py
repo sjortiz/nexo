@@ -18,11 +18,13 @@ import configparser
 import json
 import os
 import subprocess
+import threading
 import urllib.error
 import urllib.request
 from abc import ABC, abstractmethod
-from collections.abc import Iterable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from pathlib import Path
+from typing import Any
 
 import keyring
 import keyring.backends.fail
@@ -157,25 +159,51 @@ class FileStore(SecretStore):
 
 
 class KeychainStore(SecretStore):
-    """The OS keychain, one entry per key under the service "nexo/<stack>"."""
+    """The OS keychain, one entry per key under the service "nexo/<stack>" (local use)."""
+
+    # A locked keychain can wait for an unlock prompt nobody answers.
+    timeout_s = 10.0
 
     def __init__(self, stack: str):
         self.service = f"nexo/{stack}"
         self.label = f"keychain ({self.service})"
 
+    def _call(self, func: Callable[[], Any]) -> Any:
+        """Run one keychain call in a daemon thread, so a stuck call cannot block Nexo."""
+        outcome: dict[str, Any] = {}
+
+        def target() -> None:
+            try:
+                outcome["value"] = func()
+            except keyring.errors.KeyringError as exc:
+                outcome["error"] = exc
+
+        thread = threading.Thread(target=target, daemon=True)
+        thread.start()
+        thread.join(self.timeout_s)
+        if thread.is_alive():
+            raise SecretStoreError(
+                f"{self.label}: no answer in {self.timeout_s:.0f}s (is it locked?)"
+            )
+        if "error" in outcome:
+            error = outcome["error"]
+            raise SecretStoreError(f"{self.label}: {type(error).__name__}") from error
+        return outcome.get("value")
+
     def get(self, keys: Iterable[str]) -> dict[str, str]:
-        try:
-            found = {key: keyring.get_password(self.service, key) for key in keys}
-        except keyring.errors.KeyringError as exc:
-            raise SecretStoreError(f"{self.label}: {type(exc).__name__}") from exc
+        found = {
+            key: self._call(lambda key=key: keyring.get_password(self.service, key))
+            for key in keys
+        }
         return {key: value for key, value in found.items() if value}
 
     def put(self, values: Mapping[str, str]) -> None:
-        try:
-            for key, value in values.items():
-                keyring.set_password(self.service, key, value)
-        except keyring.errors.KeyringError as exc:
-            raise SecretStoreError(f"{self.label}: {type(exc).__name__}") from exc
+        for key, value in values.items():
+            self._call(
+                lambda key=key, value=value: keyring.set_password(
+                    self.service, key, value
+                )
+            )
 
 
 class SopsStore(SecretStore):
