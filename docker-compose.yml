@@ -37,9 +37,14 @@ services:
       - --config=/etc/otelcol/addons/${OTEL_LANGFUSE:-none}.yaml
       - --config=/etc/otelcol/addons/${OTEL_JAEGER:-none}.yaml
       - --config=/etc/otelcol/addons/${OTEL_LANGSMITH:-none}.yaml
+    # Root in the container to read the container engine's socket (container metrics); with
+    # rootless Podman that is the unprivileged user that owns the socket.
+    user: "0"
     volumes:
       - ./deploy/otel-collector.yaml:/etc/otelcol/config.yaml:ro
       - ./deploy/otel-addons:/etc/otelcol/addons:ro
+      - /:/hostfs:ro  # host metrics; on macOS the host is the Podman VM
+      - ${CONTAINER_SOCKET:-/var/run/docker.sock}:/var/run/docker.sock:ro
     depends_on: [signoz-ingester]
     ports: ["127.0.0.1:4318:4318", "127.0.0.1:8889:8889"]  # OTLP in, Prometheus metrics out
     environment:

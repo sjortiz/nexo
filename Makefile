@@ -21,6 +21,9 @@ LANGSMITH ?=
 ADDONS    = OTEL_LANGFUSE=$(if $(LANGFUSE),langfuse,none) \
             OTEL_JAEGER=$(if $(JAEGER),jaeger,none) \
             OTEL_LANGSMITH=$(if $(LANGSMITH),langsmith,none)
+# The container engine's API socket, for container metrics (as the engine sees it: inside the
+# Podman VM on macOS). Docker's default socket otherwise.
+CONTAINER_SOCKET ?= $(shell $(CONTAINER) info --format '{{.Host.RemoteSocket.Path}}' 2>/dev/null | sed -n 's|^unix://||p')
 PROFILE  ?=
 ROLES    ?=
 FILE     ?=
@@ -57,7 +60,8 @@ models: ## Pull and start the profile's models in Ollama (PROFILE=m1-max-64 ROLE
 ##@ Run
 
 up: ## Start Neo4j, the collector and SigNoz (add-ons: LANGFUSE=1, JAEGER=1, LANGSMITH=1)
-	$(ADDONS) $(COMPOSE) $(if $(LANGFUSE),--profile langfuse) up -d neo4j otel-collector signoz \
+	$(ADDONS) $(if $(CONTAINER_SOCKET),CONTAINER_SOCKET=$(CONTAINER_SOCKET)) \
+	  $(COMPOSE) $(if $(LANGFUSE),--profile langfuse) up -d neo4j otel-collector signoz \
 	  $(if $(LANGFUSE),langfuse-web langfuse-worker) $(if $(JAEGER),jaeger)
 
 down: ## Stop them (data volumes are kept)
