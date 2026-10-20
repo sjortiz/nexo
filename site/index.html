@@ -226,7 +226,8 @@
         <article class="card"><h3>Use it from Claude</h3><p>An MCP server exposes read-only tools, and a Claude Code skill
           walks the model through orient, locate, trace, read and answer, with citations.</p></article>
         <article class="card"><h3>Observable</h3><p>OpenTelemetry GenAI conventions end to end: workflow, nodes, agent,
-          tools, model and database spans. Message content stays out of traces by default.</p></article>
+          tools, model and database spans, in SigNoz with metrics and logs. Message content stays out of traces
+          by default.</p></article>
         <article class="card"><h3>Runs where you are</h3><p>vLLM on GPU servers, or Ollama on a Mac or Linux box chosen by
           a hardware profile such as <code>m1-max-64</code> or <code>gpu-24</code>. Split roles across two machines.</p></article>
       </div>
@@ -244,7 +245,8 @@
         <li><b>vLLM</b> / <b>Ollama</b> · inference</li>
         <li><b>Neo4j</b> · knowledge graph</li>
         <li><b>Model Context Protocol</b> · tools</li>
-        <li><b>OpenTelemetry</b> · tracing</li>
+        <li><b>OpenTelemetry</b> · telemetry</li>
+        <li><b>SigNoz</b> · traces, metrics, logs</li>
         <li><b>Python 3.12</b></li>
       </ul>
     </div>
@@ -279,7 +281,9 @@ uv sync && source .venv/bin/activate     # Python 3.12 and the locked dependenci
             <code>linux-gpu</code>, <code>linux-vllm</code>) and set your profile: the chip and memory on a Mac
             (<code>m1-max-64</code>, <code>m5-pro-24</code>), or <code>gpu-&lt;VRAM GB&gt;</code> /
             <code>cpu-&lt;RAM GB&gt;</code> on Linux. <code>make env</code> also generates the passwords into
-            <code>~/.config/nexo/config</code>, readable only by you; nothing is copied between machines.</p>
+            <code>~/.config/nexo/config</code>, readable only by you; nothing is copied between machines. The OS
+            keychain is an optional extra (<code>nexo[keychain]</code>); SOPS and Vault are opt-in. On a cluster,
+            secrets are mounted files, never environment variables.</p>
 <pre><code>make env PRESET=mac-single
 python3 src/nexo/local_profiles.py plan m5-pro-24   # the models a profile picks
 # in nexo.yaml: models.local.profile: m5-pro-24</code></pre>
