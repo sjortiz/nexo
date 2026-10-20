@@ -97,10 +97,12 @@ routing would fail. On Apple Silicon this happens with Ollama's MLX builds (tags
 
 # Can a caller with lower clearance see the names of sensitive entities?
 
-The text of chunks above the caller's clearance is always withheld, and whole nodes above it are
-redacted. On Neo4j Community, a query that returns a plain value (`RETURN p.name`) cannot be traced
-back to its node, so a name can still appear. Neo4j Enterprise closes this with role-based access on
-the `:PII` and `:PHI` labels; on Community, human review is the remaining control.[^adr-0006]
+Chunk text above the caller's clearance is withheld, or shown with detected PII masked (`[EMAIL]`)
+when that PII is the only reason it is above. Graph tools drop chunk text from the rows they return
+and refuse Cypher that reads it by name, and whole nodes above the clearance are redacted. On Neo4j
+Community, a query that returns a plain value (`RETURN p.name`) cannot be traced back to its node, so a
+name can still appear. Neo4j Enterprise closes this with role-based access on the `:PII` and `:PHI`
+labels; on Community, human review is the remaining control.[^adr-0006]
 
 [^adr-0015]: ADR-0015: SigNoz as the default observability backend
 [^observability]: Observability

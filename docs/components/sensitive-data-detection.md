@@ -67,13 +67,30 @@ A chunk is withheld whole instead when:
 - the masked text still triggers the detector.
 
 Chunks stored before `declared_sensitivity` existed have `None`; they are treated as classified by their
-spans alone until re-ingested. Search ranks the original text (the store indexes it), so the query is
-masked first; a partial value such as an email domain can still influence ranking. The model-facing
-chunk, the ledger and spans never hold the masked-out text; the ledger keeps the stored level, so
-[compliance](compliance-checks.md) still warns `pii_in_evidence`. A real detector adds a call per
-over-clearance candidate at read time, which matters for `comprehend_medical`. `nexo mcp`'s `nexo_search` and `nexo_get_chunks`
-([MCP server](mcp-server.md#safeguards)) use the same redactor. Graph rows are not masked: entities and
-edges above clearance stay redacted (ADR-0006).
+spans alone until re-ingested.
+
+Search ranks the original text and its embedding (the store indexes them), so the redactor checks each
+masked hit against its masked text. The query is masked first, so a whole detected value finds nothing.
+A masked chunk is then returned only when at least one query word is a word of its masked text (the
+placeholders' own words, such as `email`, do not count) and no query word is one that masking removed.
+So fragments of a value (`0134`, `555-0134`, `415`, `jane`) do not find it, and neither does a query
+that mixes them with other words. A chunk found only by its embedding is dropped, because the embedding
+was computed from the original: masked chunks are found by their remaining words only. What this does
+not prevent:
+
+- ranking among the chunks that do match still uses the original text and embedding, so their order,
+  and which of them fill the top k, can shift with how close the query is to a masked value;
+- a word found both inside a masked value and elsewhere in the chunk (`beta` in `Beta Labs` and in
+  `jane.roe@beta.example`) counts as a remaining word, and its masked occurrence still adds to the score;
+- a word not in the chunk at all (a near miss such as `Jean`) passes the check when another query word
+  matches, and only the embedding sees it.
+
+The model-facing chunk, the ledger and spans never hold the masked-out text; the ledger keeps the stored
+level, so [compliance](compliance-checks.md) still warns `pii_in_evidence`. A real detector adds a call
+per over-clearance candidate at read time, which matters for `comprehend_medical`. `nexo mcp`'s
+`nexo_search` and `nexo_get_chunks` ([MCP server](mcp-server.md#safeguards)) use the same redactor.
+Graph rows are not masked: entities and edges above clearance stay redacted, and graph tools drop
+chunk text from their rows ([read-only enforcement](graph-store.md#read-only-enforcement), ADR-0006).
 
 See [ADR-0006](../decisions/adr-0006-sensitivity-and-caller-clearance.md).[^sensitive]
 
