@@ -9,8 +9,10 @@ import sys
 from datetime import date
 from pathlib import Path
 
+from nexo.agents.models import InvestigationScope
 from nexo.config import get_settings
 from nexo.evaluation import (
+    answer_scores,
     extraction_scores,
     grounded_key,
     judge_faithfulness,
@@ -40,7 +42,7 @@ from nexo.storage.ingest import ExtractionAids, IngestionTargets, KnowledgeGraph
 from nexo.storage.ontology import Ontology
 from nexo.storage.schemas import DocumentMetadata, Sensitivity, Triple
 from nexo.storage.sensitive_data import NoopDetector
-from nexo.storage.vector_store import LocalChunkStore
+from nexo.storage.vector_store import ChunkFilter, LocalChunkStore
 from nexo.telemetry import setup_telemetry, shutdown_telemetry, traced_span
 
 log = logging.getLogger("nexo.cli")
@@ -117,7 +119,13 @@ def _status(args: argparse.Namespace) -> int:
 
 
 def _eval(args: argparse.Namespace) -> int:
-    """Each JSONL line: {"question", "relevant_chunk_ids": [...], "reference_answer"?}."""
+    """Each JSONL line: {"question", "relevant_chunk_ids": [...], "reference_answer"?,
+    "answer_contains"?: [...], "strategy"?: "graph"|"vector"|"hybrid",
+    "clearance"?: "public"|"internal"|"pii"|"phi"}.
+
+    Eval skips the router, so `strategy` replays its choice (default hybrid) and `clearance`
+    stands for the caller's (default DEFAULT_CLEARANCE).
+    """
 
     settings = get_settings()
     setup_telemetry(settings)
@@ -133,8 +141,22 @@ def _eval(args: argparse.Namespace) -> int:
                 continue
             case = json.loads(line)
             with traced_span("eval.case"):
-                output = investigator.investigate(case["question"])
+                output = investigator.investigate(
+                    case["question"],
+                    scope=InvestigationScope(
+                        strategy=case.get("strategy", "hybrid"),
+                        chunk_filter=ChunkFilter(
+                            max_sensitivity=case.get(
+                                "clearance", settings.default_clearance
+                            )
+                        ),
+                    ),
+                )
                 metrics = retrieval_scores(output, case.get("relevant_chunk_ids", []))
+                if "answer_contains" in case:
+                    metrics.update(
+                        answer_scores(output.answer, case["answer_contains"])
+                    )
                 if judge and output.answer:
                     evidence = [c.text for c in chunks.get_by_ids(output.citations)]
                     metrics["generation.faithfulness"] = judge_faithfulness(
@@ -146,7 +168,15 @@ def _eval(args: argparse.Namespace) -> int:
                 record_metrics(metrics)
             log.info(
                 "eval case scored",
-                extra={"result": {"question": case["question"], **metrics}},
+                extra={
+                    "result": {
+                        "question": case["question"],
+                        **metrics,
+                        "answer": output.answer,
+                        "tool_calls": len(output.tool_calls),
+                        "stop_reason": output.stop_reason,
+                    }
+                },
             )
     finally:
         graph.close()
