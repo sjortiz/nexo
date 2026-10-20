@@ -270,28 +270,32 @@ def test_extract_citations():
     ]
 
 
-def test_bare_hash_citation_resolves_to_the_one_chunk_read():
-    """A hash without chk_ counts when it starts exactly one chunk id read in the run."""
+def test_bare_hash_citation_resolves_to_the_chunk_read():
+    """A whole hash without chk_ counts when chk_ plus it is a chunk id read in the run."""
     read = ["chk_714c2e550aacdb8f", "chk_" + "b" * 16]
     assert extract_citations("X [chunk:714c2e550aacdb8f].", read) == [read[0]]
-    assert extract_citations("X [chunk:714c2e55, chk_714c2e550aacdb8f].", read) == [
-        read[0]
-    ]
+    assert extract_citations(
+        "X [chunk:714c2e550aacdb8f, chk_714c2e550aacdb8f].", read
+    ) == [read[0]]
 
 
 @pytest.mark.parametrize(
     "cited",
     [
         "0123456789abcdef",  # not read in this run
-        "714c2e55",  # starts both chunk ids read in this run
+        "714c2e550aac",  # shortened: 12 hex characters
         "714c",  # too short to name a chunk
     ],
 )
-def test_unknown_or_ambiguous_bare_hash_stays_uncited(cited):
-    """A bare hash that matches no chunk read, or more than one, is not a citation."""
-    read = ["chk_714c2e550aacdb8f", "chk_714c2e55ffffffff"]
+def test_unknown_or_shortened_bare_hash_stays_uncited(cited):
+    """Only a whole 16-hex hash of a chunk read counts; anything else is not a citation."""
+    read = ["chk_714c2e550aacdb8f", "chk_" + "b" * 16]
     assert not extract_citations(f"X [chunk:{cited}].", read)
-    assert not extract_citations("X [chunk:714c2e550aacdb8f].")  # nothing read
+
+
+def test_bare_hash_citation_needs_a_chunk_read():
+    """With nothing read in the run, a bare hash is not a citation."""
+    assert not extract_citations("X [chunk:714c2e550aacdb8f].")
 
 
 # --- real Strands loop ------------------------------------------------------

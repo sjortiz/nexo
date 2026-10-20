@@ -20,8 +20,8 @@ sources:
 |---|---|---|
 | `investigation_failed` | block | The agent raised, timed out or produced no output. The run is auto-rejected with no human step. |
 | `empty_answer` | block | The agent returned no text (auto-rejected). |
-| `no_citations` | block | The answer cites no `[chunk:<id>]` (a bare hash counts only if it names exactly one chunk the agent read). |
-| `ungrounded_citations` | block | A cited id was never returned to the agent; the citation is fabricated or guessed. |
+| `no_citations` | block | The answer cites no `[chunk:<id>]` (a bare 16-hex hash without `chk_` counts only if `chk_` plus it is a chunk the agent read). |
+| `ungrounded_citations` | block | A cited id was never returned to the agent; the citation is fabricated or guessed. Applies to `chk_`-prefixed ids only: a bare hash of a chunk the agent never received is dropped before this check, so it can only lead to `no_citations`. |
 | `phi_in_evidence` | block | A cited chunk is classified `phi`; confirm minimum-necessary disclosure. |
 | `pii_in_evidence` | warn | A cited chunk is classified `pii` (and none is `phi`). |
 | `sensitive_data_in_answer` | block | The configured detector finds identifiers in the answer text itself. |
