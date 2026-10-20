@@ -15,6 +15,7 @@ sources:
 # Findings
 
 `block` findings require `acknowledged_findings: true` to approve. `warn` findings are informational.
+Which answers wait for a person at all is the [review policy](../operations/human-review.md#review-policy).
 
 | Code | Severity | Raised when |
 |---|---|---|

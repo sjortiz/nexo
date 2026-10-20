@@ -62,12 +62,12 @@ CI installs with `uv sync --locked` (exactly `uv.lock`) and runs the same target
 # Writing tests
 
 Cover the failure path, not just the happy path. For each safeguard, check that the test fails when the
-safeguard is removed (a mutation check). The last check broke 36 safeguards one at a time and the
+safeguard is removed (a mutation check). The last check broke 38 safeguards one at a time and the
 suite failed for every one, including:
 
 - evidence grounding, graph redaction, chunk clearance, the Cypher guard, the evidence ledger
 - ungrounded citations, the acknowledgement requirement, the clearance clamp, review validation,
-  no auto-approval with blocking findings under any review policy
+  no auto-approval with blocking findings under any review policy, `never` releasing only `warn`
 - transient retries, router fail-closed, stale-delete keep set, Luhn filter
 - previous-chunk context, inverse swaps, ontology type constraints, the RELATED_TO fallback,
   name normalization

@@ -38,7 +38,7 @@ for tests only.[^service] A test starts a run with one SQLite saver and approves
 - **Amended 2026-10-20:** not every answer has to pause. `spec.review` in `nexo.yaml`
   (`REVIEW_POLICY`) is `always` (the default: every answer pauses, as before), `on-findings` (an
   answer with no findings and complete, grounded citations is approved without a pause) or `never`
-  (only answers with blocking findings pause). Blocking findings pause under every policy. An
+  (an answer with no findings or only `warn` findings is approved; any other finding pauses). Blocking findings pause under every policy. An
   approval without a pause is recorded in the thread's `review` with `reviewer: system:auto` and on
   the compliance span (`nexo.review.reviewer`), so the audit trail is the same shape either way. See
   [Review policy](../operations/human-review.md#review-policy).
