@@ -15,8 +15,10 @@ sources:
     title: Environment template
 ---
 
-Settings load from the environment, then `.nexo/render/nexo.env` (rendered from `nexo.yaml` by
-`nexo setup`), then `.env` (names are case-insensitive). A test fails if a setting is missing from
+Settings load from the environment, then the secrets provider for the generated secrets
+(`NEO4J_PASSWORD`, `VLLM_API_KEY`, `EMBEDDING_API_KEY`; the OS keychain by default, see ADR-0017),
+then `.nexo/render/nexo.env` (rendered from `nexo.yaml` by `nexo setup`), then `.env` (names are
+case-insensitive). A test fails if a setting is missing from
 this page.[^config] Template: `.env.example`.[^env]
 
 # Schema

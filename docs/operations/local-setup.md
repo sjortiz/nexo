@@ -32,6 +32,9 @@ sources:
   - id: models
     resource: ../../src/nexo/llm.py
     title: Model resolution and server check (nexo models)
+  - id: adr-0017
+    resource: ../decisions/adr-0017-secrets-from-a-provider.md
+    title: "ADR-0017: Secrets from a provider, not a file"
   - id: adr-0016
     resource: ../decisions/adr-0016-declarative-setup-file.md
     title: "ADR-0016: A declarative setup file"
@@ -84,7 +87,7 @@ Kubernetes comes after the compose target. Presets live in `examples/setups/`.[^
 
 | Target | Runs | Effect |
 |---|---|---|
-| `make env` | `nexo setup init`, `nexo setup secrets` | `nexo.yaml` from a preset (kept if it exists); `.env` from the template with random secrets for the enabled components (existing values kept) |
+| `make env` | `nexo setup init`, `nexo setup secrets` | `nexo.yaml` from a preset (kept if it exists); `.env` from the template for personal settings; random secrets for the enabled components (existing values kept) |
 | `make lock` | `nexo setup lock` | `nexo.lock`: the components on, every service's image and each role's model. Pins stay when `nexo.yaml` changes; `UPGRADE=1` moves them to the current defaults |
 | `make render` | `nexo setup render` | `.nexo/render/`: `compose.yaml` (only the enabled services), `otel-collector.yaml` (the base plus each add-on's pipeline), `nexo.env` |
 | `make check` | `nexo setup check` | Preflight (engine, secrets, Ollama, the profile against this machine's memory, memory budget, Podman VM limit), then each role's server and model; a failed memory check stops `check` and `up` unless `FORCE=1` |
@@ -138,10 +141,21 @@ the ones `make up` will pull.
 For every setting, the first match wins:[^config]
 
 1. A real environment variable.
-2. `.nexo/render/nexo.env`, rendered from `nexo.yaml` (profiles, endpoints, log export, explicit roles).
-3. `.env` (secrets, personal overrides such as `AGENT_MODEL`).
-4. The profile, for role settings not set above.
-5. The `VLLM_*` default (the GPU server setup).
+2. The secrets provider, for the generated secrets Nexo uses (`NEO4J_PASSWORD`, the vLLM keys).
+3. `.nexo/render/nexo.env`, rendered from `nexo.yaml` (profiles, endpoints, log export, explicit roles).
+4. `.env` (personal overrides such as `AGENT_MODEL`, keys only you have such as `HF_TOKEN`).
+5. The profile, for role settings not set above.
+6. The `VLLM_*` default (the GPU server setup).
+
+# Where secrets live
+
+Generated secrets (Neo4j, SigNoz and Langfuse passwords and keys) never sit in a file you copy
+between machines.[^adr-0017] `spec.secrets.provider` in `nexo.yaml` picks the store: the OS keychain by
+default (`~/.config/nexo/config`, owner-only, where no keychain is set up), `env` to opt out (the
+environment or `.env`; Kubernetes Secrets, CI), or `sops` / `vault` to opt in. Every checkout of a
+stack on a machine shares its secrets, so one stack per machine works from any checkout; `nexo
+setup` hands them to compose through the environment. Read one with `uv run keyring get nexo/nexo
+SIGNOZ_USER_PASSWORD`. Secrets found in an older `.env` move into the store on the next `make env`.
 
 This is per field: `AGENT_MODEL=my-model` keeps the profile's agent URL. Profiles also default
 `LLM_TIMEOUT_S` (300), `AGENT_TIMEOUT_S` (900) and `EXTRACTION_CONCURRENCY`, unless set. Without
@@ -180,11 +194,13 @@ authentication, SSH provides it.
 | Symptom | Cause | Fix |
 |---|---|---|
 | `nexo.yaml: ...` error naming a field | A typo or an impossible combination | Fix that field; the presets show valid files. |
-| `FAIL secrets: set in .env: HF_TOKEN` | A key only you can provide | Add it to `.env`. |
+| `FAIL secrets: ...; set: HF_TOKEN` | A key only you can provide, or (provider `env`) a secret nobody provides | Add it to `.env` or the environment. |
+| `FAIL secrets: keychain ...` or `vault ...: HTTP 403` | The provider cannot be read (locked keychain, wrong token, no `sops` key) | Unlock it or fix its credentials; the message names the provider. |
+| `FAIL neo4j: Neo4j refused the password` | The `neo4j-data` volume was made with other secrets | Put the old password back in the store, or delete the named volume (its data goes). |
 | `FAIL profile: ... is for 64 GB; this machine has 24 GB` | The profile names more memory than the machine has | Set the profile for this machine; `FORCE=1` to go ahead anyway. |
 | `FAIL host: rendered for linux; this machine runs macos` | A Linux preset on a Mac (or the reverse) | Use a preset for this OS, or set `target.host`; `FORCE=1` to render anyway. |
 | `FAIL gpu` | A `gpu-*` profile without `nvidia-smi`/`rocm-smi`, or vLLM without NVIDIA GPUs usable by containers | Install the driver tools; for vLLM the NVIDIA Container Toolkit (Docker) or a CDI spec (Podman). |
-| `signoz did not start` ... `refused the password in .env` | A data volume made with an older `.env` (a regenerated password) | Restore the old value in `.env`, or delete the named volume (its data goes) and `make up` again. |
+| `signoz did not start` ... `refused the password from your secrets` | A data volume made with other secrets (a regenerated password) | Put the old value back in the store, or delete the named volume (its data goes) and `make up` again. |
 | `FAIL memory` | Models plus containers need more than 85% of this machine's memory | A smaller profile, fewer add-ons, or `FORCE=1`. |
 | `FAIL podman vm` | The enabled containers need more than 90% of the Podman VM | `podman machine set --memory 10240`, turn off an add-on, or `FORCE=1`. |
 | `unreachable ... Connection refused` on 11434 | Ollama is not running | `make up` (or `make models`), or start the service. |
@@ -203,3 +219,4 @@ authentication, SSH provides it.
 [^compose]: Generated compose file (mac-single preset)
 [^models]: Model resolution and server check (nexo models)
 [^adr-0016]: "ADR-0016: A declarative setup file"
+[^adr-0017]: "ADR-0017: Secrets from a provider, not a file"

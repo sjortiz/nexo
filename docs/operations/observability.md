@@ -96,8 +96,8 @@ The application exports OTLP to the collector; the collector chooses the backend
 
 | Backend | How | Where |
 |---|---|---|
-| SigNoz (default) | `make up`; the collector exports traces, metrics and logs over OTLP gRPC to `signoz-ingester`[^collector] | http://localhost:8080; log in with `SIGNOZ_USER_EMAIL` / `SIGNOZ_USER_PASSWORD` from `.env`[^signoz] |
-| Langfuse (add-on) | `make up LANGFUSE=1`; pipeline from `deploy/otel-addons/langfuse.yaml`: OTLP/HTTP to `/api/public/otel`, Basic auth with the `nexo` project keys, `x-langfuse-ingestion-version: 4`[^collector] | http://localhost:3000; log in with `LANGFUSE_USER_EMAIL` / `LANGFUSE_USER_PASSWORD` from `.env` |
+| SigNoz (default) | `make up`; the collector exports traces, metrics and logs over OTLP gRPC to `signoz-ingester`[^collector] | http://localhost:8080; log in with `SIGNOZ_USER_EMAIL` / `SIGNOZ_USER_PASSWORD` from the keychain[^signoz] |
+| Langfuse (add-on) | `make up LANGFUSE=1`; pipeline from `deploy/otel-addons/langfuse.yaml`: OTLP/HTTP to `/api/public/otel`, Basic auth with the `nexo` project keys, `x-langfuse-ingestion-version: 4`[^collector] | http://localhost:3000; log in with `LANGFUSE_USER_EMAIL` / `LANGFUSE_USER_PASSWORD` from the keychain |
 | Jaeger (add-on) | `make up JAEGER=1`; pipeline `traces/jaeger`[^addons] | http://localhost:16686 |
 | LangSmith (add-on) | `make up LANGSMITH=1` (or `addons.langsmith` in `nexo.yaml`, with its `project`) and `LANGSMITH_API_KEY` in `.env`; pipeline `traces/langsmith` | LangSmith project |
 | Prometheus metrics | always | http://127.0.0.1:8889/metrics |

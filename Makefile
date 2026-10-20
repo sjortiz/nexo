@@ -46,7 +46,7 @@ install: ## Install Python, Nexo and the dev tools into .venv with uv (from uv.l
 install-notebook: ## Also install Jupyter, for the walkthrough notebook
 	uv sync --extra notebook
 
-env: ## Write nexo.yaml from a preset (PRESET=mac-single) and fill missing secrets in .env
+env: ## Write nexo.yaml from a preset (PRESET=mac-single) and create missing secrets in the keychain
 	$(NEXO_SETUP) init $(if $(PRESET),--preset $(PRESET))
 	$(NEXO_SETUP) secrets
 

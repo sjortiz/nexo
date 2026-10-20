@@ -278,8 +278,8 @@ uv sync && source .venv/bin/activate     # Python 3.12 and the locked dependenci
             preset (<code>mac-single</code>, <code>mac-two-machines</code>, <code>linux-cpu</code>,
             <code>linux-gpu</code>, <code>linux-vllm</code>) and set your profile: the chip and memory on a Mac
             (<code>m1-max-64</code>, <code>m5-pro-24</code>), or <code>gpu-&lt;VRAM GB&gt;</code> /
-            <code>cpu-&lt;RAM GB&gt;</code> on Linux. <code>make env</code> also creates <code>.env</code> with
-            generated passwords.</p>
+            <code>cpu-&lt;RAM GB&gt;</code> on Linux. <code>make env</code> also generates the passwords into your
+            OS keychain (<code>~/.config/nexo/config</code> where there is none), never into a file you copy.</p>
 <pre><code>make env PRESET=mac-single
 python3 src/nexo/local_profiles.py plan m5-pro-24   # the models a profile picks
 # in nexo.yaml: models.local.profile: m5-pro-24</code></pre>
@@ -288,7 +288,7 @@ python3 src/nexo/local_profiles.py plan m5-pro-24   # the models a profile picks
           <h3>Start everything</h3>
           <p>Pulls and starts the profile's models in Ollama, then Neo4j, the collector and SigNoz, which shows
             traces, metrics and logs at <code>http://localhost:8080</code> (log in with
-            <code>SIGNOZ_USER_EMAIL</code> and <code>SIGNOZ_USER_PASSWORD</code> from <code>.env</code>). Langfuse,
+            <code>SIGNOZ_USER_EMAIL</code> and <code>uv run keyring get nexo/nexo SIGNOZ_USER_PASSWORD</code>). Langfuse,
             Jaeger and LangSmith are add-ons: turn one on in <code>nexo.yaml</code>, or for one run with
             <code>make up LANGFUSE=1</code>.</p>
 <pre><code>make up</code></pre>

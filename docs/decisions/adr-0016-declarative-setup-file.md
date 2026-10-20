@@ -34,7 +34,8 @@ CPU, Linux GPU, vLLM) were spread across Make, Compose and `.env`.
 - **`nexo setup` in the Nexo package** checks the machine, resolves the file into `nexo.lock` (images
   per service, models per role; pins move only with `--upgrade`) and renders `.nexo/render/`:
   compose with only the enabled services, one collector config, and `nexo.env`, which Nexo reads
-  after `.env`.[^setup-cli] Secrets stay in `.env`, generated only for enabled components.
+  after `.env`.[^setup-cli] Secrets are generated only for enabled components; where they live is
+  [ADR-0017](adr-0017-secrets-from-a-provider.md) (a provider, the keychain by default).
 - **Make stays the front door.** `make env`, `up`, `down`, `check` and `app` call `nexo setup`;
   `LANGFUSE=1`, `JAEGER=1` and `LANGSMITH=1` enable an add-on for one run. `make up` also runs
   `ollama-setup.sh` for this machine's roles.

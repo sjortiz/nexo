@@ -64,7 +64,7 @@ def stale_volume_hint(
     ]
     where = " ".join(volumes) or "<its data volume>"
     return (
-        f"{service} refused the password in .env: its data volume was created with an older"
-        f" .env. Restore the old value in .env, or delete the volume (its data goes):"
-        f" {engine} volume rm {where}"
+        f"{service} refused the password from your secrets (the keychain by default): its"
+        " data volume was created with other secrets. Put the old value back, or delete the"
+        f" volume (its data goes): {engine} volume rm {where}"
     )
