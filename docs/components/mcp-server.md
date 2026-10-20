@@ -1,7 +1,7 @@
 ---
 type: Component
 title: MCP server
-description: "`nexo mcp`: the knowledge graph and chunk store as six read-only Model Context Protocol tools, plus tools to review paused investigations, with the investigator's safeguards and one clearance per server."
+description: "`nexo mcp`: the knowledge graph and chunk store as seven read-only Model Context Protocol tools, plus tools to review paused investigations, with the investigator's safeguards and one clearance per server."
 resource: ../../src/nexo/mcp_server.py
 tags: [mcp, tools, retrieval, security]
 status: draft
@@ -23,7 +23,7 @@ sources:
 
 # Tools
 
-The six retrieval tools are annotated read-only, idempotent and closed-world.[^server]
+The seven retrieval tools are annotated read-only, idempotent and closed-world.[^server]
 
 | Tool | Returns | Use |
 |---|---|---|
@@ -32,11 +32,12 @@ The six retrieval tools are annotated read-only, idempotent and closed-world.[^s
 | `nexo_get_chunks(chunk_ids)` | Exact chunk text (detected PII masked above clearance); `masked`, `withheld`, `not_found`, `invalid_or_over_limit` | The evidence to cite |
 | `nexo_find_entities(name, entity_type, limit)` | Entities matching a name or alias, with keys and chunk ids | Starting points in the graph |
 | `nexo_neighbors(entity_key, limit)` | Edges in both directions with certainty, date and chunk ids; `withheld` count | Direct relationships |
-| `nexo_graph_query(cypher)` | Rows, `truncated`, `chunk_ids_found` | Multi-hop questions |
+| `nexo_find_paths(from_key, to_key, max_hops, max_paths)` | Shortest paths (1 to 4 hops, up to 10) through entities only, each hop with its direction and chunk ids; `withheld` count, `chunk_ids_found` | How two entities connect |
+| `nexo_graph_query(cypher)` | Rows, `truncated`, `chunk_ids_found` | Multi-hop questions the others do not cover |
 
 # Review tools
 
-On by default (`MCP_REVIEW_TOOLS=true`); `false` leaves only the six tools above.[^review]
+On by default (`MCP_REVIEW_TOOLS=true`); `false` leaves only the seven tools above.[^review]
 
 | Tool | Returns | Annotations |
 |---|---|---|
@@ -74,6 +75,11 @@ forms automatically, without a person, defeats the check: use a client that asks
   guard rejects reading them by name. Scalar projections (`RETURN e.name`, `RETURN m.surface`) and computed
   keys are not caught: on Community they can still return a value above the clearance; on Enterprise, deny
   them with database roles ([read-only enforcement](graph-store.md#read-only-enforcement)).
+- **Paths.** `nexo_find_paths` uses the investigator's path query and filter
+  ([graph lookup tools](graph-lookup-tools.md)). Both keys are checked through the same redaction first, so
+  an unknown key and a key above clearance get the same "unknown entity key" error and the entity's
+  existence stays hidden. A path through any node or edge above clearance is withheld and counted, an edge
+  with no rank counts as PHI, and paths traverse entities only and carry chunk ids, never chunk text.
 - **Identity.** MCP over stdio has no per-user identity, so run one server per clearance.
 - **Errors.** Anticipated failures (unsafe Cypher, unknown entity type, graph unavailable) come back as
   tool errors with a message; unexpected exceptions are masked and logged on the server.

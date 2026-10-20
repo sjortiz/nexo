@@ -40,5 +40,9 @@ returns `unknown entity key`; an empty result hints at
 [search_chunks](search-chunks.md). Budget, Neo4j errors and `chunk_ids_found` work as in
 query_knowledge_graph.[^test-agent]
 
+The system prompt sends questions about one entity's roles, owners, suppliers and the like to
+`entity_neighbours`, so the model does not guess relationship types in Cypher. `nexo mcp` serves the
+same path query and filter as `nexo_find_paths` ([MCP server](mcp-server.md)).
+
 [^tools]: Investigation tools
 [^test-agent]: Tool tests
