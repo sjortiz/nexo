@@ -5,8 +5,8 @@ description: Bring up Neo4j, vLLM on GPUs, observability with SigNoz and the CLI
 resource: ../../examples/setups/linux-vllm/nexo.yaml
 tags: [operations, deployment, docker, vllm]
 status: draft
-generated: { by: claude-code/claude-opus-5-5, at: 2026-10-20T16:00:00Z }
-stale_after: 2027-04-19T00:00:00Z
+generated: { by: claude-code/claude-sonnet-5-5, at: 2026-10-20T22:00:00Z }
+stale_after: 2027-04-20T00:00:00Z
 sources:
   - id: preset
     resource: ../../examples/setups/linux-vllm/nexo.yaml
@@ -59,7 +59,7 @@ and GPU count.[^vllm] Compose refuses to start without `NEO4J_PASSWORD`, the Sig
    `secrets.provider: file` with a `path`, or `sops` / `vault` ([Choosing a setup](decision-guide.md#9-where-secrets-live)).
 2. `make check`, then `make up`: Neo4j, the collector, SigNoz and both vLLM services (the first start
    downloads ~140 GB of weights; the health check allows 15 minutes). Log in to
-   http://localhost:8080 with `SIGNOZ_USER_EMAIL` (default `admin@nexo.local`) and `SIGNOZ_USER_PASSWORD`.
+   http://localhost:8080 with `SIGNOZ_USER_EMAIL` (default `admin@nexo.local`) and `SIGNOZ_USER_PASSWORD` from the secrets provider.
 3. `uv sync` and run the CLI locally (`nexo.env` points it at `localhost:8000` and `:8001`), or use
    the container: `make app ARGS="ingest /corpus/memo.md --doc-type memo"` (`./corpus` is mounted
    read-only at `/corpus`).
@@ -75,7 +75,7 @@ The collector deletes GenAI content attributes (`gen_ai.input.messages`, `gen_ai
 `gen_ai.system_instructions`, tool arguments and results, `db.query.text`) and GenAI message events
 before export, as a second line behind `OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT=no_content`,
 then sends traces, metrics and logs to SigNoz.[^otel] SigNoz publishes only its UI, on `127.0.0.1`, with
-stats reporting off; the root user is provisioned from `.env`.[^signoz]
+stats reporting off; the root user comes from the secrets provider.[^signoz]
 
 Add-ons, opt-in and combinable, each a pipeline in `deploy/otel-addons/` with the same processors,
 merged into the rendered collector config ([ADR-0015](../decisions/adr-0015-signoz-default-observability.md)):

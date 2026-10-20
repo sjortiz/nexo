@@ -64,7 +64,7 @@ nexo review <thread_id> --approve --reviewer you@corp
 ```
 
 Traces, metrics and logs: http://localhost:8080 (SigNoz; log in with `SIGNOZ_USER_EMAIL` / `SIGNOZ_USER_PASSWORD` from
-`.env`); raw metrics: http://localhost:8889/metrics. Telemetry follows the
+`~/.config/nexo/config`); raw metrics: http://localhost:8889/metrics. Telemetry follows the
 [OpenTelemetry GenAI conventions](docs/references/opentelemetry-genai-conventions.md) with message content off by default
 ([Observability](docs/operations/observability.md)). Logs go to stdout with trace ids (`LOG_FORMAT=json` for log
 pipelines). Relation ontology example: `deploy/ontology.example.json`. Neo4j Enterprise least-privilege reader:
