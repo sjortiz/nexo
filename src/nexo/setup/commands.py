@@ -13,6 +13,7 @@ nexo setup compose ARGS...              the container engine's compose on the re
 from __future__ import annotations
 
 import argparse
+import contextlib
 import logging
 import os
 import platform
@@ -319,12 +320,25 @@ def carry_checkpoints(root: Path) -> None:
     """Copy a checkout's old .data/checkpoints.sqlite to the stack's, if it has none (ADR-0018)."""
     settings = Settings()  # fresh: render just rewrote nexo.env
     old, new = root / ".data/checkpoints.sqlite", settings.checkpoint_sqlite_path
-    if settings.checkpoint_backend != "sqlite" or not old.is_file() or new.exists():
-        return  # never overwrite: the stack's file may hold other checkouts' reviews
-    new.parent.mkdir(parents=True, exist_ok=True)
-    for suffix in ("", "-wal"):  # a WAL left by an unclean exit holds recent writes
-        if (source := Path(f"{old}{suffix}")).is_file():
-            shutil.copy2(source, f"{new}{suffix}")
+    if settings.checkpoint_backend != "sqlite" or not old.is_file():
+        return
+    if new.exists():  # never overwrite: it may hold other checkouts' reviews
+        log.info("checkpoints: left %s in place, %s already exists", old, new)
+        return
+    tmp = Path(f"{new}.tmp")
+    try:
+        new.parent.mkdir(parents=True, exist_ok=True)
+        # a WAL left by an unclean exit holds recent writes; it goes first so the
+        # main file never appears without it
+        if (wal := Path(f"{old}-wal")).is_file():
+            shutil.copy2(wal, f"{new}-wal")
+        shutil.copy2(old, tmp)  # then a rename: a cut-short copy never looks finished
+        os.replace(tmp, new)
+    except OSError as exc:  # a stack that can't take the copy still starts
+        with contextlib.suppress(OSError):
+            tmp.unlink(missing_ok=True)
+        log.warning("checkpoints: could not copy %s to %s: %s", old, new, exc)
+        return
     log.info("checkpoints: copied %s to %s (the old file is kept)", old, new)
 
 

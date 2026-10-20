@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import shutil
 import stat
@@ -743,27 +744,66 @@ def test_parse_ps_skips_podman_compose_banners():
     assert parse_ps(banner + "\n" + indented) == [json.loads(line) for line in lines]
 
 
-@pytest.mark.parametrize("stack_has_file", [False, True])
-def test_up_carries_old_checkpoints_to_the_stack_without_overwriting(
-    fake_up, workdir, capfd, stack_has_file
-):
-    """Reviews in a checkout's .data/ move to the stack's data dir once (ADR-0018)."""
-    up, _, _ = fake_up
+def _old_checkpoints(workdir: Path) -> Path:
+    """A checkout's pre-ADR-0018 .data/checkpoints.sqlite with a leftover WAL."""
     old = workdir / ".data/checkpoints.sqlite"
     old.parent.mkdir()
     old.write_bytes(b"old reviews")
     (old.parent / "checkpoints.sqlite-wal").write_bytes(b"recent writes")
+    return old
+
+
+# b"" stands for a copy cut short before the copy became atomic.
+@pytest.mark.parametrize("stack_file", [None, b"stack reviews", b""])
+def test_up_carries_old_checkpoints_to_the_stack_without_overwriting(
+    fake_up, workdir, capfd, stack_file
+):
+    """Reviews in a checkout's .data/ move to the stack's data dir once (ADR-0018)."""
+    up, _, _ = fake_up
+    old = _old_checkpoints(workdir)
     new = data_dir() / "nexo" / "checkpoints.sqlite"
-    if stack_has_file:
+    if stack_file is not None:
         new.parent.mkdir(parents=True)
-        new.write_bytes(b"stack reviews")
+        new.write_bytes(stack_file)
     assert up() == 0
     captured = capfd.readouterr()
-    copied = "checkpoints: copied" in captured.err + captured.out
-    assert copied is not stack_has_file
-    assert new.read_bytes() == (b"stack reviews" if stack_has_file else b"old reviews")
-    assert Path(f"{new}-wal").exists() is not stack_has_file
+    output = captured.err + captured.out
+    assert ("checkpoints: copied" in output) is (stack_file is None)
+    assert ("already exists" in output) is (stack_file is not None)
+    assert new.read_bytes() == (b"old reviews" if stack_file is None else stack_file)
+    assert Path(f"{new}-wal").exists() is (stack_file is None)
+    assert not Path(f"{new}.tmp").exists()  # the copy lands by rename
     assert old.read_bytes() == b"old reviews"  # the checkout keeps its copy
+
+
+def test_up_leaves_checkpoints_alone_without_the_sqlite_backend(
+    fake_up, workdir, capfd
+):
+    """CHECKPOINT_BACKEND=memory: nothing reads a stack file, so none is made."""
+    up, _, _ = fake_up
+    _old_checkpoints(workdir)
+    (workdir / ".env").write_text("CHECKPOINT_BACKEND=memory\n")
+    assert up() == 0
+    captured = capfd.readouterr()
+    assert "checkpoints:" not in captured.err + captured.out
+    assert not (data_dir() / "nexo").exists()
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason="root ignores directory permissions")
+def test_up_starts_when_the_checkpoints_cannot_be_copied(fake_up, workdir, capfd):
+    """An unwritable data dir costs the copy and a warning, not the stack."""
+    up, _, _ = fake_up
+    old = _old_checkpoints(workdir)
+    data_dir().mkdir(parents=True, exist_ok=True)
+    data_dir().chmod(0o500)
+    try:
+        assert up() == 0
+    finally:
+        data_dir().chmod(0o700)
+    captured = capfd.readouterr()
+    assert "checkpoints: could not copy" in captured.err + captured.out
+    assert not (data_dir() / "nexo").exists()
+    assert old.read_bytes() == b"old reviews"
 
 
 def test_up_fails_when_neo4j_refuses_the_providers_password(fake_up, capfd):
