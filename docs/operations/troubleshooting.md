@@ -69,13 +69,13 @@ Local models (Ollama, profiles, SSH tunnel): run `nexo models --check` and see
 |---|---|---|
 | `signoz did not start` ... `refused the password`, or `FAIL neo4j: Neo4j refused the password` | A data volume made with other secrets (the store was regenerated) | Put the old value back in the store, or delete the named volume (its data goes) and `make up`. See [When it does not work](local-setup.md#when-it-does-not-work). |
 | `signoz-clickhouse-scripts` fails with `mv: ... Permission denied`, or ClickHouse says `histogramQuantile` is not executable (rootless Podman, SELinux) | The scripts volume was labelled for one container, so the next could not use it | Update: the volume is mounted with `:z`, which Podman relabels at each start.[^signoz] |
-| Models answer very slowly or time out after `FORCE=1` | The Mac is swapping: models and containers need more than the memory check allows (85% of RAM, 90% of the Podman VM) | Drop `FORCE=1`; use a smaller profile or fewer add-ons ([Choosing a setup](decision-guide.md#5-memory-for-each-combination)). |
+| Questions take minutes per model call although `make check` passed | The Mac is swapping: the memory check counts only Nexo's models and containers, not other apps (or `FORCE=1` skipped it) | Check `sysctl vm.swapusage` and the question's trace in SigNoz; close heavy apps, lower the Podman VM's memory, or use a smaller profile or fewer add-ons ([Choosing a setup](decision-guide.md#5-memory-for-each-combination)). |
 
 # CI
 
 | Symptom | Cause | Fix |
 |---|---|---|
-| The macOS check stays queued long after Linux finished | The hosted macOS queue, not your change | Wait; act only when a job fails.[^ci] |
+| The macOS check stays queued long after Linux finished | The hosted macOS queue, not your change | Wait; if it is still queued after about 15 minutes, cancel and re-run it.[^ci] |
 
 [^compose]: vLLM compose file
 [^llm]: Model clients
