@@ -57,6 +57,7 @@ def isolated_config(tmp_path_factory, monkeypatch):
         monkeypatch.delenv(key)
     # After the cleanup above: every test gets its own ~/.config/nexo.
     monkeypatch.setenv("NEXO_CONFIG_DIR", str(tmp_path_factory.mktemp("nexo-config")))
+    monkeypatch.setenv("NEXO_DATA_DIR", str(tmp_path_factory.mktemp("nexo-data")))
 
 
 @pytest.fixture
@@ -79,6 +80,7 @@ def fixture_settings(tmp_path) -> Settings:
         _env_file=None,
         embedding_provider="fake",
         embedding_dimensions=16,
+        chunk_store="local",
         vector_store_path=tmp_path / "vectors.json",
         checkpoint_backend="memory",
         checkpoint_sqlite_path=tmp_path / "checkpoints.sqlite",

@@ -38,6 +38,7 @@ def fixture_role_settings(tmp_path, monkeypatch):
     )
     return Settings(
         _env_file=None,
+        chunk_store="local",  # Neo4j is stubbed: keep chunks in-process
         embedding_provider="fake",
         checkpoint_backend="memory",
         vector_store_path=tmp_path / "v.json",

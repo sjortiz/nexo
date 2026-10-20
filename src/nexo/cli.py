@@ -38,6 +38,7 @@ from nexo.service import (
     open_runtime,
 )
 from nexo.storage.graph_store import GraphStore
+from nexo.storage.neo4j_chunk_store import Neo4jChunkStore, import_local_store
 from nexo.storage.ingest import ExtractionAids, IngestionTargets, KnowledgeGraphIngestor
 from nexo.storage.ontology import Ontology
 from nexo.storage.schemas import DocumentMetadata, Sensitivity, Triple
@@ -133,7 +134,7 @@ def _eval(args: argparse.Namespace) -> int:
     if settings.judge_model:
         judge = build_chat_model(settings, role="judge")
     graph = GraphStore.from_settings(settings, read_only=True)
-    chunks = chunk_store_from_settings(settings)
+    chunks = chunk_store_from_settings(settings, graph)
     investigator = build_investigator(settings, graph, chunks)
     try:
         for line in Path(args.dataset).read_text(encoding="utf-8").splitlines():
@@ -238,6 +239,75 @@ def _graph(args: argparse.Namespace) -> int:
     return 0
 
 
+def _chunk_store(settings) -> tuple[GraphStore, Neo4jChunkStore]:
+    if settings.chunk_store != "neo4j":
+        raise SystemExit(
+            "nexo chunks works on the neo4j chunk store (CHUNK_STORE=neo4j)"
+        )
+    graph = GraphStore.from_settings(settings, read_only=False)
+    store = chunk_store_from_settings(settings, graph)
+    assert isinstance(store, Neo4jChunkStore)
+    return graph, store
+
+
+def _chunks_status(_args: argparse.Namespace) -> int:
+    """How many of the graph's chunks have no text (ingested before ADR-0018)."""
+    settings = get_settings()
+    graph, store = _chunk_store(settings)
+    try:
+        missing = store.missing_text()
+    finally:
+        graph.close()
+    result = {"chunk_store": settings.chunk_store, "chunks_without_text": missing}
+    if missing:
+        log.warning(
+            "%d chunks in the graph have no text: nexo chunks import (from %s) or re-ingest",
+            missing,
+            settings.vector_store_path,
+            extra={"result": result},
+        )
+        return 1
+    log.info("every chunk in the graph has its text", extra={"result": result})
+    return 0
+
+
+def _chunks_import(args: argparse.Namespace) -> int:
+    """Copy a local JSON chunk store into Neo4j, with its stored embeddings."""
+    settings = get_settings()
+    graph, store = _chunk_store(settings)
+    try:
+        store.ensure_schema()
+        result = import_local_store(
+            store, Path(args.path or settings.vector_store_path)
+        )
+        result["chunks_without_text"] = store.missing_text()
+    finally:
+        graph.close()
+    log.info(
+        "imported %d chunks (%d referenced by the graph); %d graph chunks still lack text",
+        result["imported"],
+        result["referenced_by_graph"],
+        result["chunks_without_text"],
+        extra={"result": result},
+    )
+    return 0
+
+
+def _add_chunk_commands(sub: argparse._SubParsersAction) -> None:
+    """`nexo chunks status|import`: the chunk store in Neo4j (ADR-0018)."""
+    chunks = sub.add_parser("chunks", help="the chunk store in Neo4j: status, import")
+    verbs = chunks.add_subparsers(dest="chunks_command", required=True)
+    verbs.add_parser(
+        "status", help="count graph chunks that have no text"
+    ).set_defaults(handler=_chunks_status)
+    importer = verbs.add_parser(
+        "import",
+        help="copy a local JSON chunk store (.data/vector_store.json) into Neo4j",
+    )
+    importer.add_argument("path", nargs="?", help="default: VECTOR_STORE_PATH")
+    importer.set_defaults(handler=_chunks_import)
+
+
 def _models(args: argparse.Namespace) -> int:
     """Which model and server each role uses, after profiles and explicit settings."""
 
@@ -278,11 +348,7 @@ def _mcp(args: argparse.Namespace) -> int:
     settings = get_settings()
     setup_telemetry(settings)
     graph = GraphStore.from_settings(settings, read_only=True)
-    chunks = LocalChunkStore(
-        build_embeddings(settings),
-        settings.vector_store_path,
-        mode=settings.retrieval_mode,
-    )
+    chunks = chunk_store_from_settings(settings, graph)
     server = build_mcp_server(graph=graph, chunks=chunks, settings=settings)
     log.info("serving MCP over %s", args.transport)
     try:
@@ -381,6 +447,7 @@ def main(argv: list[str] | None = None) -> int:
     serve.set_defaults(handler=_mcp)
 
     add_setup_parser(sub)
+    _add_chunk_commands(sub)
 
     args = parser.parse_args(argv)
     # MCP over stdio uses stdout for the protocol: logs go to stderr there.

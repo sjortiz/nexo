@@ -12,7 +12,7 @@ from langchain_core.messages import AIMessage
 from nexo.storage.ingest import ExtractionAids, IngestionTargets, KnowledgeGraphIngestor
 from nexo.storage.ontology import Ontology
 from nexo.storage.resolution import EntityResolver
-from nexo.storage.schemas import DocumentMetadata, Resolution, Sensitivity
+from nexo.storage.schemas import DocumentMetadata, Resolution, Sensitivity, SourceSwap
 from nexo.storage.sensitive_data import RegexDetector
 from nexo.storage.vector_store import ChunkFilter
 from tests.conftest import RecordingChatModel
@@ -32,7 +32,7 @@ class RecordingGraphWriter:
     def replace_source(self, document, chunks, triples):
         """Record the document, chunks and triples; report every triple as written."""
         self.calls.append((document, list(chunks), list(triples)))
-        return len(triples)
+        return SourceSwap(triples_written=len(triples), chunks_removed=0)
 
 
 def _entity(name, type_="Organization", aliases=()):

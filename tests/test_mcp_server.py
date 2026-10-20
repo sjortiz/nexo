@@ -395,6 +395,7 @@ def test_nexo_mcp_speaks_clean_stdio(settings, tmp_path, stored):
     env = {
         "EMBEDDING_PROVIDER": "fake",
         "EMBEDDING_DIMENSIONS": str(settings.embedding_dimensions),
+        "CHUNK_STORE": "local",
         "VECTOR_STORE_PATH": str(settings.vector_store_path),
         "NEO4J_URI": "bolt://127.0.0.1:1",
         "LOG_LEVEL": "DEBUG",

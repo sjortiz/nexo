@@ -14,6 +14,7 @@ from datetime import UTC, datetime
 from urllib.parse import urlparse
 
 import pytest
+from langchain_core.embeddings import DeterministicFakeEmbedding
 from langchain_core.language_models.fake_chat_models import GenericFakeChatModel
 from langchain_core.messages import AIMessage
 from langgraph.checkpoint.memory import InMemorySaver
@@ -47,8 +48,9 @@ from nexo.storage.schemas import (
     Triple,
 )
 from nexo.storage.sensitive_data import NoopDetector, RegexDetector
-from nexo.storage.vector_store import ChunkFilter
-from tests.conftest import RecordingChatModel
+from nexo.storage.neo4j_chunk_store import Neo4jChunkStore, import_local_store
+from nexo.storage.vector_store import ChunkFilter, LocalChunkStore
+from tests.conftest import RecordingChatModel, make_chunk
 from tests.test_agent import ScriptedClient, _completion, _tool_call
 from tests.test_mcp_server import call, data
 
@@ -129,7 +131,8 @@ def test_replace_source_merges_provenance_and_cleans_up(store):
     chunks_a[1] = chunks_a[1].model_copy(
         update={"sensitivity": Sensitivity.PHI}
     )  # the chunk about Jane Roe
-    assert store.replace_source(DocumentMetadata(source_id="a"), chunks_a, doc_a) == 2
+    swap = store.replace_source(DocumentMetadata(source_id="a"), chunks_a, doc_a)
+    assert swap.triples_written == 2
     store.replace_source(DocumentMetadata(source_id="b"), _chunks("b", C3), doc_b)
 
     acme_row = store.run_read_query(
@@ -573,3 +576,103 @@ def test_end_to_end_ingest_investigate_approve(store, settings, chunk_store):
 
     done = rt.review("e2e", {"approval_status": "approved", "reviewer": "analyst"})
     assert done.final_response.startswith("Acme owns Beta Labs")
+
+
+DIMS = 16
+
+
+@pytest.fixture(name="chunks_in_neo4j")
+def fixture_chunks_in_neo4j(store):
+    """The Neo4j chunk store on the test database, with fake 16-dimension embeddings."""
+    chunk_store = Neo4jChunkStore(
+        store, DeterministicFakeEmbedding(size=DIMS), dimensions=DIMS
+    )
+    chunk_store.ensure_schema()
+    return chunk_store
+
+
+def test_neo4j_chunk_store_round_trip_and_filters(store, chunks_in_neo4j):
+    """Text survives a round trip; search honours clearance, document and keyword hits."""
+    memo = make_chunk(
+        "memo", 0, "Acme Holdings acquired Beta Labs in 2023.", doc_type="memo"
+    )
+    order = make_chunk(
+        "orders", 0, "Order XR-7731 shipped to Gamma Clinics.", doc_type="order"
+    )
+    phi = make_chunk(
+        "clinic",
+        0,
+        "Patient Jane Roe was treated by Beta Labs.",
+        sensitivity=Sensitivity.PHI,
+    )
+    chunks_in_neo4j.upsert([memo, order, phi], [memo.text, order.text, phi.text])
+
+    got = chunks_in_neo4j.get_by_ids([phi.chunk_id, memo.chunk_id, "chk_" + "f" * 16])
+    assert [c.chunk_id for c in got] == [phi.chunk_id, memo.chunk_id]
+    assert got[1].text == memo.text and got[1].doc_type == "memo"
+
+    internal = ChunkFilter(max_sensitivity=Sensitivity.INTERNAL)
+    hits = chunks_in_neo4j.search("Beta Labs", 5, internal)
+    assert phi.chunk_id not in [
+        c.chunk_id for c in hits
+    ]  # above the caller's clearance
+    assert memo.chunk_id in [c.chunk_id for c in hits]
+    keyword = Neo4jChunkStore(
+        store, DeterministicFakeEmbedding(size=DIMS), dimensions=DIMS, mode="keyword"
+    )
+    assert [c.chunk_id for c in keyword.search("XR-7731", 3, internal)] == [
+        order.chunk_id
+    ]
+    only_memos = ChunkFilter(doc_types=["memo"], max_sensitivity=Sensitivity.PHI)
+    assert {c.source_id for c in chunks_in_neo4j.search("Beta", 5, only_memos)} == {
+        "memo"
+    }
+
+    assert chunks_in_neo4j.delete_source("memo", keep={memo.chunk_id}) == 0
+    assert chunks_in_neo4j.delete_source("memo") == 1
+    assert not chunks_in_neo4j.get_by_ids([memo.chunk_id])
+
+
+def test_chunk_text_survives_the_graph_swap(store, chunks_in_neo4j):
+    """Re-ingesting a document keeps its unchanged chunks' text; stale chunks go."""
+    first = [
+        make_chunk("memo", 0, "Acme acquired Beta."),
+        make_chunk("memo", 1, "Beta treats patients."),
+    ]
+    chunks_in_neo4j.upsert(first, [c.text for c in first])
+    store.replace_source(DocumentMetadata(source_id="memo"), first, [])
+    second = [first[0], make_chunk("memo", 1, "Beta now runs clinics.")]
+    chunks_in_neo4j.upsert(second, [c.text for c in second])
+    swap = store.replace_source(DocumentMetadata(source_id="memo"), second, [])
+
+    assert swap.chunks_removed == 1
+    kept = chunks_in_neo4j.get_by_ids([c.chunk_id for c in second])
+    assert [c.text for c in kept] == [c.text for c in second]
+    assert not chunks_in_neo4j.get_by_ids([first[1].chunk_id])
+    order = store.run_read_query(
+        "MATCH (a:Chunk)-[:NEXT_CHUNK]->(b:Chunk) RETURN a.chunk_id AS a, b.chunk_id AS b"
+    ).rows
+    assert order == [{"a": second[0].chunk_id, "b": second[1].chunk_id}]
+    assert chunks_in_neo4j.missing_text() == 0
+
+
+def test_import_moves_a_local_store_into_neo4j(tmp_path, store, chunks_in_neo4j):
+    """`nexo chunks import`: the local JSON file's chunks and vectors, no re-embedding."""
+    path = tmp_path / "vector_store.json"
+    local = LocalChunkStore(DeterministicFakeEmbedding(size=DIMS), path)
+    chunks = [
+        make_chunk("memo", 0, "Acme acquired Beta."),
+        make_chunk("memo", 1, "Beta runs clinics."),
+    ]
+    local.upsert(chunks, [c.text for c in chunks])
+    store.replace_source(
+        DocumentMetadata(source_id="memo"), chunks, []
+    )  # graph, no text yet
+    assert chunks_in_neo4j.missing_text() == 2
+
+    result = import_local_store(chunks_in_neo4j, path)
+    assert result == {"imported": 2, "referenced_by_graph": 2}
+    assert chunks_in_neo4j.missing_text() == 0
+    assert [
+        c.text for c in chunks_in_neo4j.get_by_ids([c.chunk_id for c in chunks])
+    ] == [c.text for c in chunks]

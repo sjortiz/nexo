@@ -47,6 +47,7 @@ from nexo.storage.chunking import (
 from nexo.storage.ontology import FALLBACK_RELATION, Ontology
 from nexo.storage.resolution import EntityResolver
 from nexo.storage.schemas import (
+    SourceSwap,
     ChunkRecord,
     DocumentMetadata,
     EntityRef,
@@ -89,8 +90,8 @@ class GraphWriter(Protocol):  # pylint: disable=too-few-public-methods  # protoc
         document: DocumentMetadata,
         chunks: Sequence[ChunkRecord],
         triples: Sequence[GroundedTriple],
-    ) -> int:
-        """Replace everything the document contributed; return the triples written."""
+    ) -> SourceSwap:
+        """Replace everything the document contributed; say what changed."""
 
 
 class IngestionReport(BaseModel):
@@ -211,11 +212,14 @@ class KnowledgeGraphIngestor:
                 sensitivity=dict(Counter(c.sensitivity.value for c in chunks)),
             )
             grounded = self._triples(chunks, report, resolve=True)
-            report.triples_written = self._targets.graph_writer.replace_source(
-                metadata, chunks, grounded
-            )
-            report.stale_chunks_deleted = self._targets.chunk_store.delete_source(
-                metadata.source_id, keep={c.chunk_id for c in chunks}
+            swap = self._targets.graph_writer.replace_source(metadata, chunks, grounded)
+            report.triples_written = swap.triples_written
+            # The graph swap removes stale chunks itself when they live in Neo4j.
+            report.stale_chunks_deleted = max(
+                swap.chunks_removed,
+                self._targets.chunk_store.delete_source(
+                    metadata.source_id, keep={c.chunk_id for c in chunks}
+                ),
             )
             span.set_attributes(
                 {

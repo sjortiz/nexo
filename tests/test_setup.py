@@ -773,3 +773,35 @@ def test_question_text_reaches_only_self_hosted_backends_when_opted_in(workdir):
     assert collector["processors"]["attributes/strip-query"]["actions"] == [
         {"key": "nexo.query.text", "action": "delete"}
     ]
+
+
+@pytest.mark.parametrize(
+    "login, missing, expected",
+    [(None, 0, True), (None, 3, False), ("unreachable", 3, True)],
+)
+def test_check_flags_graph_chunks_without_text(
+    monkeypatch, capfd, login, missing, expected
+):
+    """A graph from before chunks moved to Neo4j fails check and names the import."""
+    monkeypatch.setenv("CHUNK_STORE", "neo4j")
+    monkeypatch.setattr(commands, "neo4j_login", lambda *_a: login)
+    monkeypatch.setattr(
+        commands.GraphStore, "from_settings", lambda *_a, **_k: _Closable()
+    )
+    monkeypatch.setattr(commands.Neo4jChunkStore, "missing_text", lambda _self: missing)
+    assert (
+        commands.chunks_have_text() is expected
+    )  # pylint: disable=protected-access  # the check under test
+    if not expected:
+        assert "nexo chunks import" in capfd.readouterr().err
+
+
+class _Closable:
+    """A graph store stand-in: check only closes it."""
+
+    def close(self):
+        """Nothing to close."""
+
+    def session(self, *, write):
+        """Not used: missing_text is replaced."""
+        raise AssertionError(write)

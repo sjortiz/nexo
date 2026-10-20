@@ -149,8 +149,14 @@ class Settings(BaseSettings):
     neo4j_query_timeout_s: float = 15.0
     neo4j_max_rows: int = Field(default=50, ge=1, le=1000)
 
-    # --- Vector store (local index, persisted between processes) -------------
+    # --- Chunk store and per-stack data (ADR-0018) ------------------------------
+    # neo4j: chunk text and embeddings on the graph's (:Chunk) nodes, so every checkout of
+    # a stack sees the same chunks; local: an in-process JSON file (offline runs, tests).
+    chunk_store: Literal["neo4j", "local"] = "neo4j"
+    # The local store's file; also what `nexo chunks import` reads by default.
     vector_store_path: Path = Path(".data/vector_store.json")
+    # The stack (nexo.yaml metadata.name, rendered as NEXO_STACK): names its data directory.
+    nexo_stack: str = "nexo"
     # Seed search: BM25 + vector fused with RRF (hybrid), or either alone.
     retrieval_mode: Literal["hybrid", "vector", "keyword"] = "hybrid"
 
@@ -200,7 +206,8 @@ class Settings(BaseSettings):
     # --- Orchestration ---------------------------------------------------------
     max_query_chars: int = 2000
     checkpoint_backend: Literal["sqlite", "postgres", "memory"] = "sqlite"
-    checkpoint_sqlite_path: Path = Path(".data/checkpoints.sqlite")
+    # Default: <data dir>/<stack>/checkpoints.sqlite, shared by every checkout of the stack.
+    checkpoint_sqlite_path: Path | None = None
     checkpoint_postgres_uri: SecretStr | None = None
 
     # --- Evaluation (LLM-as-a-judge) ------------------------------------------
@@ -258,6 +265,14 @@ class Settings(BaseSettings):
     def _blank_is_unset(cls, value: str | None) -> str | None:
         # `nexo setup` writes REMOTE_PROFILE= to override a stale .env; blank means unset.
         return value or None
+
+    @model_validator(mode="after")
+    def _per_stack_paths(self) -> Settings:
+        if self.checkpoint_sqlite_path is None:
+            self.checkpoint_sqlite_path = (
+                data_dir() / self.nexo_stack / "checkpoints.sqlite"
+            )
+        return self
 
     @model_validator(mode="after")
     def _apply_local_profiles(self) -> Settings:
@@ -332,6 +347,14 @@ class Settings(BaseSettings):
             "span_only",
             "span_and_event",
         }
+
+
+def data_dir() -> Path:
+    """Per-user Nexo data: NEXO_DATA_DIR, $XDG_DATA_HOME/nexo or ~/.local/share/nexo."""
+    if explicit := os.environ.get("NEXO_DATA_DIR"):
+        return Path(explicit)
+    base = os.environ.get("XDG_DATA_HOME") or Path.home() / ".local" / "share"
+    return Path(base) / "nexo"
 
 
 @lru_cache(maxsize=1)

@@ -10,7 +10,7 @@ from nexo.storage.vector_store import (
     BM25,
     ChunkFilter,
     LocalChunkStore,
-    _fuse,
+    fuse,
     tokenize,
 )
 from tests.conftest import make_chunk
@@ -146,9 +146,9 @@ def test_keyword_index_follows_writes_and_persistence(
 def test_rrf_rewards_agreement_between_rankings():
     """Reciprocal rank fusion favours items present in several rankings."""
     assert (
-        _fuse([["a", "b", "c"], ["c", "x"]])[0] == "c"
+        fuse([["a", "b", "c"], ["c", "x"]])[0] == "c"
     )  # in both lists beats first in one
-    assert _fuse([["a", "b"]]) == ["a", "b"]
+    assert fuse([["a", "b"]]) == ["a", "b"]
 
 
 def test_unknown_mode_is_rejected(settings):

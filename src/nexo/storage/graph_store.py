@@ -34,6 +34,7 @@ from neo4j import (
     Driver,
     GraphDatabase,
     ManagedTransaction,
+    Session,
     unit_of_work,
 )
 from neo4j.exceptions import DriverError, Neo4jError, ServiceUnavailable, SessionExpired
@@ -49,6 +50,7 @@ from nexo.config import Settings
 from nexo.storage.ontology import FALLBACK_RELATION
 from nexo.storage.resolution import Candidate
 from nexo.storage.schemas import (
+    SourceSwap,
     RELATION_RE,
     ChunkRecord,
     DocumentMetadata,
@@ -158,6 +160,13 @@ class GraphStore:
         """Close the driver and its connections."""
         self._driver.close()
 
+    def session(self, *, write: bool) -> Session:
+        """A session on this store's database (the chunk store shares the driver)."""
+        return self._driver.session(
+            database=self._database,
+            default_access_mode=WRITE_ACCESS if write else READ_ACCESS,
+        )
+
     def _span(self, query_summary: str, query_text: str | None = None):
         """CLIENT span per the OTEL database conventions (db.system.name=neo4j)."""
         attributes = {
@@ -192,16 +201,21 @@ class GraphStore:
         document: DocumentMetadata,
         chunks: Sequence[ChunkRecord],
         triples: Sequence[GroundedTriple],
-    ) -> int:
+    ) -> SourceSwap:
         """Swap a document's lexical and domain subgraph in one transaction.
 
         Detaches the previous version's provenance (dropping what only it
-        supported), writes Document/Chunk nodes, then upserts the new triples.
+        supported) and its stale chunks, writes Document/Chunk nodes, then upserts
+        the new triples. Current chunks keep their nodes, so text and embeddings
+        stored on them (the Neo4j chunk store) survive the swap.
         """
         plan = _plan_writes(triples)
+        keep = sorted(c.chunk_id for c in chunks)
+        removed: list[int] = []
 
         def work(tx: ManagedTransaction) -> None:
-            affected = _delete_source(tx, document.source_id)
+            affected, stale = _delete_source(tx, document.source_id, keep)
+            removed[:] = [stale]
             if chunks:
                 _write_lexical(tx, document, chunks)
             if triples:
@@ -215,7 +229,7 @@ class GraphStore:
             ) as session,
         ):
             session.execute_write(work)
-        return len(triples)
+        return SourceSwap(triples_written=len(triples), chunks_removed=removed[0])
 
     @_connection_retry
     def find_candidates(
@@ -453,8 +467,13 @@ def _write_domain(tx: ManagedTransaction, entities, mentions, relations) -> None
         ).consume()
 
 
-def _delete_source(tx: ManagedTransaction, source_id: str) -> set[str]:
-    """Remove a document's provenance; returns keys of entities it touched."""
+def _delete_source(
+    tx: ManagedTransaction, source_id: str, keep: Sequence[str] = ()
+) -> tuple[set[str], int]:
+    """Remove a document's provenance and its chunks except `keep`.
+
+    Returns the keys of entities it touched and how many chunks it deleted.
+    """
     record = tx.run(
         """
         OPTIONAL MATCH (c:Chunk {source_id: $source_id})
@@ -473,7 +492,10 @@ def _delete_source(tx: ManagedTransaction, source_id: str) -> set[str]:
                e.source_ids = [s IN e.source_ids WHERE s <> $source_id]""",
         # ... drop whatever only this document supported ...
         "MATCH ()-[r]->() WHERE r.chunk_ids = [] DELETE r",
-        "MATCH (c:Chunk {source_id: $source_id}) DETACH DELETE c",
+        # Kept chunks lose their mentions and order; the new version rewrites both.
+        "MATCH (:Entity)-[m:MENTIONED_IN]->(:Chunk {source_id: $source_id}) DELETE m",
+        "MATCH (:Chunk {source_id: $source_id})-[n:NEXT_CHUNK]->() DELETE n",
+        "MATCH (c:Chunk {source_id: $source_id}) WHERE NOT c.chunk_id IN $keep DETACH DELETE c",
         "MATCH (d:Document {source_id: $source_id}) DETACH DELETE d",
         "MATCH (e:Entity) WHERE e.chunk_ids = [] DETACH DELETE e",
         # ... and re-point first-seen chunk_id where that chunk is gone.
@@ -481,8 +503,8 @@ def _delete_source(tx: ManagedTransaction, source_id: str) -> set[str]:
         "MATCH ()-[r]->() WHERE NOT r.chunk_id IN r.chunk_ids SET r.chunk_id = r.chunk_ids[0]",
     )
     for statement in statements:
-        tx.run(statement, stale=stale, source_id=source_id).consume()
-    return affected
+        tx.run(statement, stale=stale, source_id=source_id, keep=list(keep)).consume()
+    return affected, len(set(stale) - set(keep))
 
 
 _RANK = (

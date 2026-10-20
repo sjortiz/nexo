@@ -32,7 +32,8 @@ from nexo.storage.ingest import ExtractionAids, IngestionTargets, KnowledgeGraph
 from nexo.storage.ontology import Ontology
 from nexo.storage.resolution import EntityResolver, ResolutionLimits
 from nexo.storage.sensitive_data import build_detector
-from nexo.storage.vector_store import LocalChunkStore
+from nexo.storage.neo4j_chunk_store import Neo4jChunkStore
+from nexo.storage.vector_store import ChunkStore, LocalChunkStore
 from nexo.telemetry import (
     caller_attributes,
     query_attributes,
@@ -188,8 +189,19 @@ class Runtime:
         )
 
 
-def chunk_store_from_settings(settings: Settings) -> LocalChunkStore:
-    """The configured chunk store, searched with the configured retrieval mode."""
+def chunk_store_from_settings(
+    settings: Settings, graph_store: GraphStore | None = None
+) -> ChunkStore:
+    """The configured chunk store (Neo4j by default), searched with the retrieval mode."""
+    if settings.chunk_store == "neo4j":
+        if graph_store is None:
+            raise ValueError("the neo4j chunk store needs the graph store")
+        return Neo4jChunkStore(
+            graph_store,
+            build_embeddings(settings),
+            dimensions=settings.embedding_dimensions,
+            mode=settings.retrieval_mode,
+        )
     return LocalChunkStore(
         build_embeddings(settings),
         settings.vector_store_path,
@@ -198,7 +210,7 @@ def chunk_store_from_settings(settings: Settings) -> LocalChunkStore:
 
 
 def build_investigator(
-    settings: Settings, graph_store: GraphStore, chunk_store: LocalChunkStore
+    settings: Settings, graph_store: GraphStore, chunk_store: ChunkStore
 ) -> Investigator:
     """The investigator agent over this graph and chunk store, on the agent model."""
     return Investigator(
@@ -219,7 +231,7 @@ def open_runtime(settings: Settings) -> Iterator[Runtime]:
         graph_store = GraphStore.from_settings(settings, read_only=True)
         stack.callback(graph_store.close)
         investigator = build_investigator(
-            settings, graph_store, chunk_store_from_settings(settings)
+            settings, graph_store, chunk_store_from_settings(settings, graph_store)
         )
         deps = GraphDependencies(
             settings=settings,
@@ -241,8 +253,11 @@ def open_ingestor(
     graph_store = GraphStore.from_settings(settings, read_only=False)
     try:
         graph_store.verify()
+        chunk_store = chunk_store_from_settings(settings, graph_store)
         if writes:
             graph_store.ensure_schema()
+            if isinstance(chunk_store, Neo4jChunkStore):
+                chunk_store.ensure_schema()
         glossary = (
             json.loads(settings.glossary_path.read_text())
             if settings.glossary_path
@@ -256,9 +271,7 @@ def open_ingestor(
             ),
             settings=settings,
             targets=IngestionTargets(
-                chunk_store=LocalChunkStore(
-                    build_embeddings(settings), settings.vector_store_path
-                ),
+                chunk_store=chunk_store,
                 graph_writer=graph_store,
             ),
             aids=ExtractionAids(

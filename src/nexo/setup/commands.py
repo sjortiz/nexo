@@ -25,7 +25,7 @@ from pathlib import Path
 import yaml
 
 from nexo.config import Settings
-from nexo.llm import check_model_servers, resolved_models
+from nexo.llm import build_embeddings, check_model_servers, resolved_models
 from nexo.secret_store import SecretStore, SecretStoreError, store_from_options
 from nexo.setup.check import (
     FORCEABLE,
@@ -49,6 +49,8 @@ from nexo.setup.render import (
 )
 from nexo.setup.schema import ADDONS, Casting, SetupError, load_casting
 from nexo.setup.status import assess, parse_ps, stale_volume_hint
+from nexo.storage.graph_store import GraphStore
+from nexo.storage.neo4j_chunk_store import Neo4jChunkStore
 
 log = logging.getLogger(__name__)
 PRESETS = "examples/setups"
@@ -283,7 +285,35 @@ def _check(args: argparse.Namespace) -> int:
     ok = _report(casting, lock, enabled_set(lock, _addons(args)), host, args.force)
     if not args.no_models:
         ok = _models_reachable() and ok
-    return 0 if ok else 1
+    return 0 if chunks_have_text() and ok else 1
+
+
+def chunks_have_text() -> bool:
+    """With the Neo4j chunk store, every chunk the graph cites has its text (ADR-0018)."""
+    settings = Settings()  # fresh: render just rewrote nexo.env
+    if settings.chunk_store != "neo4j":
+        return True
+    password = settings.neo4j_password.get_secret_value()
+    if neo4j_login(settings.neo4j_uri, settings.neo4j_user, password) is not None:
+        return True  # not running (or refused: the neo4j finding said so)
+    graph = GraphStore.from_settings(settings, read_only=True)
+    try:
+        store = Neo4jChunkStore(
+            graph, build_embeddings(settings), dimensions=settings.embedding_dimensions
+        )
+        missing = store.missing_text()
+    finally:
+        graph.close()
+    if missing:
+        log.warning(
+            "FAIL chunks: %d chunks in the graph have no text (answers cannot cite them):"
+            " nexo chunks import (from %s), or re-ingest",
+            missing,
+            settings.vector_store_path,
+        )
+        return False
+    log.info("ok   chunks: every chunk in the graph has its text")
+    return True
 
 
 def _start_models(casting: Casting) -> int:
