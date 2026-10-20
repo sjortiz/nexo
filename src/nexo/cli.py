@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+from contextlib import ExitStack
 import json
 import logging
 import sys
@@ -359,15 +360,21 @@ def _mcp(args: argparse.Namespace) -> int:
     setup_telemetry(settings)
     graph = GraphStore.from_settings(settings, read_only=True)
     chunks = chunk_store_from_settings(settings, graph)
-    server = build_mcp_server(graph=graph, chunks=chunks, settings=settings)
-    log.info("serving MCP over %s", args.transport)
-    try:
+    with ExitStack() as stack:
+        stack.callback(graph.close)
+        runtime = (
+            stack.enter_context(open_runtime(settings))
+            if settings.mcp_review_tools
+            else None
+        )
+        server = build_mcp_server(
+            graph=graph, chunks=chunks, settings=settings, runtime=runtime
+        )
+        log.info("serving MCP over %s", args.transport)
         if args.transport == "stdio":
             server.run(transport="stdio")
         else:  # no authentication: keep it on localhost or behind an authenticating proxy
             server.run(transport="streamable-http", host=args.host, port=args.port)
-    finally:
-        graph.close()
     return 0
 
 

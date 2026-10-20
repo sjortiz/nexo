@@ -189,6 +189,9 @@ class Settings(BaseSettings):
     # Clearance of the MCP server (`nexo mcp`); one per server, since MCP over
     # stdio has no per-user identity. Unset = DEFAULT_CLEARANCE.
     mcp_clearance: Literal["public", "internal", "pii", "phi"] | None = None
+    # Review tools on `nexo mcp` (list, read and submit a human review); the write tool
+    # still needs the human to confirm by elicitation. Off: the server is retrieval-only.
+    mcp_review_tools: bool = True
 
     # --- Investigator agent budget -------------------------------------------
     agent_max_turns: int = Field(default=12, ge=1)
