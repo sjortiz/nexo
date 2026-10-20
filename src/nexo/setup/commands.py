@@ -129,21 +129,32 @@ def _report(casting: Casting, lock: dict, on: set[str], host: Host) -> bool:
     return not any(not f.ok and f.name in BLOCKING for f in findings)
 
 
+def model_lines(rows: list[dict]) -> list[tuple[bool, str]]:
+    """One (ok, text) per role; a role that is off (no model) is ok and says why."""
+    lines = []
+    for row in rows:
+        if not row.get("model"):
+            lines.append((True, f"model {row['role']}: {row.get('note', 'off')}"))
+            continue
+        status = row.get("check", "ok")
+        text = f"model {row['role']}: {row['model']} at {row['base_url']}"
+        if status != "ok":
+            text += f" ({status})"
+            if "served" in row:
+                text += f"; the server has: {', '.join(row['served']) or 'no models'}"
+            if row.get("detail"):
+                text += f"; {row['detail']}"
+        lines.append((status == "ok", text))
+    return lines
+
+
 def _models_reachable() -> bool:
     """Ask each role's server for its model, as `nexo models --check` does."""
     settings = Settings()  # fresh: render just rewrote nexo.env
-    rows = check_model_servers(settings, resolved_models(settings))
-    for row in rows:
-        ok = row.get("check", "ok") == "ok"
-        (log.info if ok else log.warning)(
-            "%s model %s: %s at %s%s",
-            "ok  " if ok else "FAIL",
-            row["role"],
-            row["model"],
-            row["base_url"],
-            "" if ok else f" ({row['check']})",
-        )
-    return all(row.get("check", "ok") == "ok" for row in rows)
+    lines = model_lines(check_model_servers(settings, resolved_models(settings)))
+    for ok, text in lines:
+        (log.info if ok else log.warning)("%s %s", "ok  " if ok else "FAIL", text)
+    return all(ok for ok, _ in lines)
 
 
 def _check(args: argparse.Namespace) -> int:

@@ -14,6 +14,7 @@ import yaml
 from nexo.config import Settings
 from nexo.local_profiles import plan
 from nexo.setup.check import memory_budget
+from nexo.setup.commands import model_lines
 from nexo.setup.components import COMPONENTS, MEMORY_GB, default_images
 from nexo.setup.envfile import ensure_secrets, read_env
 from nexo.setup.lock import lock
@@ -322,3 +323,33 @@ def test_committed_compose_file_is_current(tmp_path):
     assert "${CONTAINER_SOCKET:-/var/run/docker.sock}" in committed
     if ENGINE is not None:
         _compose_accepts(ROOT / "docker-compose.yml", tmp_path)
+
+
+def test_model_lines_report_off_roles_and_what_a_server_has():
+    """A role that is off is ok (no KeyError); a failure lists the server's models."""
+    rows = [
+        {
+            "role": "agent",
+            "model": "qwen3.5:9b",
+            "base_url": "http://x/v1",
+            "check": "ok",
+        },
+        {
+            "role": "judge",
+            "model": None,
+            "note": "off: nexo eval skips generation scores",
+        },
+        {
+            "role": "router",
+            "model": "qwen3:4b",
+            "base_url": "http://x/v1",
+            "check": "model not served here",
+            "served": ["bge-m3", "qwen3.5:9b"],
+        },
+    ]
+    lines = model_lines(rows)
+    assert lines[0] == (True, "model agent: qwen3.5:9b at http://x/v1")
+    assert lines[1] == (True, "model judge: off: nexo eval skips generation scores")
+    ok, text = lines[2]
+    assert not ok
+    assert "model not served here" in text and "bge-m3, qwen3.5:9b" in text
