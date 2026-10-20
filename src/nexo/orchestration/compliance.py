@@ -156,7 +156,11 @@ def run_compliance_checks(
 
 
 def grounded_citations(output: AgentOutput) -> bool:
-    """The answer cites at least one chunk, and the agent read every chunk it cites."""
+    """The answer cites at least one chunk, and the agent read every chunk it cites.
+
+    no_citations and ungrounded_citations already raise block findings from the same
+    data, so under on-findings this is a second line of defence, not the check itself.
+    """
     return bool(output.citations) and all(
         c in output.fetched_sensitivity for c in output.citations
     )
@@ -168,12 +172,13 @@ def auto_approves(
     """Whether the review policy releases this answer without a person (ADR-0003).
 
     Blocking findings always wait for a person, whatever the policy: approving them
-    needs a reviewer who acknowledges them.
+    needs a reviewer who acknowledges them. never releases only answers whose findings
+    are all warn, so a severity added later waits for a person until it is allowed here.
     """
     if report.blocking or output.error or not output.answer:
         return False
     if policy == "never":
-        return True
+        return all(f.severity == "warn" for f in report.findings)
     if policy == "on-findings":
         return not report.findings and grounded_citations(output)
     return False

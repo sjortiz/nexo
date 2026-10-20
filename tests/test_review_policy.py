@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import pytest
 
+from nexo.config import Settings
 from nexo.orchestration.compliance import (
     AUTO_REVIEWER,
     ComplianceReport,
@@ -11,6 +12,7 @@ from nexo.orchestration.compliance import (
     auto_approves,
 )
 from nexo.setup import check
+from nexo.setup.render import build_env
 from nexo.setup.schema import SetupError, load_casting
 from tests.test_graph import CHUNK, FakeInvestigator, _review, _state, grounded_output
 from tests.test_graph import runtime as _runtime
@@ -100,6 +102,16 @@ def test_the_guard_holds_without_the_graph(policy):
     assert not auto_approves(policy, report, grounded_output())
 
 
+@pytest.mark.parametrize("policy", POLICIES)
+def test_only_warnings_are_released_without_a_person(policy):
+    """An allow-list: a severity other than warn (say one added later) always waits."""
+    report = ComplianceReport(
+        findings=[Finding.model_construct(code="new", severity="critical", detail="x")]
+    )
+    assert not report.blocking
+    assert not auto_approves(policy, report, grounded_output())
+
+
 def test_on_findings_also_requires_grounded_citations():
     """No findings is not enough on its own: every citation must be a chunk the agent read."""
     clean = ComplianceReport()
@@ -113,16 +125,30 @@ def test_on_findings_also_requires_grounded_citations():
     assert not auto_approves("always", clean, grounded_output())
 
 
-def test_setup_file_sets_the_policy_and_the_default_renders_nothing(workdir):
-    """spec.review reaches nexo.env as REVIEW_POLICY; the default leaves nexo.env as it was."""
+def test_setup_file_sets_the_policy_and_the_default_is_rendered_too(workdir):
+    """spec.review reaches nexo.env as REVIEW_POLICY, the default included."""
     _, _, env = _render(workdir, _setup(workdir, "mac-single"))
-    assert "REVIEW_POLICY" not in env
+    assert env["REVIEW_POLICY"] == "always"
     path = _setup(
         workdir, "mac-single", lambda d: d["spec"].update(review="on-findings")
     )
     assert load_casting(path).spec.review == "on-findings"
     _, _, env = _render(workdir, path)
     assert env["REVIEW_POLICY"] == "on-findings"
+
+
+def test_rendered_env_overrides_a_stale_policy_in_dot_env(workdir, tmp_path):
+    """A REVIEW_POLICY left in .env does not relax spec.review always."""
+    stale = tmp_path / "stale.env"
+    stale.write_text("REVIEW_POLICY=never\n")
+    for declared in POLICIES:
+        path = _setup(
+            workdir, "mac-single", lambda d, p=declared: d["spec"].update(review=p)
+        )
+        rendered = tmp_path / f"{declared}.env"
+        env = build_env(load_casting(path))
+        rendered.write_text("".join(f"{k}={v}\n" for k, v in env.items()))
+        assert Settings(_env_file=(stale, rendered)).review_policy == declared
 
 
 def test_unknown_policy_is_rejected(workdir):
@@ -136,32 +162,23 @@ def test_unknown_policy_is_rejected(workdir):
 
 
 @pytest.mark.parametrize(
-    "declared, overrides, shown",
+    "declared, environ, expected",
     [
-        ("always", (None, None), ("always: every answer waits", True)),
-        (
-            "on-findings",
-            (None, "never"),
-            ("on-findings: answers with no findings", True),
-        ),
-        ("always", (None, "never"), ("overrides spec.review always", True)),
-        ("never", ("always", None), ("always: every answer waits", True)),
-        ("always", ("sometimes", None), ("not a policy", False)),
+        ("always", None, "always: every answer waits"),
+        ("on-findings", None, "on-findings: answers with no findings"),
+        ("never", "always", "always: every answer waits"),
+        ("always", "never", "environment overrides spec.review always"),
     ],
 )
 def test_check_shows_the_policy_answers_run_under(
-    workdir, monkeypatch, declared, overrides, shown
+    workdir, monkeypatch, declared, environ, expected
 ):
-    """make check names the policy, and says when the environment or .env overrides it."""
-    (environ, dot_env), (expected, ok) = overrides, shown
+    """make check names the policy, and says when the process environment overrides it."""
     path = _setup(workdir, "mac-single", lambda d: d["spec"].update(review=declared))
     if environ:
         monkeypatch.setenv("REVIEW_POLICY", environ)
     else:
         monkeypatch.delenv("REVIEW_POLICY", raising=False)
-    env_path = workdir / ".env"
-    if dot_env:
-        env_path.write_text(f"REVIEW_POLICY={dot_env}\n")
-    finding = check.review_finding(load_casting(path), env_path)
-    assert finding.name == "review" and finding.ok is ok
+    finding = check.review_finding(load_casting(path))
+    assert finding.name == "review" and finding.ok
     assert expected in finding.detail
