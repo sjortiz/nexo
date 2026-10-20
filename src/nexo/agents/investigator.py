@@ -23,6 +23,7 @@ from strands.models import Model
 from strands.types.agent import Limits
 
 from nexo.agents.models import AgentOutput, InvestigationScope
+from nexo.agents.redaction import ChunkRedactor
 from nexo.agents.tools import (
     GraphReader,
     InvestigationContext,
@@ -32,6 +33,7 @@ from nexo.aio import run_sync
 from nexo.config import Settings
 from nexo.storage.graph_store import DATA_MODEL
 from nexo.storage.schemas import CHUNK_ID_RE, ChunkRecord
+from nexo.storage.sensitive_data import NoopDetector, SensitiveDataDetector
 from nexo.storage.vector_store import ChunkFilter, ChunkStore
 
 SYSTEM_PROMPT = """\
@@ -139,11 +141,18 @@ class Investigator:
         settings: Settings,
         schema_text: str | None = None,
     ) -> None:
+        # Until `with_detector`, nothing can be masked: chunks above clearance stay withheld.
+        self._redactor = ChunkRedactor(NoopDetector())
         self._model = model
         self._graph = graph
         self._chunks = chunks
         self._settings = settings
         self._system_prompt = SYSTEM_PROMPT.format(schema=schema_text or DATA_MODEL)
+
+    def with_detector(self, detector: SensitiveDataDetector) -> Investigator:
+        """Mask detected personal details in chunks above a caller's clearance."""
+        self._redactor = ChunkRedactor(detector)
+        return self
 
     def _build_agent(self, ctx: InvestigationContext) -> Agent:
         # A fresh Agent per investigation: Strands agents hold conversation
@@ -151,7 +160,11 @@ class Investigator:
         return Agent(
             model=self._model,
             tools=build_investigation_tools(
-                graph=self._graph, chunks=self._chunks, ctx=ctx, settings=self._settings
+                graph=self._graph,
+                chunks=self._chunks,
+                ctx=ctx,
+                settings=self._settings,
+                redactor=self._redactor,
             ),
             system_prompt=self._system_prompt,
             callback_handler=None,  # no stdout streaming in a server
@@ -171,8 +184,8 @@ class Investigator:
         """Vector entry points for vector/hybrid intents (multi-retriever RAG)."""
         if scope.strategy == "graph" or self._settings.seed_chunks == 0:
             return []
-        return self._chunks.search(
-            query, self._settings.seed_chunks, scope.chunk_filter
+        return self._redactor.search(
+            self._chunks, query, self._settings.seed_chunks, scope.chunk_filter
         )
 
     async def ainvestigate(

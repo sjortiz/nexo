@@ -20,6 +20,7 @@ from opentelemetry import trace
 from strands import tool
 
 from nexo.agents.models import InvestigationScope, ToolCallSummary
+from nexo.agents.redaction import ChunkRedactor
 from nexo.config import Settings
 from nexo.storage.graph_store import (
     ReadResult,
@@ -27,6 +28,7 @@ from nexo.storage.graph_store import (
     validate_read_only_cypher,
 )
 from nexo.storage.schemas import CHUNK_ID_RE, ChunkRecord
+from nexo.storage.sensitive_data import NoopDetector
 from nexo.storage.vector_store import ChunkFilter
 
 
@@ -156,12 +158,17 @@ def build_investigation_tools(
     chunks: ChunkReader,
     ctx: InvestigationContext,
     settings: Settings,
+    redactor: ChunkRedactor | None = None,
 ) -> list[Any]:
-    """Build the graph query, chunk fetch and chunk search tools for this investigation."""
+    """Build the graph query, chunk fetch and chunk search tools for this investigation.
+
+    Without a redactor, chunks above the caller's clearance are withheld whole.
+    """
+    redactor = redactor or ChunkRedactor(NoopDetector())
     return [
         _query_tool(graph, ctx, settings),
-        _fetch_tool(chunks, ctx, settings),
-        _search_tool(chunks, ctx, settings),
+        _fetch_tool(chunks, ctx, settings, redactor),
+        _search_tool(chunks, ctx, settings, redactor),
     ]
 
 
@@ -257,7 +264,10 @@ def _query_tool(
 
 
 def _fetch_tool(
-    chunks: ChunkReader, ctx: InvestigationContext, settings: Settings
+    chunks: ChunkReader,
+    ctx: InvestigationContext,
+    settings: Settings,
+    redactor: ChunkRedactor,
 ) -> Any:
     """The chunk fetch tool."""
     max_chars = settings.tool_result_max_chars
@@ -268,7 +278,8 @@ def _fetch_tool(
 
         This is the evidence: cite facts as [chunk:<chunk_id>] using only chunks
         returned here or given to you as seed passages. Chunks outside the
-        caller's clearance or scope are withheld.
+        caller's clearance or scope are withheld; personal details in a chunk
+        above the caller's clearance appear as [EMAIL], [PHONE] and similar.
 
         Args:
             chunk_ids: Chunk ids (format chk_ followed by 16 hex characters) from graph results.
@@ -296,13 +307,11 @@ def _fetch_tool(
                 _summary("fetch_vector_chunks", started, False, type(exc).__name__),
                 {"error": "vector store unavailable; report what you have"},
             )
-        returned, withheld = [], []
         sensitivity = {r.chunk_id: r.sensitivity.value for r in records}
-        for record in records:
-            if not ctx.scope.chunk_filter.allows(record):
-                withheld.append(record.chunk_id)
-                continue
-            returned.append(_chunk_view(record))
+        views = [(r, redactor.visible(r, ctx.scope.chunk_filter)) for r in records]
+        withheld = [r.chunk_id for r, shown in views if shown is None]
+        returned = [_chunk_view(shown) for _, shown in views if shown]
+        redacted = sum(shown.text != r.text for r, shown in views if shown)
         payload = {
             "chunks": returned,
             "withheld": withheld,
@@ -326,6 +335,7 @@ def _fetch_tool(
                 "nexo.chunks.requested": len(valid),
                 "nexo.chunks.returned": len(payload["chunks"]),
                 "nexo.chunks.withheld": len(withheld),
+                "nexo.chunks.redacted": redacted,
             }
         )
         return text
@@ -334,7 +344,10 @@ def _fetch_tool(
 
 
 def _search_tool(
-    chunks: ChunkReader, ctx: InvestigationContext, settings: Settings
+    chunks: ChunkReader,
+    ctx: InvestigationContext,
+    settings: Settings,
+    redactor: ChunkRedactor,
 ) -> Any:
     """The chunk text search tool."""
     max_chars = settings.tool_result_max_chars
@@ -347,7 +360,8 @@ def _search_tool(
         entities and relationships that the text states. Search with the names and
         key words from the question (hybrid keyword and semantic ranking). Results
         are evidence like fetched chunks: cite them as [chunk:<chunk_id>]. Only
-        passages inside the caller's clearance and scope are searched.
+        passages inside the caller's scope are searched; personal details in a
+        passage above the caller's clearance appear as [EMAIL], [PHONE] and similar.
 
         Args:
             query: Entity names and key words, for example "Delta Devices".
@@ -364,7 +378,7 @@ def _search_tool(
         # Strands' `execute_tool search_chunks` span is current here.
         span = trace.get_current_span()
         try:
-            records = chunks.search(query, limit, ctx.scope.chunk_filter)
+            allowed = redactor.search(chunks, query, limit, ctx.scope.chunk_filter)
         # Any store failure (down, corrupt) goes back to the agent; the trace keeps it.
         except Exception as exc:  # pylint: disable=broad-exception-caught
             span.record_exception(exc)
@@ -374,9 +388,6 @@ def _search_tool(
                 _summary("search_chunks", started, False, type(exc).__name__),
                 {"error": "vector store unavailable; report what you have"},
             )
-        # The store filters before ranking; check again so the ledger never
-        # records text the caller may not see.
-        allowed = [r for r in records if ctx.scope.chunk_filter.allows(r)]
         payload = {
             "query": query,
             "chunks": [_chunk_view(r) for r in allowed],
