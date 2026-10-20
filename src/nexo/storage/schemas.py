@@ -24,7 +24,9 @@ CHUNK_ID_PATTERN = r"^chk_[0-9a-f]{16}$"
 CHUNK_ID_RE = re.compile(CHUNK_ID_PATTERN)
 RELATION_RE = re.compile(r"^[A-Z][A-Z0-9_]{0,63}$")
 
-ShortText = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=200)]
+ShortText = Annotated[
+    str, StringConstraints(strip_whitespace=True, min_length=1, max_length=200)
+]
 
 
 class Sensitivity(StrEnum):
@@ -37,10 +39,13 @@ class Sensitivity(StrEnum):
 
     @property
     def rank(self) -> int:
+        """Position in the ordering, 0 (public) to 3 (phi)."""
         return list(Sensitivity).index(self)
 
 
 class EntityType(StrEnum):
+    """Entity types extraction may assign."""
+
     # Closed set: values double as Neo4j labels, so they must stay literals.
     PERSON = "Person"
     ORGANIZATION = "Organization"
@@ -54,6 +59,8 @@ class EntityType(StrEnum):
 
 
 class CodeSystem(StrEnum):
+    """Terminology systems a proposed code may come from."""
+
     ICD10CM = "ICD10CM"
     RXNORM = "RXNORM"
     SNOMEDCT = "SNOMEDCT"
@@ -62,6 +69,8 @@ class CodeSystem(StrEnum):
 
 
 class Certainty(StrEnum):
+    """Whether the text asserts, hedges or rules out a fact."""
+
     ASSERTED = "asserted"
     POSSIBLE = "possible"
     NEGATED = "negated"
@@ -75,7 +84,9 @@ class DocumentMetadata(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    source_id: ShortText = Field(description="Stable document id; re-ingesting the same id replaces it")
+    source_id: ShortText = Field(
+        description="Stable document id; re-ingesting the same id replaces it"
+    )
     title: str = ""
     doc_type: str = "general"
     source_uri: str | None = None
@@ -84,12 +95,16 @@ class DocumentMetadata(BaseModel):
 
 
 class ChunkRecord(BaseModel):
+    """One stored chunk: exact text plus the document metadata used for filtering."""
+
     model_config = ConfigDict(extra="forbid")
 
     chunk_id: Annotated[str, StringConstraints(pattern=CHUNK_ID_PATTERN)]
     source_id: str
     ordinal: int = Field(ge=0)
-    text: str = Field(description="Exact source text; the evidence that extraction is checked against")
+    text: str = Field(
+        description="Exact source text; the evidence that extraction is checked against"
+    )
     section_path: list[str] = Field(default_factory=list)
     title: str = ""
     doc_type: str = "general"
@@ -102,7 +117,9 @@ class ChunkRecord(BaseModel):
     @staticmethod
     def make_id(source_id: str, ordinal: int, text: str) -> str:
         """Deterministic id: re-ingesting identical content is an idempotent upsert."""
-        digest = hashlib.sha256(f"{source_id}\x1f{ordinal}\x1f{text}".encode()).hexdigest()
+        digest = hashlib.sha256(
+            f"{source_id}\x1f{ordinal}\x1f{text}".encode()
+        ).hexdigest()
         return f"chk_{digest[:16]}"
 
     def embedding_text(self, glossary_notes: str = "") -> str:
@@ -117,10 +134,13 @@ class ChunkRecord(BaseModel):
         return "\n\n".join(p for p in parts if p)
 
     def filter_metadata(self) -> dict[str, Any]:
+        """Metadata fields that retrieval filters on, as JSON-ready values."""
         return {
             "source_id": self.source_id,
             "doc_type": self.doc_type,
-            "effective_date": self.effective_date.isoformat() if self.effective_date else None,
+            "effective_date": (
+                self.effective_date.isoformat() if self.effective_date else None
+            ),
             "sensitivity": self.sensitivity.value,
         }
 
@@ -137,9 +157,42 @@ def normalize_relation(value: str) -> str:
     return normalized
 
 
-_LEGAL_SUFFIXES = {"inc", "incorporated", "corp", "corporation", "co", "company", "llc", "ltd", "limited",
-                   "plc", "gmbh", "ag", "sa", "srl", "sas", "nv", "bv", "lp", "llp"}
-_HONORIFICS = {"mr", "mrs", "ms", "miss", "dr", "prof", "sir", "dame", "sr", "sra", "srta", "lic", "ing"}
+_LEGAL_SUFFIXES = {
+    "inc",
+    "incorporated",
+    "corp",
+    "corporation",
+    "co",
+    "company",
+    "llc",
+    "ltd",
+    "limited",
+    "plc",
+    "gmbh",
+    "ag",
+    "sa",
+    "srl",
+    "sas",
+    "nv",
+    "bv",
+    "lp",
+    "llp",
+}
+_HONORIFICS = {
+    "mr",
+    "mrs",
+    "ms",
+    "miss",
+    "dr",
+    "prof",
+    "sir",
+    "dame",
+    "sr",
+    "sra",
+    "srta",
+    "lic",
+    "ing",
+}
 
 
 def normalize_name(name: str, entity_type: EntityType) -> str:
@@ -166,22 +219,36 @@ def entity_key(name: str, entity_type: EntityType) -> str:
 
 
 class EntityRef(BaseModel):
+    """An entity as named and described in the text."""
+
     model_config = ConfigDict(extra="forbid")
 
-    name: ShortText = Field(description="Canonical full name as written in the text, pronouns resolved")
+    name: ShortText = Field(
+        description="Canonical full name as written in the text, pronouns resolved"
+    )
     type: EntityType
-    description: str = Field(default="", max_length=300, description="Short description grounded in the text")
+    description: str = Field(
+        default="", max_length=300, description="Short description grounded in the text"
+    )
     aliases: list[ShortText] = Field(
-        default_factory=list, max_length=10,
-        description="Other names the passage uses for this same entity (acronyms, short or former names)",
+        default_factory=list,
+        max_length=10,
+        description=(
+            "Other names the passage uses for this same entity "
+            "(acronyms, short or former names)"
+        ),
     )
     proposed_codes: dict[CodeSystem, str] = Field(
         default_factory=dict,
-        description="Terminology codes if the text states them. Unverified until checked by a terminology service.",
+        description=(
+            "Terminology codes if the text states them. "
+            "Unverified until checked by a terminology service."
+        ),
     )
 
     @property
     def key(self) -> str:
+        """Exact-match entity key from type and normalized name."""
         return entity_key(self.name, self.type)
 
 
@@ -191,28 +258,42 @@ class Triple(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     head: EntityRef
-    relation: str = Field(description="Directional predicate in UPPER_SNAKE_CASE, e.g. ACQUIRED, PRESCRIBED")
+    relation: str = Field(
+        description="Directional predicate in UPPER_SNAKE_CASE, e.g. ACQUIRED, PRESCRIBED"
+    )
     tail: EntityRef
-    evidence: str = Field(min_length=1, max_length=400, description="Verbatim quote from the text supporting the fact")
+    evidence: str = Field(
+        min_length=1,
+        max_length=400,
+        description="Verbatim quote from the text supporting the fact",
+    )
     certainty: Certainty = Certainty.ASSERTED
-    valid_at: date | None = Field(default=None, description="Date the fact holds, only if stated")
+    valid_at: date | None = Field(
+        default=None, description="Date the fact holds, only if stated"
+    )
 
     @field_validator("relation", mode="before")
     @classmethod
     def _normalize_relation(cls, value: str) -> str:
         normalized = normalize_relation(str(value))
         if not RELATION_RE.fullmatch(normalized):
-            raise ValueError(f"relation {value!r} cannot be normalized to UPPER_SNAKE_CASE")
+            raise ValueError(
+                f"relation {value!r} cannot be normalized to UPPER_SNAKE_CASE"
+            )
         return normalized
 
 
 class ExtractionResult(BaseModel):
+    """Triples extracted from one chunk."""
+
     model_config = ConfigDict(extra="forbid")
 
     triples: list[Triple] = Field(default_factory=list, max_length=100)
 
 
 class Resolution(StrEnum):
+    """How a mention was matched to a graph entity."""
+
     EXACT = "exact"  # same normalized key
     ALIAS = "alias"  # a stated alias or surface form matched
     LLM = "llm"  # the resolution model matched it to an existing entity
@@ -225,7 +306,8 @@ class ResolvedEntity(BaseModel):
     key: str  # canonical entity key the mention is merged into
     surface: str  # the name as written in the chunk
     method: Resolution = Resolution.NEW
-    ref: EntityRef | None = None  # the extracted mention (type, description, aliases, codes)
+    # The extracted mention (type, description, aliases, codes).
+    ref: EntityRef | None = None
 
 
 class GroundedTriple(BaseModel):
@@ -236,6 +318,7 @@ class GroundedTriple(BaseModel):
     source_id: str
     sensitivity: Sensitivity
     relation: str  # canonical relation actually written
-    original_relation: str | None = None  # extracted predicate, when the ontology rewrote it
+    # Extracted predicate, when the ontology rewrote it.
+    original_relation: str | None = None
     head: ResolvedEntity  # graph head (already swapped for inverse relations)
     tail: ResolvedEntity

@@ -52,24 +52,43 @@ def tokenize(text: str) -> list[str]:
 class BM25:
     """Okapi BM25 over a fixed corpus (rebuilt when the corpus changes)."""
 
-    def __init__(self, documents: dict[str, list[str]], k1: float = 1.5, b: float = 0.75) -> None:
+    def __init__(
+        self, documents: dict[str, list[str]], k1: float = 1.5, b: float = 0.75
+    ) -> None:
         self._k1, self._b = k1, b
         self._tf = {doc_id: Counter(tokens) for doc_id, tokens in documents.items()}
         self._length = {doc_id: len(tokens) for doc_id, tokens in documents.items()}
-        self._avg_length = (sum(self._length.values()) / len(self._length)) if self._length else 0.0
+        self._avg_length = (
+            (sum(self._length.values()) / len(self._length)) if self._length else 0.0
+        )
         df = Counter(term for tf in self._tf.values() for term in tf)
         n = len(self._tf)
-        self._idf = {term: math.log(1 + (n - count + 0.5) / (count + 0.5)) for term, count in df.items()}
+        self._idf = {
+            term: math.log(1 + (n - count + 0.5) / (count + 0.5))
+            for term, count in df.items()
+        }
 
     def scores(self, query: str) -> dict[str, float]:
+        """BM25 score of every document with a positive score for the query."""
         terms = [t for t in tokenize(query) if t in self._idf]
         result: dict[str, float] = {}
         for doc_id, tf in self._tf.items():
-            norm = self._k1 * (1 - self._b + self._b * self._length[doc_id] / (self._avg_length or 1))
-            score = sum(self._idf[t] * tf[t] * (self._k1 + 1) / (tf[t] + norm) for t in terms if t in tf)
+            norm = self._k1 * (
+                1 - self._b + self._b * self._length[doc_id] / (self._avg_length or 1)
+            )
+            score = sum(
+                self._idf[t] * tf[t] * (self._k1 + 1) / (tf[t] + norm)
+                for t in terms
+                if t in tf
+            )
             if score > 0:
                 result[doc_id] = score
         return result
+
+    def ranked(self, query: str) -> list[str]:
+        """Document ids with a positive score, best first; ties break by id."""
+        scores = self.scores(query)
+        return sorted(scores, key=lambda doc_id: (-scores[doc_id], doc_id))
 
 
 class ChunkFilter(BaseModel):
@@ -84,33 +103,61 @@ class ChunkFilter(BaseModel):
     max_sensitivity: Sensitivity = Sensitivity.INTERNAL
 
     def allows(self, chunk: ChunkRecord) -> bool:
-        if chunk.sensitivity.rank > self.max_sensitivity.rank:
+        """Whether a caller with this filter may see the chunk."""
+        return (
+            chunk.sensitivity.rank <= self.max_sensitivity.rank
+            and _listed(chunk.doc_type, self.doc_types)
+            and _listed(chunk.source_id, self.source_ids)
+            and self._in_date_range(chunk.effective_date)
+        )
+
+    def _in_date_range(self, effective: date | None) -> bool:
+        """Undated chunks pass only when no date range is set."""
+        if not (self.effective_from or self.effective_to):
+            return True
+        if effective is None:
             return False
-        if self.doc_types and chunk.doc_type not in self.doc_types:
-            return False
-        if self.source_ids and chunk.source_id not in self.source_ids:
-            return False
-        if self.effective_from or self.effective_to:
-            if chunk.effective_date is None:
-                return False
-            if self.effective_from and chunk.effective_date < self.effective_from:
-                return False
-            if self.effective_to and chunk.effective_date > self.effective_to:
-                return False
-        return True
+        after_start = not self.effective_from or effective >= self.effective_from
+        before_end = not self.effective_to or effective <= self.effective_to
+        return after_start and before_end
+
+
+def _listed(value: str, allowed: list[str] | None) -> bool:
+    """No list (or an empty one) means no restriction."""
+    return not allowed or value in allowed
 
 
 class ChunkStore(Protocol):
-    def upsert(self, chunks: Sequence[ChunkRecord], embedding_texts: Sequence[str]) -> None: ...
-    def get_by_ids(self, chunk_ids: Sequence[str]) -> list[ChunkRecord]: ...
-    def search(self, query: str, k: int, chunk_filter: ChunkFilter) -> list[ChunkRecord]: ...
-    def delete_source(self, source_id: str, keep: set[str] | frozenset[str] = frozenset()) -> int: ...
+    """Storage for chunk text and embeddings, addressed by chunk id."""
+
+    def upsert(
+        self, chunks: Sequence[ChunkRecord], embedding_texts: Sequence[str]
+    ) -> None:
+        """Insert or replace chunks, embedding the aligned texts."""
+
+    def get_by_ids(self, chunk_ids: Sequence[str]) -> list[ChunkRecord]:
+        """Return the stored chunks for these ids, in order; unknown ids are skipped."""
+
+    def search(
+        self, query: str, k: int, chunk_filter: ChunkFilter
+    ) -> list[ChunkRecord]:
+        """Return the top-k chunks the filter allows."""
+
+    def delete_source(
+        self, source_id: str, keep: set[str] | frozenset[str] = frozenset()
+    ) -> int:
+        """Delete a document's chunks except `keep`; return how many were deleted."""
 
 
 class LocalChunkStore:
     """In-process vector index persisted to a JSON file (atomic replace)."""
 
-    def __init__(self, embeddings: Embeddings, path: Path | None = None, mode: RetrievalMode = "hybrid") -> None:
+    def __init__(
+        self,
+        embeddings: Embeddings,
+        path: Path | None = None,
+        mode: RetrievalMode = "hybrid",
+    ) -> None:
         if mode not in ("hybrid", "vector", "keyword"):
             raise ValueError(f"unknown retrieval mode {mode!r}")
         self._embeddings = embeddings
@@ -123,7 +170,10 @@ class LocalChunkStore:
         else:
             self._store = InMemoryVectorStore(embeddings)
 
-    def upsert(self, chunks: Sequence[ChunkRecord], embedding_texts: Sequence[str]) -> None:
+    def upsert(
+        self, chunks: Sequence[ChunkRecord], embedding_texts: Sequence[str]
+    ) -> None:
+        """Insert or replace chunks, embedding the aligned texts, and persist."""
         if len(chunks) != len(embedding_texts):
             raise ValueError("chunks and embedding_texts must align")
         if not chunks:
@@ -131,7 +181,11 @@ class LocalChunkStore:
         documents = [
             # The embedded text carries headers/glossary; the record keeps the
             # exact chunk text for evidence checks and display.
-            Document(id=c.chunk_id, page_content=t, metadata={"record": c.model_dump(mode="json")})
+            Document(
+                id=c.chunk_id,
+                page_content=t,
+                metadata={"record": c.model_dump(mode="json")},
+            )
             for c, t in zip(chunks, embedding_texts, strict=True)
         ]
         with self._lock:
@@ -140,51 +194,86 @@ class LocalChunkStore:
             self._persist()
 
     def get_by_ids(self, chunk_ids: Sequence[str]) -> list[ChunkRecord]:
-        with traced_span("chunk_store get_by_ids", {"nexo.chunks.requested": len(chunk_ids)}) as span, self._lock:
+        """Return the stored chunks for these ids, in order; unknown ids are skipped."""
+        attributes = {"nexo.chunks.requested": len(chunk_ids)}
+        with self._lock, traced_span("chunk_store get_by_ids", attributes) as span:
             documents = self._store.get_by_ids(list(chunk_ids))
             span.set_attribute("nexo.chunks.found", len(documents))
-        by_id = {d.id: ChunkRecord.model_validate(d.metadata["record"]) for d in documents}
+        by_id = {
+            d.id: ChunkRecord.model_validate(d.metadata["record"]) for d in documents
+        }
         return [by_id[i] for i in chunk_ids if i in by_id]
 
-    def search(self, query: str, k: int, chunk_filter: ChunkFilter) -> list[ChunkRecord]:
+    def search(
+        self, query: str, k: int, chunk_filter: ChunkFilter
+    ) -> list[ChunkRecord]:
         """Top-k chunks allowed by the filter, ranked by the store's retrieval mode."""
 
         def _allowed(document: Document) -> bool:
-            return chunk_filter.allows(ChunkRecord.model_validate(document.metadata["record"]))
+            return chunk_filter.allows(
+                ChunkRecord.model_validate(document.metadata["record"])
+            )
 
         # GenAI `retrieval` operation; INTERNAL because this store is in-process
         # (a pgvector/OpenSearch backend would be a CLIENT span).
-        attributes = {"gen_ai.operation.name": "retrieval", "gen_ai.data_source.id": DATA_SOURCE_ID,
-                      "gen_ai.retrieval.top_k": k, "nexo.retrieval.mode": self._mode}
-        with traced_span(f"retrieval {DATA_SOURCE_ID}", attributes) as span, self._lock:
+        attributes = {
+            "gen_ai.operation.name": "retrieval",
+            "gen_ai.data_source.id": DATA_SOURCE_ID,
+            "gen_ai.retrieval.top_k": k,
+            "nexo.retrieval.mode": self._mode,
+        }
+        with self._lock, traced_span(f"retrieval {DATA_SOURCE_ID}", attributes) as span:
             candidates = k if self._mode == "vector" else max(k * 4, 20)
             rankings: list[list[str]] = []
             if self._mode in ("vector", "hybrid"):
-                rankings.append([d.id for d in self._store.similarity_search(query, k=candidates, filter=_allowed)])
+                rankings.append(
+                    [
+                        d.id
+                        for d in self._store.similarity_search(
+                            query, k=candidates, filter=_allowed
+                        )
+                    ]
+                )
             if self._mode in ("keyword", "hybrid"):
                 rankings.append(self._keyword_ranking(query, candidates, chunk_filter))
             ranked = _fuse(rankings)[:k]
-            records = {d.id: d.metadata["record"] for d in self._store.get_by_ids(ranked)}
+            records = {
+                d.id: d.metadata["record"] for d in self._store.get_by_ids(ranked)
+            }
             span.set_attribute("nexo.chunks.found", len(ranked))
         return [ChunkRecord.model_validate(records[chunk_id]) for chunk_id in ranked]
 
-    def _keyword_ranking(self, query: str, limit: int, chunk_filter: ChunkFilter) -> list[str]:
+    def _keyword_ranking(
+        self, query: str, limit: int, chunk_filter: ChunkFilter
+    ) -> list[str]:
         if self._bm25 is None:
-            self._bm25 = BM25({doc_id: tokenize(entry["text"]) for doc_id, entry in self._store.store.items()})
-        scores = self._bm25.scores(query)
+            self._bm25 = BM25(
+                {
+                    doc_id: tokenize(entry["text"])
+                    for doc_id, entry in self._store.store.items()
+                }
+            )
         allowed = [
-            doc_id for doc_id in sorted(scores, key=lambda d: (-scores[d], d))
-            if chunk_filter.allows(ChunkRecord.model_validate(self._store.store[doc_id]["metadata"]["record"]))
+            doc_id
+            for doc_id in self._bm25.ranked(query)
+            if chunk_filter.allows(
+                ChunkRecord.model_validate(
+                    self._store.store[doc_id]["metadata"]["record"]
+                )
+            )
         ]
         return allowed[:limit]
 
-    def delete_source(self, source_id: str, keep: set[str] | frozenset[str] = frozenset()) -> int:
+    def delete_source(
+        self, source_id: str, keep: set[str] | frozenset[str] = frozenset()
+    ) -> int:
         """Delete a document's chunks except `keep` (the current version's ids)."""
         with self._lock:
             stale = [
                 doc_id
                 for doc_id, entry in self._store.store.items()
-                if entry["metadata"]["record"]["source_id"] == source_id and doc_id not in keep
+                if entry["metadata"]["record"]["source_id"] == source_id
+                and doc_id not in keep
             ]
             if stale:
                 self._store.delete(stale)

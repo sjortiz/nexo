@@ -27,7 +27,7 @@ NEO4J_TEST_PASSWORD ?= nexo-test-pass
 
 .DEFAULT_GOAL := help
 .PHONY: help install install-notebook env models up down check ingest ask mcp graph app \
-        lint test neo4j-test test-neo4j neo4j-test-down test-live ci \
+        lint format test neo4j-test test-neo4j neo4j-test-down test-live ci \
         walkthrough site serve-site notebook clean
 
 help: ## List the targets
@@ -80,8 +80,12 @@ app: ## Run the nexo CLI in a container: make app ARGS="models --check"
 
 ##@ Test
 
-lint: ## Lint with ruff
-	$(RUN)ruff check src tests examples
+lint: ## Check formatting with black and lint with pylint
+	$(RUN)black --check src tests examples
+	$(RUN)pylint src tests examples
+
+format: ## Format the code with black
+	$(RUN)black src tests examples
 
 test: ## Run the test suite (the Neo4j tests also run when NEO4J_TEST_URI is set)
 	$(RUN)pytest -o addopts="" -q -rs
@@ -116,5 +120,5 @@ notebook: ## Open the walkthrough notebook in JupyterLab (make install-notebook 
 	$(RUN)jupyter lab examples/walkthrough.ipynb
 
 clean: ## Remove caches and build output (keeps .venv, .env and .data)
-	rm -rf .pytest_cache .ruff_cache build dist
+	rm -rf .pytest_cache build dist
 	find . -name __pycache__ -type d -not -path "./$(VENV)/*" -prune -exec rm -rf {} +

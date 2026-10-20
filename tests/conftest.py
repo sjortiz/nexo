@@ -1,6 +1,9 @@
+"""Shared fixtures and test doubles: tracing, settings, chunks, graph and chat model fakes."""
+
 from __future__ import annotations
 
 import os
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
 
@@ -30,12 +33,14 @@ instrument_openai(_provider)
 
 @pytest.fixture
 def spans() -> InMemorySpanExporter:
+    """Provide the global in-memory span exporter, emptied for this test."""
     _EXPORTER.clear()
     return _EXPORTER
 
 
-@pytest.fixture
-def settings(tmp_path) -> Settings:
+@pytest.fixture(name="settings")
+def fixture_settings(tmp_path) -> Settings:
+    """Provide offline settings: fake embeddings, memory checkpoints, files under tmp_path."""
     return Settings(
         _env_file=None,
         embedding_provider="fake",
@@ -50,8 +55,14 @@ def settings(tmp_path) -> Settings:
     )
 
 
-def make_chunk(source_id: str, ordinal: int, text: str, sensitivity: Sensitivity = Sensitivity.INTERNAL,
-               **extra: Any) -> ChunkRecord:
+def make_chunk(
+    source_id: str,
+    ordinal: int,
+    text: str,
+    sensitivity: Sensitivity = Sensitivity.INTERNAL,
+    **extra: Any,
+) -> ChunkRecord:
+    """Build a chunk with a content-derived id and the current ingest time."""
     return ChunkRecord(
         chunk_id=ChunkRecord.make_id(source_id, ordinal, text),
         source_id=source_id,
@@ -63,27 +74,34 @@ def make_chunk(source_id: str, ordinal: int, text: str, sensitivity: Sensitivity
     )
 
 
-@pytest.fixture
-def chunk_store(settings) -> LocalChunkStore:
+@pytest.fixture(name="chunk_store")
+def fixture_chunk_store(settings) -> LocalChunkStore:
+    """Provide an empty local chunk store backed by the fake embeddings."""
     return LocalChunkStore(build_embeddings(settings), settings.vector_store_path)
 
 
+@dataclass
 class FakeGraph:
     """Stands in for GraphStore.run_read_query; records the Cypher it receives."""
 
-    def __init__(self, rows: list[dict[str, Any]] | None = None, error: Exception | None = None) -> None:
-        self.rows = rows or []
-        self.error = error
-        self.queries: list[str] = []
+    rows: list[dict[str, Any]] = field(default_factory=list)
+    error: Exception | None = None
+    queries: list[str] = field(default_factory=list, init=False)
+    parameters: list[dict[str, Any] | None] = field(default_factory=list, init=False)
 
-    def run_read_query(self, cypher: str, parameters: dict[str, Any] | None = None) -> ReadResult:
+    def run_read_query(
+        self, cypher: str, parameters: dict[str, Any] | None = None
+    ) -> ReadResult:
+        """Record the query and its parameters, then raise the error or return the rows."""
         self.queries.append(cypher)
+        self.parameters.append(parameters)
         if self.error:
             raise self.error
         return ReadResult(rows=self.rows, truncated=False)
 
 
-class RecordingChatModel(BaseChatModel):
+# Streaming and tool binding are optional in BaseChatModel (they raise NotImplementedError).
+class RecordingChatModel(BaseChatModel):  # pylint: disable=abstract-method
     """Scripted chat model that records every prompt it receives."""
 
     replies: list[str]
@@ -96,4 +114,6 @@ class RecordingChatModel(BaseChatModel):
     def _generate(self, messages, stop=None, run_manager=None, **kwargs) -> ChatResult:
         self.prompts.append(list(messages))
         reply = self.replies.pop(0) if len(self.replies) > 1 else self.replies[0]
-        return ChatResult(generations=[ChatGeneration(message=AIMessage(content=reply))])
+        return ChatResult(
+            generations=[ChatGeneration(message=AIMessage(content=reply))]
+        )

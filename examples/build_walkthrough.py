@@ -1,12 +1,14 @@
 """Build the walkthrough notebook and page from examples/walkthrough.py.
 
-    python examples/build_walkthrough.py --record   # execute the notebook in a Jupyter kernel (needs models,
-                                                # Neo4j and the [notebook] extra), then render the page
-    python examples/build_walkthrough.py            # render site/walkthrough.html from the executed notebook
+    python examples/build_walkthrough.py --record
+        execute the notebook in a Jupyter kernel (needs models, Neo4j and the
+        [notebook] extra), then render the page
+    python examples/build_walkthrough.py
+        render site/walkthrough.html from the executed notebook
 
 The script is the source; examples/walkthrough.ipynb is the script's cells plus the outputs of one
-real run, and the page shows exactly that notebook. Editing the script without re-recording fails the
-build instead of publishing outputs the code no longer produces.
+real run, and the page shows exactly that notebook. Editing the script without re-recording fails
+the build instead of publishing outputs the code no longer produces.
 """
 
 from __future__ import annotations
@@ -15,6 +17,7 @@ import argparse
 import builtins
 import hashlib
 import html
+import importlib
 import io
 import json
 import keyword
@@ -32,15 +35,19 @@ REPO = "https://github.com/sjortiz/nexo/blob/main/"
 
 @dataclass(frozen=True)
 class Cell:
+    """One cell of the percent-format script."""
+
     kind: str  # "markdown" or "code"
     source: str
 
     @property
     def key(self) -> str:
+        """Short content hash, used as the notebook cell id."""
         return hashlib.sha256(self.source.encode()).hexdigest()[:16]
 
 
 def parse_cells(text: str) -> list[Cell]:
+    """Split a percent-format script into cells; text before the first cell is ignored."""
     cells: list[Cell] = []
     kind, lines = None, []
 
@@ -62,28 +69,54 @@ def parse_cells(text: str) -> list[Cell]:
     return cells
 
 
-# --- notebook ------------------------------------------------------------------------------------------
+# --- notebook ------------------------------------------------------------------------------
 def notebook_skeleton(cells: list[Cell]) -> dict:
     """An unexecuted nbformat 4.5 notebook with stable cell ids."""
     return {
-        "nbformat": 4, "nbformat_minor": 5,
-        "metadata": {"kernelspec": {"name": "python3", "display_name": "Python 3", "language": "python"},
-                     "language_info": {"name": "python"}},
-        "cells": [{"id": f"{cell.kind[:2]}-{cell.key}", "cell_type": cell.kind, "metadata": {},
-                   "source": cell.source,
-                   **({"execution_count": None, "outputs": []} if cell.kind == "code" else {})}
-                  for cell in cells],
+        "nbformat": 4,
+        "nbformat_minor": 5,
+        "metadata": {
+            "kernelspec": {
+                "name": "python3",
+                "display_name": "Python 3",
+                "language": "python",
+            },
+            "language_info": {"name": "python"},
+        },
+        "cells": [
+            {
+                "id": f"{cell.kind[:2]}-{cell.key}",
+                "cell_type": cell.kind,
+                "metadata": {},
+                "source": cell.source,
+                **(
+                    {"execution_count": None, "outputs": []}
+                    if cell.kind == "code"
+                    else {}
+                ),
+            }
+            for cell in cells
+        ],
     }
 
 
 def record() -> None:
-    import nbformat
-    from nbclient import NotebookClient
+    """Execute the script's cells in a Jupyter kernel and save the notebook with its outputs."""
+    try:  # optional extra: nexo[notebook]
+        nbformat = importlib.import_module("nbformat")
+        nbclient = importlib.import_module("nbclient")
+    except ModuleNotFoundError as exc:
+        raise SystemExit("--record needs the extra: nexo[notebook]") from exc
 
     notebook = nbformat.from_dict(notebook_skeleton(parse_cells(SCRIPT.read_text())))
     # Start where Jupyter users start: in examples/. Any cell error aborts the recording.
-    NotebookClient(notebook, timeout=1800, kernel_name="python3", record_timing=False,
-                   resources={"metadata": {"path": str(NOTEBOOK.parent)}}).execute()
+    nbclient.NotebookClient(
+        notebook,
+        timeout=1800,
+        kernel_name="python3",
+        record_timing=False,
+        resources={"metadata": {"path": str(NOTEBOOK.parent)}},
+    ).execute()
     nbformat.write(notebook, NOTEBOOK)
 
 
@@ -96,7 +129,9 @@ def cell_output(cell: dict) -> str:
     parts = []
     for output in cell.get("outputs", []):
         if output["output_type"] == "error":
-            raise SystemExit(f"cell {cell['id']} failed in the recorded run: {output['ename']}")
+            raise SystemExit(
+                f"cell {cell['id']} failed in the recorded run: {output['ename']}"
+            )
         if output["output_type"] == "stream" and output["name"] == "stdout":
             parts.append(_text(output["text"]))
         elif output["output_type"] in ("execute_result", "display_data"):
@@ -109,27 +144,38 @@ def sync_prose(cells: list[Cell]) -> None:
     notebook = json.loads(NOTEBOOK.read_text(encoding="utf-8"))
     recorded = notebook["cells"]
     same_code = [c["cell_type"] for c in recorded] == [c.kind for c in cells] and all(
-        _text(r["source"]) == c.source for r, c in zip(recorded, cells, strict=True) if c.kind == "code")
+        _text(r["source"]) == c.source
+        for r, c in zip(recorded, cells, strict=True)
+        if c.kind == "code"
+    )
     if not same_code:
-        raise SystemExit("code cells changed since the recorded run; "
-                         "run: python examples/build_walkthrough.py --record")
+        raise SystemExit(
+            "code cells changed since the recorded run; "
+            "run: python examples/build_walkthrough.py --record"
+        )
     for record_cell, cell in zip(recorded, cells, strict=True):
         if cell.kind == "markdown":
             record_cell["source"] = cell.source.splitlines(keepends=True)
     # nbformat's on-disk layout, so a prose sync leaves no other diff.
-    NOTEBOOK.write_text(json.dumps(notebook, sort_keys=True, indent=1, ensure_ascii=False) + "\n", encoding="utf-8")
+    NOTEBOOK.write_text(
+        json.dumps(notebook, sort_keys=True, indent=1, ensure_ascii=False) + "\n",
+        encoding="utf-8",
+    )
 
 
 def load_notebook(cells: list[Cell]) -> dict:
+    """The recorded notebook, which must hold exactly the script's cells."""
     notebook = json.loads(NOTEBOOK.read_text(encoding="utf-8"))
     recorded = [(c["cell_type"], _text(c["source"])) for c in notebook["cells"]]
     if recorded != [(c.kind, c.source) for c in cells]:
-        raise SystemExit("examples/walkthrough.ipynb does not match examples/walkthrough.py; "
-                         "run: python examples/build_walkthrough.py --record")
+        raise SystemExit(
+            "examples/walkthrough.ipynb does not match examples/walkthrough.py; "
+            "run: python examples/build_walkthrough.py --record"
+        )
     return notebook
 
 
-# --- rendering ----------------------------------------------------------------------------------------
+# --- rendering -----------------------------------------------------------------------------
 _EMPHASIS = [
     (re.compile(r"\*\*([^*]+)\*\*"), r"<strong>\1</strong>"),
     (re.compile(r"(?<![\w*])\*([^*]+)\*(?![\w*])"), r"<em>\1</em>"),
@@ -158,15 +204,20 @@ def _inline(text: str) -> str:
         return f"\x00{len(links) - 1}\x00"
 
     out = _spans(_LINK.sub(stash, html.escape(text, quote=False)))
-    return re.sub(r"\x00(\d+)\x00",
-                  lambda m: f'<a href="{links[int(m.group(1))][1]}">{_spans(links[int(m.group(1))][0])}</a>', out)
+    return re.sub(
+        r"\x00(\d+)\x00",
+        lambda m: f'<a href="{links[int(m.group(1))][1]}">{_spans(links[int(m.group(1))][0])}</a>',
+        out,
+    )
 
 
 def slug(heading: str) -> str:
+    """URL fragment for a heading."""
     return re.sub(r"[^a-z0-9]+", "-", heading.lower()).strip("-")
 
 
 def render_markdown(source: str) -> str:
+    """HTML for the markdown subset the walkthrough uses: headings, lists and paragraphs."""
     blocks, out = re.split(r"\n\s*\n", source.strip()), []
     for block in blocks:
         lines = block.splitlines()
@@ -182,15 +233,23 @@ def render_markdown(source: str) -> str:
                     items.append(line[2:].strip())
                 else:
                     items[-1] += " " + line.strip()
-            out.append("<ul>" + "".join(f"<li>{_inline(i)}</li>" for i in items) + "</ul>")
+            out.append(
+                "<ul>" + "".join(f"<li>{_inline(i)}</li>" for i in items) + "</ul>"
+            )
         else:
             out.append(f"<p>{_inline(' '.join(line.strip() for line in lines))}</p>")
     return "\n".join(out)
 
 
 _BUILTINS = set(dir(builtins))
-_STRING_TOKENS = {tokenize.STRING, *(getattr(tokenize, n) for n in ("FSTRING_START", "FSTRING_MIDDLE", "FSTRING_END")
-                                     if hasattr(tokenize, n))}
+_STRING_TOKENS = {
+    tokenize.STRING,
+    *(
+        getattr(tokenize, n)
+        for n in ("FSTRING_START", "FSTRING_MIDDLE", "FSTRING_END")
+        if hasattr(tokenize, n)
+    ),
+}
 
 
 def highlight(source: str) -> str:
@@ -224,13 +283,19 @@ def highlight(source: str) -> str:
         position = end
         if tok.type == tokenize.NAME:
             previous = tok.string
-        elif tok.type not in (tokenize.NL, tokenize.NEWLINE, tokenize.INDENT, tokenize.COMMENT):
+        elif tok.type not in (
+            tokenize.NL,
+            tokenize.NEWLINE,
+            tokenize.INDENT,
+            tokenize.COMMENT,
+        ):
             previous = ""
     out.append(html.escape(source[position:], quote=False))
     return "".join(out)
 
 
 def render() -> str:
+    """The walkthrough page: the script's prose and code with the recorded outputs."""
     cells = parse_cells(SCRIPT.read_text())
     notebook = load_notebook(cells)
     toc, body = [], []
@@ -242,17 +307,27 @@ def render() -> str:
         else:
             block = f'<pre class="code"><code>{highlight(cell.source)}</code></pre>'
             if output := cell_output(recorded):
-                block += (f'<div class="out-label">Output</div>'
-                          f'<pre class="output"><samp>{html.escape(output, quote=False)}</samp></pre>')
+                block += (
+                    f'<div class="out-label">Output</div>'
+                    f'<pre class="output"><samp>{html.escape(output, quote=False)}</samp></pre>'
+                )
             body.append(f'<div class="cell">{block}</div>')
-    return TEMPLATE.format(toc="\n".join(toc), body="\n".join(body), script=f"{REPO}examples/walkthrough.py",
-                           notebook=f"{REPO}examples/walkthrough.ipynb", icon=ICON)
+    return TEMPLATE.format(
+        toc="\n".join(toc),
+        body="\n".join(body),
+        script=f"{REPO}examples/walkthrough.py",
+        notebook=f"{REPO}examples/walkthrough.ipynb",
+        icon=ICON,
+    )
 
 
-ICON = ("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E"
-        "%3Ccircle cx='8' cy='8' r='5' fill='%235b4bdb'/%3E%3Ccircle cx='24' cy='12' r='5' fill='%235b4bdb'/%3E"
-        "%3Ccircle cx='14' cy='25' r='5' fill='%235b4bdb'/%3E"
-        "%3Cpath d='M8 8 24 12 14 25Z' fill='none' stroke='%235b4bdb' stroke-width='2'/%3E%3C/svg%3E")
+ICON = (
+    "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E"
+    "%3Ccircle cx='8' cy='8' r='5' fill='%235b4bdb'/%3E"
+    "%3Ccircle cx='24' cy='12' r='5' fill='%235b4bdb'/%3E"
+    "%3Ccircle cx='14' cy='25' r='5' fill='%235b4bdb'/%3E"
+    "%3Cpath d='M8 8 24 12 14 25Z' fill='none' stroke='%235b4bdb' stroke-width='2'/%3E%3C/svg%3E"
+)
 
 TEMPLATE = """<!doctype html>
 <html lang="en">
@@ -352,8 +427,13 @@ TEMPLATE = """<!doctype html>
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--record", action="store_true", help="run every cell and save its output first")
+    """Command-line entry point."""
+    parser = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
+    parser.add_argument(
+        "--record", action="store_true", help="run every cell and save its output first"
+    )
     args = parser.parse_args()
     cells = parse_cells(SCRIPT.read_text())
     if args.record:

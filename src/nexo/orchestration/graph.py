@@ -21,6 +21,7 @@ from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_core.runnables import RunnableConfig
 from langgraph.checkpoint.base import BaseCheckpointSaver
+from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.errors import GraphBubbleUp
 from langgraph.func import task
 from langgraph.graph import END, START, StateGraph
@@ -58,12 +59,22 @@ Set doc_types / effective_from / effective_to only when the request explicitly r
 reason: one sentence, no quotes from the request."""
 
 
-class InvestigatorRunner(Protocol):
-    def investigate(self, query: str, *, request_id: str | None = None,
-                    scope: InvestigationScope | None = None) -> AgentOutput: ...
+class InvestigatorRunner(Protocol):  # pylint: disable=too-few-public-methods
+    """Anything that can run one investigation synchronously."""
+
+    def investigate(
+        self,
+        query: str,
+        *,
+        request_id: str | None = None,
+        scope: InvestigationScope | None = None,
+    ) -> AgentOutput:
+        """Investigate the question and return the cited answer."""
 
 
-def traced_node(name: str, fn: Callable[..., dict[str, Any]]) -> Callable[..., dict[str, Any]]:
+def traced_node(
+    name: str, fn: Callable[..., dict[str, Any]]
+) -> Callable[..., dict[str, Any]]:
     """Run a node inside a current span recording the state keys it changed.
 
     Being the current span (not a callback-side span) makes the LLM, agent and
@@ -73,8 +84,10 @@ def traced_node(name: str, fn: Callable[..., dict[str, Any]]) -> Callable[..., d
     @functools.wraps(fn)
     def wrapper(state: GraphState, config: RunnableConfig) -> dict[str, Any]:
         thread_id = (config.get("configurable") or {}).get("thread_id")
-        with traced_span(f"langgraph.node {name}",
-                         {"langgraph.node": name, "gen_ai.conversation.id": thread_id}) as span:
+        with traced_span(
+            f"langgraph.node {name}",
+            {"langgraph.node": name, "gen_ai.conversation.id": thread_id},
+        ) as span:
             try:
                 update = fn(state, config)
             except GraphBubbleUp:
@@ -91,24 +104,33 @@ def traced_node(name: str, fn: Callable[..., dict[str, Any]]) -> Callable[..., d
 
 @dataclass(frozen=True)
 class GraphDependencies:
+    """Settings, models and services the workflow nodes use."""
+
     settings: Settings
     investigator: InvestigatorRunner
     detector: SensitiveDataDetector
     router_llm: BaseChatModel | None = None  # None: deterministic gate only
 
 
-def build_graph(deps: GraphDependencies, checkpointer: BaseCheckpointSaver) -> CompiledStateGraph:
+def _router_node(deps: GraphDependencies) -> Callable[..., dict[str, Any]]:
+    """Node 1: validate the request and decide where it goes, failing closed."""
     settings = deps.settings
 
-    # ------------------------------------------------------------------ Node 1
     def router(state: GraphState, config: RunnableConfig) -> dict[str, Any]:
         query = (state.get("user_query") or "").strip()
         request_id = state.get("request_id") or uuid.uuid4().hex
-        clearance = Sensitivity(state.get("caller_clearance") or settings.default_clearance)
+        clearance = Sensitivity(
+            state.get("caller_clearance") or settings.default_clearance
+        )
 
         def reject(reason: str) -> dict[str, Any]:
-            return {"request_id": request_id, "routing_target": "rejected", "routing_reason": reason,
-                    "approval_status": "not_required", "final_response": None}
+            return {
+                "request_id": request_id,
+                "routing_target": "rejected",
+                "routing_reason": reason,
+                "approval_status": "not_required",
+                "final_response": None,
+            }
 
         # Deterministic gate first: cheap, and cannot be talked out of.
         if not query:
@@ -116,15 +138,20 @@ def build_graph(deps: GraphDependencies, checkpointer: BaseCheckpointSaver) -> C
         if len(query) > settings.max_query_chars:
             return reject(f"query exceeds {settings.max_query_chars} characters")
 
-        decision = RouteDecision(target="investigator", reason="no router model configured")
+        decision = RouteDecision(
+            target="investigator", reason="no router model configured"
+        )
         if deps.router_llm is not None:
             try:
                 decision = invoke_structured(
-                    deps.router_llm, RouteDecision,
+                    deps.router_llm,
+                    RouteDecision,
                     [SystemMessage(content=ROUTER_PROMPT), HumanMessage(content=query)],
-                    max_attempts=2, config=config,
+                    max_attempts=2,
+                    config=config,
                 )
-            except Exception as exc:  # fail closed: an unvalidated request never reaches the agent
+            # Fail closed: whatever goes wrong, an unvalidated request never reaches the agent.
+            except Exception as exc:  # pylint: disable=broad-exception-caught
                 if isinstance(exc, GraphBubbleUp):
                     raise
                 return reject(f"router unavailable ({type(exc).__name__})")
@@ -140,47 +167,87 @@ def build_graph(deps: GraphDependencies, checkpointer: BaseCheckpointSaver) -> C
                 max_sensitivity=clearance,  # from the caller's identity, not the model
             ),
         )
-        return {"request_id": request_id, "routing_target": "investigator", "routing_reason": decision.reason,
-                "investigation_scope": scope.model_dump(mode="json"), "approval_status": "pending"}
+        return {
+            "request_id": request_id,
+            "routing_target": "investigator",
+            "routing_reason": decision.reason,
+            "investigation_scope": scope.model_dump(mode="json"),
+            "approval_status": "pending",
+        }
 
-    # ------------------------------------------------------------------ Node 2
+    return router
+
+
+def _investigator_node(deps: GraphDependencies) -> Callable[..., dict[str, Any]]:
+    """Node 2: run the Strands agent inside a checkpointed, retried task."""
+    settings = deps.settings
+
     # The @task boundary checkpoints the agent's result: if the run is resumed
     # or replayed, LangGraph returns the stored output instead of re-running
     # the (expensive, non-deterministic) agent. Transient vLLM/Neo4j failures
     # retry the whole investigation; its tools are read-only, so that is safe.
-    @task(name="strands_investigation", retry_policy=RetryPolicy(max_attempts=2, retry_on=is_transient))
-    def strands_investigation(user_query: str, request_id: str, scope: dict[str, Any]) -> dict[str, Any]:
+    @task(
+        name="strands_investigation",
+        retry_policy=RetryPolicy(max_attempts=2, retry_on=is_transient),
+    )
+    def strands_investigation(
+        user_query: str, request_id: str, scope: dict[str, Any]
+    ) -> dict[str, Any]:
         # LangGraph runs tasks with the caller's contextvars, so Strands'
         # `invoke_agent` span becomes a child of the investigator node span.
         # ===== HANDOFF: LangGraph yields control to the Strands agent here =====
         output = deps.investigator.investigate(
-            user_query, request_id=request_id, scope=InvestigationScope.model_validate(scope)
+            user_query,
+            request_id=request_id,
+            scope=InvestigationScope.model_validate(scope),
         )
         # ===== Strands returns control: autonomous loop finished =====
         return output.model_dump(mode="json")
 
-    def investigator(state: GraphState, config: RunnableConfig) -> dict[str, Any]:
+    # LangGraph passes the run config by this parameter name, used or not.
+    def investigator(  # pylint: disable=unused-argument
+        state: GraphState, config: RunnableConfig
+    ) -> dict[str, Any]:
         try:
             output = strands_investigation(
-                state["user_query"], state["request_id"], state.get("investigation_scope") or {}
+                state["user_query"],
+                state["request_id"],
+                state.get("investigation_scope") or {},
             ).result()
         except GraphBubbleUp:
             raise
         except TimeoutError:
-            output = AgentOutput(error=f"investigation exceeded {settings.agent_timeout_s}s").model_dump(mode="json")
-        except Exception as exc:  # recorded for audit; compliance auto-rejects
-            output = AgentOutput(error=f"{type(exc).__name__}: {exc}"[:500]).model_dump(mode="json")
+            output = AgentOutput(
+                error=f"investigation exceeded {settings.agent_timeout_s}s"
+            ).model_dump(mode="json")
+        # Any agent failure is recorded for audit; compliance then rejects the run.
+        except Exception as exc:  # pylint: disable=broad-exception-caught
+            output = AgentOutput(error=f"{type(exc).__name__}: {exc}"[:500]).model_dump(
+                mode="json"
+            )
         return {"agent_outputs": [output]}
 
-    # ------------------------------------------------------------------ Node 3
-    def compliance(state: GraphState, config: RunnableConfig) -> dict[str, Any]:
+    return investigator
+
+
+def _compliance_node(deps: GraphDependencies) -> Callable[..., dict[str, Any]]:
+    """Node 3: check the draft and pause for a person's decision."""
+
+    # LangGraph passes the run config by this parameter name, used or not.
+    def compliance(  # pylint: disable=unused-argument
+        state: GraphState, config: RunnableConfig
+    ) -> dict[str, Any]:
         # Everything before interrupt() re-runs on resume: keep it pure.
         outputs = state.get("agent_outputs") or []
         latest = AgentOutput.model_validate(outputs[-1]) if outputs else None
         report = run_compliance_checks(latest, deps.detector)
         if latest is None or latest.error or not latest.answer:
-            return {"approval_status": "rejected", "compliance_report": report.as_state(), "final_response": None,
-                    "review": {"reviewer": "system", "comment": "no releasable output"}}
+            return {
+                "approval_status": "rejected",
+                "compliance_report": report.as_state(),
+                "final_response": None,
+                "review": {"reviewer": "system", "comment": "no releasable output"},
+            }
 
         request = {
             "request_id": state.get("request_id"),
@@ -196,10 +263,20 @@ def build_graph(deps: GraphDependencies, checkpointer: BaseCheckpointSaver) -> C
             try:
                 decision = ReviewDecision.model_validate(raw)
             except ValidationError as exc:
-                request = {**request, "error": exc.errors(include_url=False, include_input=False)}
+                request = {
+                    **request,
+                    "error": exc.errors(include_url=False, include_input=False),
+                }
                 continue
-            if decision.approval_status == "approved" and report.blocking and not decision.acknowledged_findings:
-                request = {**request, "error": "blocking findings: set acknowledged_findings=true to approve"}
+            if (
+                decision.approval_status == "approved"
+                and report.blocking
+                and not decision.acknowledged_findings
+            ):
+                request = {
+                    **request,
+                    "error": "blocking findings: set acknowledged_findings=true to approve",
+                }
                 continue
             break
 
@@ -211,26 +288,41 @@ def build_graph(deps: GraphDependencies, checkpointer: BaseCheckpointSaver) -> C
             "final_response": latest.answer if approved else None,
         }
 
+    return compliance
+
+
+def build_graph(
+    deps: GraphDependencies, checkpointer: BaseCheckpointSaver
+) -> CompiledStateGraph:
+    """Compile the router -> investigator -> compliance workflow with a checkpointer."""
     builder = StateGraph(GraphState)
-    builder.add_node("router", traced_node("router", router))
-    builder.add_node("investigator", traced_node("investigator", investigator))
-    builder.add_node("compliance", traced_node("compliance", compliance))
+    builder.add_node("router", traced_node("router", _router_node(deps)))
+    builder.add_node(
+        "investigator", traced_node("investigator", _investigator_node(deps))
+    )
+    builder.add_node("compliance", traced_node("compliance", _compliance_node(deps)))
     builder.add_edge(START, "router")
-    builder.add_conditional_edges("router", lambda s: s["routing_target"],
-                                  {"investigator": "investigator", "rejected": END})
+    builder.add_conditional_edges(
+        "router",
+        lambda s: s["routing_target"],
+        {"investigator": "investigator", "rejected": END},
+    )
     builder.add_edge("investigator", "compliance")
     builder.add_edge("compliance", END)
     return builder.compile(checkpointer=checkpointer, name="nexo-investigation")
 
 
-class _DiagramOnly:
+class _DiagramOnly:  # pylint: disable=too-few-public-methods  # stands in for InvestigatorRunner
     def investigate(self, *args: Any, **kwargs: Any) -> AgentOutput:
+        """Always fail: this graph is only for drawing."""
         raise RuntimeError("diagram-only graph: not runnable")
 
 
 def workflow_mermaid() -> str:
     """Mermaid diagram of the compiled workflow; needs no models or databases."""
-    from langgraph.checkpoint.memory import InMemorySaver
-
-    deps = GraphDependencies(settings=Settings(_env_file=None), investigator=_DiagramOnly(), detector=NoopDetector())
+    deps = GraphDependencies(
+        settings=Settings(_env_file=None),
+        investigator=_DiagramOnly(),
+        detector=NoopDetector(),
+    )
     return build_graph(deps, InMemorySaver()).get_graph().draw_mermaid().strip()

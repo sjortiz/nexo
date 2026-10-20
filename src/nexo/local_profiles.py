@@ -29,12 +29,18 @@ import re
 import sys
 from dataclasses import asdict, dataclass
 
-APPLE_RE = re.compile(r"^m(?P<generation>[1-9])(?:-(?P<variant>pro|max|ultra))?-(?P<memory>\d{1,3})$")
+APPLE_RE = re.compile(
+    r"^m(?P<generation>[1-9])(?:-(?P<variant>pro|max|ultra))?-(?P<memory>\d{1,3})$"
+)
 ACCELERATOR_RE = re.compile(r"^(?P<kind>gpu|cpu)-(?P<memory>\d{1,4})$")
 
 AGENT_ROLES = ("agent", "extraction")
 LIGHT_ROLES = ("router", "judge", "embedding")
-ROLE_SETS = {"single": AGENT_ROLES + LIGHT_ROLES, "heavy": AGENT_ROLES, "light": LIGHT_ROLES}
+ROLE_SETS = {
+    "single": AGENT_ROLES + LIGHT_ROLES,
+    "heavy": AGENT_ROLES,
+    "light": LIGHT_ROLES,
+}
 
 # Models that reason before answering; their JSON roles get reasoning_effort=none
 # because the schema is only enforced after the reasoning section.
@@ -63,35 +69,82 @@ SMALL, MID, LARGE, ROUTER, JUDGE, EMBED = (
 # and parallel requests. A single Mac reuses its chat model for routing and skips
 # the judge where memory is tight; enable one explicitly with JUDGE_MODEL.
 TIERS: dict[int, dict] = {
-    16: {"context_length": 8192, "num_parallel": 1,
-         "single": {"agent": SMALL, "extraction": SMALL, "router": SMALL, "judge": None, "embedding": EMBED},
-         "heavy": {"agent": SMALL, "extraction": SMALL},
-         "light": {"router": ROUTER, "judge": None, "embedding": EMBED}},
-    24: {"context_length": 16384, "num_parallel": 1,
-         "single": {"agent": SMALL, "extraction": SMALL, "router": SMALL, "judge": None, "embedding": EMBED},
-         "heavy": {"agent": SMALL, "extraction": SMALL},
-         "light": {"router": ROUTER, "judge": JUDGE, "embedding": EMBED}},
-    32: {"context_length": 16384, "num_parallel": 1,
-         "single": {"agent": MID, "extraction": MID, "router": MID, "judge": None, "embedding": EMBED},
-         "heavy": {"agent": MID, "extraction": MID},
-         "light": {"router": ROUTER, "judge": JUDGE, "embedding": EMBED}},
-    48: {"context_length": 32768, "num_parallel": 1,
-         "single": {"agent": MID, "extraction": MID, "router": ROUTER, "judge": JUDGE, "embedding": EMBED},
-         "heavy": {"agent": MID, "extraction": MID},
-         "light": {"router": ROUTER, "judge": JUDGE, "embedding": EMBED}},
-    64: {"context_length": 32768, "num_parallel": 2,
-         "single": {"agent": LARGE, "extraction": LARGE, "router": ROUTER, "judge": JUDGE, "embedding": EMBED},
-         "heavy": {"agent": LARGE, "extraction": LARGE},
-         "light": {"router": ROUTER, "judge": JUDGE, "embedding": EMBED}},
+    16: {
+        "context_length": 8192,
+        "num_parallel": 1,
+        "single": {
+            "agent": SMALL,
+            "extraction": SMALL,
+            "router": SMALL,
+            "judge": None,
+            "embedding": EMBED,
+        },
+        "heavy": {"agent": SMALL, "extraction": SMALL},
+        "light": {"router": ROUTER, "judge": None, "embedding": EMBED},
+    },
+    24: {
+        "context_length": 16384,
+        "num_parallel": 1,
+        "single": {
+            "agent": SMALL,
+            "extraction": SMALL,
+            "router": SMALL,
+            "judge": None,
+            "embedding": EMBED,
+        },
+        "heavy": {"agent": SMALL, "extraction": SMALL},
+        "light": {"router": ROUTER, "judge": JUDGE, "embedding": EMBED},
+    },
+    32: {
+        "context_length": 16384,
+        "num_parallel": 1,
+        "single": {
+            "agent": MID,
+            "extraction": MID,
+            "router": MID,
+            "judge": None,
+            "embedding": EMBED,
+        },
+        "heavy": {"agent": MID, "extraction": MID},
+        "light": {"router": ROUTER, "judge": JUDGE, "embedding": EMBED},
+    },
+    48: {
+        "context_length": 32768,
+        "num_parallel": 1,
+        "single": {
+            "agent": MID,
+            "extraction": MID,
+            "router": ROUTER,
+            "judge": JUDGE,
+            "embedding": EMBED,
+        },
+        "heavy": {"agent": MID, "extraction": MID},
+        "light": {"router": ROUTER, "judge": JUDGE, "embedding": EMBED},
+    },
+    64: {
+        "context_length": 32768,
+        "num_parallel": 2,
+        "single": {
+            "agent": LARGE,
+            "extraction": LARGE,
+            "router": ROUTER,
+            "judge": JUDGE,
+            "embedding": EMBED,
+        },
+        "heavy": {"agent": LARGE, "extraction": LARGE},
+        "light": {"router": ROUTER, "judge": JUDGE, "embedding": EMBED},
+    },
 }
 
 
 class ProfileError(ValueError):
-    pass
+    """An invalid profile name or role set."""
 
 
 @dataclass(frozen=True)
 class HostProfile:
+    """A parsed host profile: chip, accelerator kind, memory and catalog tier."""
+
     name: str
     chip: str  # "M1 Max", "GPU", "CPU"
     kind: str  # apple | gpu | cpu
@@ -111,41 +164,57 @@ class Plan:
 
     @property
     def models(self) -> list[str]:
+        """Distinct models this plan serves, sorted."""
         return sorted({m for m in self.roles.values() if m})
 
     @property
     def weights_gb(self) -> float:
+        """Total size of the plan's model weights in GB."""
         return round(sum(MODEL_SIZES_GB[m] for m in self.models), 1)
 
 
 def parse_profile(name: str) -> HostProfile:
+    """Parse a name like m1-max-64 or gpu-24 and pick the largest tier that fits."""
     normalized = name.strip().lower()
     if match := APPLE_RE.fullmatch(normalized):
         kind = "apple"
-        chip = f"M{match['generation']}" + (f" {match['variant'].capitalize()}" if match["variant"] else "")
+        chip = f"M{match['generation']}" + (
+            f" {match['variant'].capitalize()}" if match["variant"] else ""
+        )
     elif match := ACCELERATOR_RE.fullmatch(normalized):
         kind = match["kind"]
         chip = kind.upper()
     else:
-        raise ProfileError(f"invalid profile {name!r}: expected e.g. m1-max-64, m5-pro-24, gpu-24, cpu-64")
+        raise ProfileError(
+            f"invalid profile {name!r}: expected e.g. m1-max-64, m5-pro-24, gpu-24, cpu-64"
+        )
     memory = int(match["memory"])
     eligible = [tier for tier in TIERS if tier <= memory]
     if not eligible:
         unit = {"apple": "unified memory", "gpu": "VRAM", "cpu": "RAM"}[kind]
         raise ProfileError(f"{name}: at least {min(TIERS)} GB of {unit} is required")
-    return HostProfile(name=normalized, chip=chip, kind=kind, memory_gb=memory, tier_gb=max(eligible))
+    return HostProfile(
+        name=normalized, chip=chip, kind=kind, memory_gb=memory, tier_gb=max(eligible)
+    )
 
 
 def plan(profile: str, role_set: str = "single") -> Plan:
+    """Return the models and Ollama settings for a host profile and role set."""
     if role_set not in ROLE_SETS:
         raise ProfileError(f"role set must be one of {sorted(ROLE_SETS)}")
     host = parse_profile(profile)
     tier = TIERS[host.tier_gb]
-    return Plan(profile=host, role_set=role_set, roles=dict(tier[role_set]),
-                context_length=tier["context_length"], num_parallel=tier["num_parallel"])
+    return Plan(
+        profile=host,
+        role_set=role_set,
+        roles=dict(tier[role_set]),
+        context_length=tier["context_length"],
+        num_parallel=tier["num_parallel"],
+    )
 
 
 def needs_reasoning_off(model: str | None) -> bool:
+    """Whether the model thinks before answering and needs reasoning off for JSON roles."""
     return model in THINKING_MODELS
 
 
@@ -154,7 +223,9 @@ def _main(argv: list[str] | None = None) -> int:
     sub = parser.add_subparsers(dest="command", required=True)
     show = sub.add_parser("plan", help="models and Ollama settings for one Mac")
     show.add_argument("profile")
-    show.add_argument("role_set", nargs="?", default="single", choices=sorted(ROLE_SETS))
+    show.add_argument(
+        "role_set", nargs="?", default="single", choices=sorted(ROLE_SETS)
+    )
     show.add_argument("--format", choices=["json", "shell"], default="json")
     sub.add_parser("tiers", help="the whole catalog as JSON")
     args = parser.parse_args(argv)
@@ -168,15 +239,26 @@ def _main(argv: list[str] | None = None) -> int:
         sys.stderr.write(f"{exc}\n")
         return 2
     if args.format == "shell":  # consumed by deploy/local/ollama-setup.sh
-        sys.stdout.write(f"MODELS='{' '.join(result.models)}'\n"
-                         f"EMBEDDING_MODELS='{result.roles.get('embedding') or ''}'\n"
-                         f"CONTEXT_LENGTH={result.context_length}\n"
-                         f"NUM_PARALLEL={result.num_parallel}\n"
-                         f"MAX_LOADED_MODELS={max(1, len(result.models))}\n"
-                         f"WEIGHTS_GB={result.weights_gb}\n")
+        sys.stdout.write(
+            f"MODELS='{' '.join(result.models)}'\n"
+            f"EMBEDDING_MODELS='{result.roles.get('embedding') or ''}'\n"
+            f"CONTEXT_LENGTH={result.context_length}\n"
+            f"NUM_PARALLEL={result.num_parallel}\n"
+            f"MAX_LOADED_MODELS={max(1, len(result.models))}\n"
+            f"WEIGHTS_GB={result.weights_gb}\n"
+        )
     else:
-        sys.stdout.write(json.dumps({**asdict(result), "models": result.models,
-                                     "weights_gb": result.weights_gb}, indent=2) + "\n")
+        sys.stdout.write(
+            json.dumps(
+                {
+                    **asdict(result),
+                    "models": result.models,
+                    "weights_gb": result.weights_gb,
+                },
+                indent=2,
+            )
+            + "\n"
+        )
     return 0
 
 

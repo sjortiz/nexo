@@ -13,7 +13,10 @@ import re
 from collections.abc import Mapping
 from datetime import UTC, datetime
 
-from langchain_text_splitters import MarkdownHeaderTextSplitter, RecursiveCharacterTextSplitter
+from langchain_text_splitters import (
+    MarkdownHeaderTextSplitter,
+    RecursiveCharacterTextSplitter,
+)
 
 from nexo.storage.schemas import ChunkRecord, DocumentMetadata
 
@@ -34,13 +37,21 @@ def flatten_markdown_tables(text: str) -> tuple[str, int]:
     tables = 0
     i = 0
     while i < len(lines):
-        if "|" in lines[i] and i + 1 < len(lines) and _TABLE_SEPARATOR.match(lines[i + 1]):
+        if (
+            "|" in lines[i]
+            and i + 1 < len(lines)
+            and _TABLE_SEPARATOR.match(lines[i + 1])
+        ):
             headers = _cells(lines[i])
             i += 2
             row_number = 0
             while i < len(lines) and "|" in lines[i] and lines[i].strip():
                 row_number += 1
-                pairs = [f"{h}={v}" for h, v in zip(headers, _cells(lines[i]), strict=False) if v]
+                pairs = [
+                    f"{h}={v}"
+                    for h, v in zip(headers, _cells(lines[i]), strict=False)
+                    if v
+                ]
                 out.append(f"- Row {row_number}: " + "; ".join(pairs))
                 i += 1
             tables += 1
@@ -51,27 +62,45 @@ def flatten_markdown_tables(text: str) -> tuple[str, int]:
 
 
 def glossary_notes(text: str, glossary: Mapping[str, str]) -> str:
-    used = [f"{term} = {meaning}" for term, meaning in glossary.items() if re.search(rf"\b{re.escape(term)}\b", text)]
+    """Definitions of the glossary terms the text uses, or an empty string."""
+    used = [
+        f"{term} = {meaning}"
+        for term, meaning in glossary.items()
+        if re.search(rf"\b{re.escape(term)}\b", text)
+    ]
     return ("Definitions: " + "; ".join(used)) if used else ""
 
 
 def lint_document(text: str, *, max_section_chars: int = 6000) -> list[str]:
+    """Warn about document traits that hurt chunking and retrieval."""
     warnings: list[str] = []
     if not _HEADING.search(text):
-        warnings.append("no headings: chunks fall back to size-based splits and lose section context")
+        warnings.append(
+            "no headings: chunks fall back to size-based splits and lose section context"
+        )
     if _IMAGE_OR_LINK.search(text):
-        warnings.append("images/links present: describe them in text; URLs consume retrieval tokens")
+        warnings.append(
+            "images/links present: describe them in text; URLs consume retrieval tokens"
+        )
     for section in re.split(r"^#{1,6}\s.*$", text, flags=re.MULTILINE):
         if len(section) > max_section_chars:
-            warnings.append(f"section over {max_section_chars} chars: split into self-contained sections")
+            warnings.append(
+                f"section over {max_section_chars} chars: split into self-contained sections"
+            )
             break
     return warnings
 
 
-def split_document(text: str, metadata: DocumentMetadata, *, chunk_size: int, chunk_overlap: int) -> list[ChunkRecord]:
+def split_document(
+    text: str, metadata: DocumentMetadata, *, chunk_size: int, chunk_overlap: int
+) -> list[ChunkRecord]:
     """Heading-aware split, then size-bounded split within each section."""
-    sections = MarkdownHeaderTextSplitter(headers_to_split_on=_HEADERS, strip_headers=True).split_text(text)
-    sizer = RecursiveCharacterTextSplitter(chunk_size=chunk_size, chunk_overlap=chunk_overlap)
+    sections = MarkdownHeaderTextSplitter(
+        headers_to_split_on=_HEADERS, strip_headers=True
+    ).split_text(text)
+    sizer = RecursiveCharacterTextSplitter(
+        chunk_size=chunk_size, chunk_overlap=chunk_overlap
+    )
     ingested_at = datetime.now(UTC)
     records: list[ChunkRecord] = []
     for section in sections:

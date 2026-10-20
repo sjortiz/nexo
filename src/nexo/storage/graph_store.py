@@ -6,7 +6,8 @@ Neo4j's LLM Graph Builder):
     (:Document {source_id, title, doc_type, source_uri, effective_date, sensitivity})
     (:Document)-[:FIRST_CHUNK]->(:Chunk)-[:NEXT_CHUNK]->(:Chunk)-[:PART_OF]->(:Document)
     (:Entity:<EntityType>[:PII][:PHI])-[:MENTIONED_IN {surface, resolution}]->(:Chunk)
-    (:Entity)-[:<RELATION> {chunk_id, chunk_ids, evidence, certainty, valid_at, extracted_as}]->(:Entity)
+    (:Entity)-[:<RELATION> {chunk_id, chunk_ids, evidence, certainty, valid_at,
+                            extracted_as}]->(:Entity)
 
 `chunk_id` is the chunk where an entity/edge was first extracted;
 `chunk_ids` accumulates every supporting chunk across documents. Derived
@@ -27,28 +28,53 @@ from dataclasses import dataclass
 from typing import Any, LiteralString, cast
 from urllib.parse import urlparse
 
-from neo4j import READ_ACCESS, WRITE_ACCESS, Driver, GraphDatabase, ManagedTransaction, unit_of_work
-from neo4j.exceptions import ServiceUnavailable, SessionExpired
+from neo4j import (
+    READ_ACCESS,
+    WRITE_ACCESS,
+    Driver,
+    GraphDatabase,
+    ManagedTransaction,
+    unit_of_work,
+)
+from neo4j.exceptions import DriverError, Neo4jError, ServiceUnavailable, SessionExpired
 from opentelemetry.trace import SpanKind
-from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential_jitter
+from tenacity import (
+    retry,
+    retry_if_exception_type,
+    stop_after_attempt,
+    wait_exponential_jitter,
+)
 
 from nexo.config import Settings
 from nexo.storage.ontology import FALLBACK_RELATION
 from nexo.storage.resolution import Candidate
-from nexo.storage.schemas import RELATION_RE, ChunkRecord, DocumentMetadata, EntityType, GroundedTriple
+from nexo.storage.schemas import (
+    RELATION_RE,
+    ChunkRecord,
+    DocumentMetadata,
+    EntityType,
+    GroundedTriple,
+)
 from nexo.telemetry import traced_span
 
-DATA_MODEL = """\
+DATA_MODEL = (
+    """\
 (:Document {source_id, title, doc_type, source_uri, effective_date, sensitivity})
 (:Document)-[:FIRST_CHUNK]->(:Chunk {chunk_id, source_id, ordinal, section_path, sensitivity})
 (:Chunk)-[:NEXT_CHUNK]->(:Chunk), (:Chunk)-[:PART_OF]->(:Document)
-(:Entity:<EntityType>[:PII][:PHI] {key, name, aliases, type, description, chunk_id, chunk_ids, source_ids,
+(:Entity:<EntityType>[:PII][:PHI] {key, name, aliases, type, description, \
+chunk_id, chunk_ids, source_ids,
                                   sensitivity_rank, proposed_codes_json})
 (:Entity)-[:MENTIONED_IN {surface, resolution}]->(:Chunk)
-(:Entity)-[:<RELATION> {chunk_id, chunk_ids, evidence, certainty, valid_at, extracted_as, sensitivity_rank}]->(:Entity)
-(:Entity)-[:RELATED_TO {predicate, ...same properties}]->(:Entity)   # predicate outside the ontology
-EntityType is one of: """ + ", ".join(t.value for t in EntityType) + """
+(:Entity)-[:<RELATION> {chunk_id, chunk_ids, evidence, certainty, valid_at, extracted_as, \
+sensitivity_rank}]->(:Entity)
+(:Entity)-[:RELATED_TO {predicate, ...same properties}]->(:Entity)   \
+# predicate outside the ontology
+EntityType is one of: """
+    + ", ".join(t.value for t in EntityType)
+    + """
 sensitivity_rank (least sensitive supporting source): 0=public 1=internal 2=pii 3=phi"""
+)
 
 # Connection drops surface as ServiceUnavailable/SessionExpired. Transient
 # server errors inside managed transactions are already retried by the driver.
@@ -62,7 +88,8 @@ _connection_retry = retry(
 _SCHEMA_STATEMENTS: tuple[LiteralString, ...] = (
     "CREATE CONSTRAINT entity_key IF NOT EXISTS FOR (e:Entity) REQUIRE e.key IS UNIQUE",
     "CREATE CONSTRAINT chunk_id IF NOT EXISTS FOR (c:Chunk) REQUIRE c.chunk_id IS UNIQUE",
-    "CREATE CONSTRAINT document_source_id IF NOT EXISTS FOR (d:Document) REQUIRE d.source_id IS UNIQUE",
+    "CREATE CONSTRAINT document_source_id IF NOT EXISTS FOR (d:Document) "
+    "REQUIRE d.source_id IS UNIQUE",
     "CREATE INDEX entity_chunk_id IF NOT EXISTS FOR (e:Entity) ON (e.chunk_id)",
     "CREATE INDEX entity_type IF NOT EXISTS FOR (e:Entity) ON (e.type)",
     # Text index: serves CONTAINS lookups for agent queries and resolution blocking.
@@ -72,23 +99,41 @@ _SCHEMA_STATEMENTS: tuple[LiteralString, ...] = (
 
 @dataclass(frozen=True)
 class ReadResult:
+    """Rows of a read query, and whether they were cut at the row limit."""
+
     rows: list[dict[str, Any]]
     truncated: bool
 
 
+@dataclass(frozen=True)
+class QueryLimits:
+    """Bounds on agent-authored queries, and whether spans may record their text."""
+
+    timeout_s: float
+    max_rows: int
+    capture_text: bool = False
+
+
 class GraphStore:
-    def __init__(self, driver: Driver, *, database: str, query_timeout_s: float, max_rows: int,
-                 capture_query_text: bool = False, uri: str | None = None) -> None:
+    """Reads and writes the lexical and domain graph in Neo4j."""
+
+    def __init__(
+        self,
+        driver: Driver,
+        *,
+        database: str,
+        limits: QueryLimits,
+        uri: str | None = None,
+    ) -> None:
         self._driver = driver
         self._database = database
-        self._query_timeout_s = query_timeout_s
-        self._max_rows = max_rows
-        self._capture_query_text = capture_query_text
+        self._limits = limits
         address = urlparse(uri or "")
         self._server = {"server.address": address.hostname, "server.port": address.port}
 
     @classmethod
     def from_settings(cls, settings: Settings, *, read_only: bool) -> GraphStore:
+        """Connect with the configured driver, using the read-only user when asked."""
         user, password = settings.neo4j_user, settings.neo4j_password
         if read_only and settings.neo4j_read_user and settings.neo4j_read_password:
             user, password = settings.neo4j_read_user, settings.neo4j_read_password
@@ -101,38 +146,53 @@ class GraphStore:
         return cls(
             driver,
             database=settings.neo4j_database,
-            query_timeout_s=settings.neo4j_query_timeout_s,
-            max_rows=settings.neo4j_max_rows,
-            capture_query_text=settings.capture_content,
+            limits=QueryLimits(
+                timeout_s=settings.neo4j_query_timeout_s,
+                max_rows=settings.neo4j_max_rows,
+                capture_text=settings.capture_content,
+            ),
             uri=settings.neo4j_uri,
         )
 
     def close(self) -> None:
+        """Close the driver and its connections."""
         self._driver.close()
 
     def _span(self, query_summary: str, query_text: str | None = None):
         """CLIENT span per the OTEL database conventions (db.system.name=neo4j)."""
-        attributes = {"db.system.name": "neo4j", "db.namespace": self._database, "db.query.summary": query_summary,
-                      **self._server}
-        if query_text is not None and self._capture_query_text:
+        attributes = {
+            "db.system.name": "neo4j",
+            "db.namespace": self._database,
+            "db.query.summary": query_summary,
+            **self._server,
+        }
+        if query_text is not None and self._limits.capture_text:
             # Agent-authored Cypher is not parameterized and may carry names: opt-in only.
             attributes["db.query.text"] = query_text[:4000]
         return traced_span(query_summary, attributes, kind=SpanKind.CLIENT)
 
     @_connection_retry
     def verify(self) -> None:
+        """Fail fast if the database is unreachable."""
         self._driver.verify_connectivity()
 
     @_connection_retry
     def ensure_schema(self) -> None:
-        with self._driver.session(database=self._database, default_access_mode=WRITE_ACCESS) as session:
+        """Create the constraints and indexes the graph relies on, if missing."""
+        with self._driver.session(
+            database=self._database, default_access_mode=WRITE_ACCESS
+        ) as session:
             for statement in _SCHEMA_STATEMENTS:
                 session.run(statement).consume()
 
     # --- writes (ingestion) ------------------------------------------------------
     @_connection_retry
-    def replace_source(self, document: DocumentMetadata, chunks: Sequence[ChunkRecord],
-                       triples: Sequence[GroundedTriple]) -> int:
+    def replace_source(
+        self,
+        document: DocumentMetadata,
+        chunks: Sequence[ChunkRecord],
+        triples: Sequence[GroundedTriple],
+    ) -> int:
         """Swap a document's lexical and domain subgraph in one transaction.
 
         Detaches the previous version's provenance (dropping what only it
@@ -148,18 +208,30 @@ class GraphStore:
                 _write_domain(tx, *plan)
             _refresh_derived(tx, sorted(affected | {row["key"] for row in plan[1]}))
 
-        with self._span("replace_source"), \
-                self._driver.session(database=self._database, default_access_mode=WRITE_ACCESS) as session:
+        with (
+            self._span("replace_source"),
+            self._driver.session(
+                database=self._database, default_access_mode=WRITE_ACCESS
+            ) as session,
+        ):
             session.execute_write(work)
         return len(triples)
 
     @_connection_retry
-    def find_candidates(self, entity_type: EntityType, tokens: Sequence[str], limit: int) -> list[Candidate]:
+    def find_candidates(
+        self, entity_type: EntityType, tokens: Sequence[str], limit: int
+    ) -> list[Candidate]:
         """Resolution blocking: same-type entities whose name or alias contains a token."""
-        with self._span("find_candidates"), \
-                self._driver.session(database=self._database, default_access_mode=READ_ACCESS) as session:
-            records = session.execute_read(lambda tx: list(tx.run(
-                """
+        with (
+            self._span("find_candidates"),
+            self._driver.session(
+                database=self._database, default_access_mode=READ_ACCESS
+            ) as session,
+        ):
+            records = session.execute_read(
+                lambda tx: list(
+                    tx.run(
+                        """
                 MATCH (e:Entity) WHERE e.type = $type
                   AND any(t IN $tokens WHERE toLower(e.name) CONTAINS t
                           OR any(a IN coalesce(e.aliases, []) WHERE toLower(a) CONTAINS t))
@@ -167,21 +239,27 @@ class GraphStore:
                        coalesce(e.description, '') AS description
                 LIMIT $limit
                 """,
-                type=entity_type.value, tokens=list(tokens), limit=limit,
-            )))
+                        type=entity_type.value,
+                        tokens=list(tokens),
+                        limit=limit,
+                    )
+                )
+            )
         return [Candidate(**record.data()) for record in records]
 
     # --- reads (agent tool) ----------------------------------------------------
     @_connection_retry
-    def run_read_query(self, cypher: str, parameters: dict[str, Any] | None = None) -> ReadResult:
+    def run_read_query(
+        self, cypher: str, parameters: dict[str, Any] | None = None
+    ) -> ReadResult:
         """Run agent-authored Cypher in a READ transaction with timeout and row cap.
 
         READ access mode makes the server reject writes; pair it with a
         reader-role account (Enterprise) for least privilege.
         """
-        max_rows = self._max_rows
+        max_rows = self._limits.max_rows
 
-        @unit_of_work(timeout=self._query_timeout_s)
+        @unit_of_work(timeout=self._limits.timeout_s)
         def work(tx: ManagedTransaction) -> ReadResult:
             result = tx.run(cast(LiteralString, cypher), parameters or {})
             rows: list[dict[str, Any]] = []
@@ -191,8 +269,12 @@ class GraphStore:
                 rows.append(record.data())
             return ReadResult(rows, truncated=False)
 
-        with self._span("agent_query", cypher), \
-                self._driver.session(database=self._database, default_access_mode=READ_ACCESS) as session:
+        with (
+            self._span("agent_query", cypher),
+            self._driver.session(
+                database=self._database, default_access_mode=READ_ACCESS
+            ) as session,
+        ):
             return session.execute_read(work)
 
     def describe_schema(self) -> str:
@@ -203,12 +285,18 @@ class GraphStore:
                 "RETURN a.type AS source, type(r) AS relation, b.type AS target, count(*) AS n "
                 "ORDER BY n DESC LIMIT 60"
             ).rows
-        except Exception:  # schema hints are best effort; the agent can still explore
+        except (Neo4jError, DriverError):  # best effort; the agent can still explore
             return DATA_MODEL
         if not patterns:
             return DATA_MODEL
-        lines = [f"(:{p['source']})-[:{p['relation']}]->(:{p['target']})  x{p['n']}" for p in patterns]
-        return f"{DATA_MODEL}\n\nRelation patterns present (direction matters):\n" + "\n".join(lines)
+        lines = [
+            f"(:{p['source']})-[:{p['relation']}]->(:{p['target']})  x{p['n']}"
+            for p in patterns
+        ]
+        return (
+            f"{DATA_MODEL}\n\nRelation patterns present (direction matters):\n"
+            + "\n".join(lines)
+        )
 
 
 def _plan_writes(triples: Sequence[GroundedTriple]):
@@ -227,34 +315,51 @@ def _plan_writes(triples: Sequence[GroundedTriple]):
                     "description": ref.description,
                     "chunk_id": grounded.chunk_id,
                     "source_id": grounded.source_id,
-                    "codes": json.dumps({k.value: v for k, v in ref.proposed_codes.items()}, sort_keys=True),
+                    "codes": json.dumps(
+                        {k.value: v for k, v in ref.proposed_codes.items()},
+                        sort_keys=True,
+                    ),
                 },
             )
             row["description"] = row["description"] or ref.description
             for surface in {ref.name, *ref.aliases}:
-                mentions.setdefault((resolved.key, grounded.chunk_id, surface), {
-                    "key": resolved.key, "chunk_id": grounded.chunk_id, "surface": surface,
-                    "method": resolved.method.value if surface == ref.name else "stated_alias",
-                })
-        if not RELATION_RE.fullmatch(grounded.relation):  # defence in depth for the f-string below
+                mentions.setdefault(
+                    (resolved.key, grounded.chunk_id, surface),
+                    {
+                        "key": resolved.key,
+                        "chunk_id": grounded.chunk_id,
+                        "surface": surface,
+                        "method": (
+                            resolved.method.value
+                            if surface == ref.name
+                            else "stated_alias"
+                        ),
+                    },
+                )
+        # Defence in depth for the f-string below.
+        if not RELATION_RE.fullmatch(grounded.relation):
             raise ValueError(f"unsafe relationship type {grounded.relation!r}")
         t = grounded.triple
-        relations[grounded.relation].append({
-            "head_key": grounded.head.key,
-            "tail_key": grounded.tail.key,
-            "chunk_id": grounded.chunk_id,
-            "evidence": t.evidence,
-            "certainty": t.certainty.value,
-            "valid_at": t.valid_at.isoformat() if t.valid_at else None,
-            "predicate": grounded.original_relation or grounded.relation,
-        })
+        relations[grounded.relation].append(
+            {
+                "head_key": grounded.head.key,
+                "tail_key": grounded.tail.key,
+                "chunk_id": grounded.chunk_id,
+                "evidence": t.evidence,
+                "certainty": t.certainty.value,
+                "valid_at": t.valid_at.isoformat() if t.valid_at else None,
+                "predicate": grounded.original_relation or grounded.relation,
+            }
+        )
     by_label: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for row in entities.values():
         by_label[row["type"]].append(row)
     return by_label, list(mentions.values()), relations
 
 
-def _write_lexical(tx: ManagedTransaction, document: DocumentMetadata, chunks: Sequence[ChunkRecord]) -> None:
+def _write_lexical(
+    tx: ManagedTransaction, document: DocumentMetadata, chunks: Sequence[ChunkRecord]
+) -> None:
     tx.run(
         """
         MERGE (d:Document {source_id: $doc.source_id})
@@ -263,13 +368,20 @@ def _write_lexical(tx: ManagedTransaction, document: DocumentMetadata, chunks: S
         WITH d
         UNWIND $chunks AS row
         MERGE (c:Chunk {chunk_id: row.chunk_id})
-        SET c.source_id = $doc.source_id, c.ordinal = row.ordinal, c.section_path = row.section_path,
-            c.sensitivity = row.sensitivity
+        SET c.source_id = $doc.source_id, c.ordinal = row.ordinal,
+            c.section_path = row.section_path, c.sensitivity = row.sensitivity
         MERGE (c)-[:PART_OF]->(d)
         """,
         doc=document.model_dump(mode="json"),
-        chunks=[{"chunk_id": c.chunk_id, "ordinal": c.ordinal, "section_path": c.section_path,
-                 "sensitivity": c.sensitivity.value} for c in chunks],
+        chunks=[
+            {
+                "chunk_id": c.chunk_id,
+                "ordinal": c.ordinal,
+                "section_path": c.section_path,
+                "sensitivity": c.sensitivity.value,
+            }
+            for c in chunks
+        ],
     ).consume()
     ordered = sorted(chunks, key=lambda c: c.ordinal)
     tx.run(
@@ -281,8 +393,11 @@ def _write_lexical(tx: ManagedTransaction, document: DocumentMetadata, chunks: S
         MATCH (a:Chunk {chunk_id: pair[0]}), (b:Chunk {chunk_id: pair[1]})
         MERGE (a)-[:NEXT_CHUNK]->(b)
         """,
-        source_id=document.source_id, first=ordered[0].chunk_id,
-        pairs=[[a.chunk_id, b.chunk_id] for a, b in zip(ordered, ordered[1:], strict=False)],
+        source_id=document.source_id,
+        first=ordered[0].chunk_id,
+        pairs=[
+            [a.chunk_id, b.chunk_id] for a, b in zip(ordered, ordered[1:], strict=False)
+        ],
     ).consume()
 
 
@@ -370,13 +485,18 @@ def _delete_source(tx: ManagedTransaction, source_id: str) -> set[str]:
     return affected
 
 
-_RANK = "CASE c.sensitivity WHEN 'public' THEN 0 WHEN 'internal' THEN 1 WHEN 'pii' THEN 2 ELSE 3 END"
+_RANK = (
+    "CASE c.sensitivity WHEN 'public' THEN 0 WHEN 'internal' THEN 1 "
+    "WHEN 'pii' THEN 2 ELSE 3 END"
+)
 
 
 def _refresh_derived(tx: ManagedTransaction, keys: Sequence[str]) -> None:
     """Recompute aliases, sensitivity and labels of the given entities and their edges."""
     tx.run(
-        cast(LiteralString, f"""
+        cast(
+            LiteralString,
+            f"""
         UNWIND $keys AS key
         MATCH (e:Entity {{key: key}})
         WITH e, COLLECT {{ MATCH (e)-[:MENTIONED_IN]->(c:Chunk) RETURN DISTINCT {_RANK} }} AS ranks
@@ -384,24 +504,34 @@ def _refresh_derived(tx: ManagedTransaction, keys: Sequence[str]) -> None:
                 MATCH (e)-[m:MENTIONED_IN]->(:Chunk) WHERE m.surface <> e.name
                 RETURN DISTINCT m.surface AS surface ORDER BY surface
             }},
-            e.sensitivity_rank = reduce(least = 3, r IN ranks | CASE WHEN r < least THEN r ELSE least END)
+            e.sensitivity_rank = reduce(
+                least = 3, r IN ranks | CASE WHEN r < least THEN r ELSE least END
+            )
         // Sensitivity labels let Enterprise RBAC hide nodes per role,
         // e.g. DENY TRAVERSE ON GRAPH neo4j NODES PHI TO internal_reader.
         REMOVE e:PII:PHI
         WITH e
         FOREACH (_ IN CASE WHEN e.sensitivity_rank >= 2 THEN [1] ELSE [] END | SET e:PII)
         FOREACH (_ IN CASE WHEN e.sensitivity_rank >= 3 THEN [1] ELSE [] END | SET e:PHI)
-        """),
+        """,
+        ),
         keys=list(keys),
     ).consume()
     tx.run(
-        cast(LiteralString, f"""
+        cast(
+            LiteralString,
+            f"""
         UNWIND $keys AS key
         MATCH (:Entity {{key: key}})-[r]-(:Entity)
         WITH DISTINCT r
-        WITH r, COLLECT {{ MATCH (c:Chunk) WHERE c.chunk_id IN r.chunk_ids RETURN {_RANK} }} AS ranks
-        SET r.sensitivity_rank = reduce(least = 3, x IN ranks | CASE WHEN x < least THEN x ELSE least END)
-        """),
+        WITH r, COLLECT {{
+                MATCH (c:Chunk) WHERE c.chunk_id IN r.chunk_ids RETURN {_RANK}
+            }} AS ranks
+        SET r.sensitivity_rank = reduce(
+                least = 3, x IN ranks | CASE WHEN x < least THEN x ELSE least END
+            )
+        """,
+        ),
         keys=list(keys),
     ).consume()
 
@@ -413,13 +543,16 @@ _WRITE_KEYWORDS = re.compile(
 )
 # Procedure calls are blocked except read-only introspection; CALL { } and
 # CALL (vars) { } subqueries are allowed.
-_PROCEDURE_CALL = re.compile(r"\bCALL\s+(?![({])(?!db\.(?:labels|relationshipTypes|propertyKeys)\s*\()", re.IGNORECASE)
+_PROCEDURE_CALL = re.compile(
+    r"\bCALL\s+(?![({])(?!db\.(?:labels|relationshipTypes|propertyKeys)\s*\()",
+    re.IGNORECASE,
+)
 _STRING_LITERAL = re.compile(r"'(?:[^'\\]|\\.)*'|\"(?:[^\"\\]|\\.)*\"")
 _COMMENT = re.compile(r"//[^\n]*|/\*.*?\*/", re.DOTALL)
 
 
 class UnsafeCypherError(ValueError):
-    pass
+    """A query that is not a single read-only statement."""
 
 
 def validate_read_only_cypher(cypher: str, *, max_chars: int = 4000) -> str:
@@ -437,7 +570,11 @@ def validate_read_only_cypher(cypher: str, *, max_chars: int = 4000) -> str:
     if ";" in code:
         raise UnsafeCypherError("only one statement per call")
     if match := _WRITE_KEYWORDS.search(code):
-        raise UnsafeCypherError(f"read-only access: {match.group(0).upper()} is not allowed")
+        raise UnsafeCypherError(
+            f"read-only access: {match.group(0).upper()} is not allowed"
+        )
     if _PROCEDURE_CALL.search(code):
-        raise UnsafeCypherError("procedure calls are not allowed (subqueries and db.labels() etc. are)")
+        raise UnsafeCypherError(
+            "procedure calls are not allowed (subqueries and db.labels() etc. are)"
+        )
     return query

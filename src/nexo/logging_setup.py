@@ -20,7 +20,8 @@ from nexo.config import Settings
 _STANDARD_ATTRS = set(vars(logging.makeLogRecord({}))) | {"message", "asctime"}
 
 
-class TraceContextFilter(logging.Filter):
+# One public method is logging's interface.
+class TraceContextFilter(logging.Filter):  # pylint: disable=too-few-public-methods
     """Adds `trace_id` / `span_id` (hex, empty outside a span) to every record."""
 
     def filter(self, record: logging.LogRecord) -> bool:
@@ -31,6 +32,8 @@ class TraceContextFilter(logging.Filter):
 
 
 class TextFormatter(logging.Formatter):
+    """Human-readable lines with trace ids and any `result` payload as JSON."""
+
     def __init__(self) -> None:
         super().__init__("%(asctime)s %(levelname)s %(name)s %(message)s")
 
@@ -53,7 +56,13 @@ class JsonFormatter(logging.Formatter):
             "logger": record.name,
             "message": record.getMessage(),
         }
-        entry.update({k: v for k, v in vars(record).items() if k not in _STANDARD_ATTRS and v not in ("", None)})
+        entry.update(
+            {
+                k: v
+                for k, v in vars(record).items()
+                if k not in _STANDARD_ATTRS and v not in ("", None)
+            }
+        )
         if record.exc_info:
             entry["exception"] = self.formatException(record.exc_info)
         return json.dumps(entry, default=str)
@@ -63,7 +72,9 @@ def configure_logging(settings: Settings, stream=None) -> None:
     """One handler on stdout, or another stream (e.g. stderr when stdout carries MCP stdio)."""
     handler = logging.StreamHandler(stream or sys.stdout)
     handler.addFilter(TraceContextFilter())
-    handler.setFormatter(JsonFormatter() if settings.log_format == "json" else TextFormatter())
+    handler.setFormatter(
+        JsonFormatter() if settings.log_format == "json" else TextFormatter()
+    )
     root = logging.getLogger()
     root.handlers[:] = [handler]
     root.setLevel(settings.log_level.upper())

@@ -1,6 +1,7 @@
 # Bundle Update Log
 
 ## 2026-10-20
+* **Update**: Code follows pylint's defaults and black's formatting (ruff removed); `make lint` runs both ([Testing](operations/testing.md)).
 * **Update**: A `Makefile` covers setup, models, services, tests, the walkthrough and the site; CI runs its targets ([Testing](operations/testing.md)).
 
 ## 2026-10-19

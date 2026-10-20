@@ -19,6 +19,8 @@ class InvestigationScope(BaseModel):
 
 
 class ToolCallSummary(BaseModel):
+    """Audit record of one agent tool call."""
+
     tool: str
     ok: bool
     detail: str = ""
@@ -26,6 +28,8 @@ class ToolCallSummary(BaseModel):
 
 
 class AgentOutput(BaseModel):
+    """The investigator's answer, citations, evidence ledger and run metadata."""
+
     agent: str = "strands-relationship-investigator"
     answer: str = ""
     citations: list[str] = Field(default_factory=list)

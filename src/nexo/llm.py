@@ -17,7 +17,7 @@ import re
 import urllib.error
 import urllib.request
 from collections.abc import Sequence
-from typing import TYPE_CHECKING, TypeVar
+from typing import TypeVar
 
 from langchain_core.embeddings import DeterministicFakeEmbedding, Embeddings
 from langchain_core.language_models import BaseChatModel
@@ -25,11 +25,9 @@ from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
 from langchain_core.runnables import RunnableConfig
 from langchain_openai import ChatOpenAI, OpenAIEmbeddings
 from pydantic import BaseModel, ValidationError
+from strands.models.openai import OpenAIModel
 
 from nexo.config import ModelRole, Settings
-
-if TYPE_CHECKING:
-    from strands.models.openai import OpenAIModel
 
 T = TypeVar("T", bound=BaseModel)
 
@@ -40,7 +38,9 @@ class StructuredOutputError(RuntimeError):
     """The model did not produce schema-valid JSON within the retry budget."""
 
 
-def build_chat_model(settings: Settings, *, role: ModelRole, temperature: float = 0.0) -> ChatOpenAI:
+def build_chat_model(
+    settings: Settings, *, role: ModelRole, temperature: float = 0.0
+) -> ChatOpenAI:
     """LangChain client for a JSON-producing role (router, extraction, judge)."""
     endpoint = settings.endpoint(role)
     extra: dict[str, str] = {}
@@ -60,6 +60,7 @@ def build_chat_model(settings: Settings, *, role: ModelRole, temperature: float 
 
 
 def build_embeddings(settings: Settings) -> Embeddings:
+    """Return the configured embeddings client (OpenAI-compatible or fake)."""
     if settings.embedding_provider == "fake":
         return DeterministicFakeEmbedding(size=settings.embedding_dimensions)
     return OpenAIEmbeddings(
@@ -81,8 +82,6 @@ def build_strands_model(settings: Settings) -> OpenAIModel:
     for Llama 3.x tool calling; without it the model answers in plain text and
     the agent never calls its tools.
     """
-    from strands.models.openai import OpenAIModel
-
     endpoint = settings.endpoint("agent")
     return OpenAIModel(
         client_args={
@@ -92,7 +91,10 @@ def build_strands_model(settings: Settings) -> OpenAIModel:
             "max_retries": settings.llm_max_retries,
         },
         model_id=endpoint.model,
-        params={"temperature": settings.agent_temperature, "max_tokens": settings.agent_max_tokens},
+        params={
+            "temperature": settings.agent_temperature,
+            "max_tokens": settings.agent_max_tokens,
+        },
     )
 
 
@@ -113,14 +115,21 @@ def invoke_structured(
     bound = llm.bind(
         response_format={
             "type": "json_schema",
-            "json_schema": {"name": schema.__name__, "schema": schema.model_json_schema()},
+            "json_schema": {
+                "name": schema.__name__,
+                "schema": schema.model_json_schema(),
+            },
         }
     )
     history = list(messages)
     last_error: Exception | None = None
     for _ in range(max_attempts):
         reply = bound.invoke(history, config=config)
-        content = reply.content if isinstance(reply.content, str) else json.dumps(reply.content)
+        content = (
+            reply.content
+            if isinstance(reply.content, str)
+            else json.dumps(reply.content)
+        )
         try:
             return schema.model_validate_json(_FENCE.sub("", content).strip())
         except ValidationError as exc:
@@ -135,7 +144,9 @@ def invoke_structured(
                     )
                 ),
             ]
-    raise StructuredOutputError(f"{schema.__name__}: no valid output after {max_attempts} attempts") from last_error
+    raise StructuredOutputError(
+        f"{schema.__name__}: no valid output after {max_attempts} attempts"
+    ) from last_error
 
 
 def resolved_models(settings: Settings) -> list[dict]:
@@ -143,44 +154,89 @@ def resolved_models(settings: Settings) -> list[dict]:
     rows = []
     for role in ("agent", "extraction", "router"):
         endpoint = settings.endpoint(role)
-        rows.append({"role": role, "model": endpoint.model, "base_url": endpoint.base_url,
-                     "reasoning_effort": endpoint.reasoning_effort})
+        rows.append(
+            {
+                "role": role,
+                "model": endpoint.model,
+                "base_url": endpoint.base_url,
+                "reasoning_effort": endpoint.reasoning_effort,
+            }
+        )
     if settings.judge_model:
         endpoint = settings.endpoint("judge")
-        rows.append({"role": "judge", "model": endpoint.model, "base_url": endpoint.base_url,
-                     "reasoning_effort": endpoint.reasoning_effort})
+        rows.append(
+            {
+                "role": "judge",
+                "model": endpoint.model,
+                "base_url": endpoint.base_url,
+                "reasoning_effort": endpoint.reasoning_effort,
+            }
+        )
     else:
-        rows.append({"role": "judge", "model": None, "note": "off: nexo eval skips generation scores"})
+        rows.append(
+            {
+                "role": "judge",
+                "model": None,
+                "note": "off: nexo eval skips generation scores",
+            }
+        )
     if settings.embedding_provider == "fake":
-        rows.append({"role": "embedding", "model": None, "note": "fake: deterministic offline vectors"})
+        rows.append(
+            {
+                "role": "embedding",
+                "model": None,
+                "note": "fake: deterministic offline vectors",
+            }
+        )
     else:
-        rows.append({"role": "embedding", "model": settings.embedding_model, "base_url": settings.embedding_base_url})
+        rows.append(
+            {
+                "role": "embedding",
+                "model": settings.embedding_model,
+                "base_url": settings.embedding_base_url,
+            }
+        )
     return rows
 
 
 JSON_ROLES = ("extraction", "router", "judge")
-_PROBE_SCHEMA = {"type": "object", "properties": {"ok": {"type": "boolean"}}, "required": ["ok"],
-                 "additionalProperties": False}
+_PROBE_SCHEMA = {
+    "type": "object",
+    "properties": {"ok": {"type": "boolean"}},
+    "required": ["ok"],
+    "additionalProperties": False,
+}
 
 
-def check_model_servers(settings: Settings, rows: list[dict], *, timeout_s: float = 5.0) -> list[dict]:
-    """Mark each row with whether its server answers and lists its model (GET /models, OpenAI protocol).
+def check_model_servers(
+    settings: Settings, rows: list[dict], *, timeout_s: float = 5.0
+) -> list[dict]:
+    """Mark each row with whether its server answers and lists its model.
 
-    JSON roles also get one tiny schema-constrained request: a server can list a model and still be
-    unable to constrain its output (e.g. Ollama MLX builds), which breaks extraction and routing.
+    Uses GET /models (OpenAI protocol). JSON roles also get one tiny
+    schema-constrained request: a server can list a model and still be unable
+    to constrain its output (e.g. Ollama MLX builds), which breaks extraction
+    and routing.
     """
     listings: dict[str, set[str] | str] = {}
     probes: dict[tuple, str | None] = {}
     for row in rows:
         if not row.get("model"):
             continue
-        key = settings.embedding_api_key if row["role"] == "embedding" else settings.endpoint(row["role"]).api_key
+        key = (
+            settings.embedding_api_key
+            if row["role"] == "embedding"
+            else settings.endpoint(row["role"]).api_key
+        )
         if row["base_url"] not in listings:
-            listings[row["base_url"]] = _served_models(row["base_url"], key.get_secret_value(), timeout_s)
+            listings[row["base_url"]] = _served_models(
+                row["base_url"], key.get_secret_value(), timeout_s
+            )
         served = listings[row["base_url"]]
         if isinstance(served, str):
             row["check"] = f"unreachable: {served}"
-        elif row["model"] in served or f"{row['model']}:latest" in served:  # Ollama tags untagged pulls :latest
+        # Ollama tags untagged pulls :latest
+        elif row["model"] in served or f"{row['model']}:latest" in served:
             row["check"] = "ok"
         else:
             row["check"] = "model not served here"
@@ -188,23 +244,45 @@ def check_model_servers(settings: Settings, rows: list[dict], *, timeout_s: floa
         if row["check"] == "ok" and row["role"] in JSON_ROLES:
             probe = (row["base_url"], row["model"], row.get("reasoning_effort"))
             if probe not in probes:
-                probes[probe] = _probe_structured_output(*probe, key.get_secret_value(), settings.llm_timeout_s)
+                probes[probe] = _probe_structured_output(
+                    *probe, key.get_secret_value(), settings.llm_timeout_s
+                )
             if probes[probe]:
                 row["check"] = "structured output failed"
                 row["detail"] = probes[probe]
     return rows
 
 
-def _probe_structured_output(base_url: str, model: str, reasoning_effort: str | None, api_key: str,
-                             timeout_s: float) -> str | None:
-    """None when the server returns schema-valid JSON for a minimal request, else what went wrong."""
-    body = {"model": model, "temperature": 0, "max_tokens": 64,
-            "messages": [{"role": "user", "content": 'Reply with the JSON object {"ok": true}.'}],
-            "response_format": {"type": "json_schema", "json_schema": {"name": "probe", "schema": _PROBE_SCHEMA}}}
+def _probe_structured_output(
+    base_url: str,
+    model: str,
+    reasoning_effort: str | None,
+    api_key: str,
+    timeout_s: float,
+) -> str | None:
+    """Return None if a minimal request yields schema-valid JSON, else what went wrong."""
+    body = {
+        "model": model,
+        "temperature": 0,
+        "max_tokens": 64,
+        "messages": [
+            {"role": "user", "content": 'Reply with the JSON object {"ok": true}.'}
+        ],
+        "response_format": {
+            "type": "json_schema",
+            "json_schema": {"name": "probe", "schema": _PROBE_SCHEMA},
+        },
+    }
     if reasoning_effort:
         body["reasoning_effort"] = reasoning_effort
-    request = urllib.request.Request(base_url.rstrip("/") + "/chat/completions", data=json.dumps(body).encode(),
-                                     headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"})
+    request = urllib.request.Request(
+        base_url.rstrip("/") + "/chat/completions",
+        data=json.dumps(body).encode(),
+        headers={
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+        },
+    )
     try:
         with urllib.request.urlopen(request, timeout=timeout_s) as response:
             content = json.load(response)["choices"][0]["message"]["content"] or ""
@@ -222,9 +300,14 @@ def _probe_structured_output(base_url: str, model: str, reasoning_effort: str | 
 
 
 def _served_models(base_url: str, api_key: str, timeout_s: float) -> set[str] | str:
-    request = urllib.request.Request(base_url.rstrip("/") + "/models", headers={"Authorization": f"Bearer {api_key}"})
+    request = urllib.request.Request(
+        base_url.rstrip("/") + "/models", headers={"Authorization": f"Bearer {api_key}"}
+    )
     try:
         with urllib.request.urlopen(request, timeout=timeout_s) as response:
             return {entry.get("id") for entry in json.load(response).get("data", [])}
-    except (OSError, ValueError) as exc:  # URLError/HTTPError/timeouts are OSError; bad JSON is ValueError
+    except (
+        OSError,
+        ValueError,
+    ) as exc:  # URLError/HTTPError/timeouts are OSError; bad JSON is ValueError
         return f"{type(exc).__name__}: {exc}"

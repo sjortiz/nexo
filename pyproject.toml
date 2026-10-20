@@ -29,7 +29,7 @@ dependencies = [
 
 [project.optional-dependencies]
 postgres = ["langgraph-checkpoint-postgres>=3,<4", "psycopg[binary,pool]>=3.2,<4"]
-dev = ["pytest>=8", "ruff>=0.6", "pyyaml>=6"]
+dev = ["pytest>=8", "pylint>=4.1,<5", "black>=26.1,<27", "pyyaml>=6"]
 aws = ["boto3>=1.35,<2"]
 notebook = ["jupyterlab>=4.2,<5", "ipykernel>=6.29", "nbclient>=0.10", "nbformat>=5.10"]
 
@@ -49,14 +49,5 @@ pythonpath = ["."]  # tests share helpers via `from tests.conftest import ...`
 addopts = "-q"
 markers = ["live: needs real model servers (NEXO_LIVE=1)"]
 
-[tool.ruff]
-line-length = 120
-
-[tool.ruff.lint]
-select = ["E", "F", "W", "B", "UP", "I"]
-
-[tool.ruff.lint.per-file-ignores]
-# Cypher statements read better unwrapped.
-"src/nexo/storage/graph_store.py" = ["E501"]
-# Notebook-style cells import what each step introduces.
-"examples/*.py" = ["E402"]
+[tool.pylint.main]
+source-roots = ["."]  # resolve `tests.*` imports the way pytest (pythonpath = ["."]) does

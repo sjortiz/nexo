@@ -19,9 +19,12 @@ ApprovalStatus = Literal["pending", "approved", "rejected", "not_required"]
 
 
 class GraphState(TypedDict, total=False):
+    """State carried through the investigation workflow and its checkpoints."""
+
     # --- required by the workflow contract ---
     user_query: str
-    agent_outputs: Annotated[list[dict[str, Any]], operator.add]  # append-only audit trail
+    # Append-only audit trail.
+    agent_outputs: Annotated[list[dict[str, Any]], operator.add]
     routing_target: RoutingTarget
     approval_status: ApprovalStatus
     # --- supporting fields ---
@@ -42,7 +45,9 @@ class RouteDecision(BaseModel):
     target: RoutingTarget
     reason: str = Field(max_length=300)
     strategy: RetrievalStrategy = "hybrid"
-    doc_types: list[str] | None = Field(default=None, description="Only if the request restricts document types")
+    doc_types: list[str] | None = Field(
+        default=None, description="Only if the request restricts document types"
+    )
     effective_from: date | None = None
     effective_to: date | None = None
 
@@ -56,5 +61,6 @@ class ReviewDecision(BaseModel):
     reviewer: str = Field(min_length=1, max_length=200)
     comment: str | None = Field(default=None, max_length=2000)
     acknowledged_findings: bool = Field(
-        default=False, description="Required to approve when the compliance report has blocking findings"
+        default=False,
+        description="Required to approve when the compliance report has blocking findings",
     )

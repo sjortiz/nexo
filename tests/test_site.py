@@ -1,4 +1,4 @@
-"""The GitHub Pages site (site/*.html) must be self-contained, accessible and match the repository."""
+"""The GitHub Pages site (site/*.html) is self-contained, accessible and matches the repo."""
 
 from __future__ import annotations
 
@@ -53,14 +53,14 @@ def _parse(path: Path) -> _Page:
     return parser
 
 
-@pytest.fixture(scope="module")
-def page() -> _Page:
+@pytest.fixture(name="page", scope="module")
+def fixture_page() -> _Page:
     """The landing page: quickstart checks apply to it."""
     return _parse(PAGE)
 
 
-@pytest.fixture(scope="module", params=PAGES, ids=lambda p: p.name)
-def any_page(request) -> tuple[Path, _Page]:
+@pytest.fixture(name="any_page", scope="module", params=PAGES, ids=lambda p: p.name)
+def fixture_any_page(request) -> tuple[Path, _Page]:
     """Every page on the site: structure, links and self-containment."""
     return request.param, _parse(request.param)
 
@@ -85,23 +85,31 @@ def _ids(page: _Page) -> set[str]:
 
 
 def test_site_has_the_expected_pages():
+    """The site consists of exactly the landing page and the walkthrough."""
     assert [p.name for p in PAGES] == ["index.html", "walkthrough.html"]
 
 
 def test_document_basics(any_page):
+    """Each page declares lang, a viewport, a description and a title."""
     path, page = any_page
     html = _attrs(page, "html")
     assert html and html[0].get("lang") == "en"
     assert any(a.get("name") == "viewport" for a in _attrs(page, "meta"))
-    assert any(a.get("name") == "description" and a.get("content") for a in _attrs(page, "meta"))
+    assert any(
+        a.get("name") == "description" and a.get("content")
+        for a in _attrs(page, "meta")
+    )
     assert re.search(r"<title>[^<]+</title>", path.read_text(encoding="utf-8"))
 
 
 def test_ids_are_unique_and_every_fragment_resolves(any_page):
+    """Element ids are unique and in-page anchors and SVG references all resolve."""
     _, page = any_page
     ids = [a["id"] for _, a in page.tags if "id" in a]
     assert len(ids) == len(set(ids)), "duplicate id"
-    fragments = {a["href"][1:] for a in _attrs(page, "a") if a.get("href", "").startswith("#")}
+    fragments = {
+        a["href"][1:] for a in _attrs(page, "a") if a.get("href", "").startswith("#")
+    }
     assert fragments, "expected in-page navigation"
     assert fragments <= set(ids), f"dangling anchors: {fragments - set(ids)}"
     # SVG references (markers, aria) must resolve too.
@@ -113,6 +121,7 @@ def test_ids_are_unique_and_every_fragment_resolves(any_page):
 
 
 def test_links_between_pages_resolve(any_page):
+    """Links to sibling pages hit existing files and existing fragment ids."""
     _, page = any_page
     for href in (a.get("href", "") for a in _attrs(page, "a")):
         if re.match(r"^[\w-]+\.html", href):
@@ -123,23 +132,37 @@ def test_links_between_pages_resolve(any_page):
 
 
 def test_repository_links_point_at_existing_files(any_page):
+    """GitHub blob links point at files that exist in this repository."""
     path, page = any_page
-    links = {unescape(a["href"]) for a in _attrs(page, "a") if a.get("href", "").startswith(REPO_BLOB)}
+    links = {
+        unescape(a["href"])
+        for a in _attrs(page, "a")
+        if a.get("href", "").startswith(REPO_BLOB)
+    }
     assert len(links) >= (5 if path == PAGE else 2)
-    missing = [link for link in links if not (ROOT / link[len(REPO_BLOB) :].split("#", 1)[0]).is_file()]
+    missing = [
+        link
+        for link in links
+        if not (ROOT / link[len(REPO_BLOB) :].split("#", 1)[0]).is_file()
+    ]
     assert not missing, missing
 
 
 def test_self_contained(any_page):
+    """Pages load no JavaScript, external stylesheets or remote media."""
     _, page = any_page
     assert not _attrs(page, "script"), "the page needs no JavaScript"
     assert not [a for a in _attrs(page, "link") if "stylesheet" in a.get("rel", "")]
     for tag, attrs in page.tags:
         for name in ("src", "srcset", "poster"):
-            assert not attrs.get(name, "").startswith(("http:", "https:", "//")), (tag, attrs)
+            assert not attrs.get(name, "").startswith(("http:", "https:", "//")), (
+                tag,
+                attrs,
+            )
 
 
 def test_images_have_text_alternatives(any_page):
+    """Images have alt text and SVGs are either labelled images or aria-hidden."""
     path, page = any_page
     for attrs in _attrs(page, "img"):
         assert "alt" in attrs, attrs
@@ -153,6 +176,7 @@ def test_images_have_text_alternatives(any_page):
 
 
 def test_dark_mode_and_license_are_declared(any_page):
+    """Each page supports dark mode and links the repository's MIT LICENSE."""
     path, _ = any_page
     text = path.read_text(encoding="utf-8")
     assert "prefers-color-scheme: dark" in text
@@ -186,6 +210,7 @@ def _nexo_argv(commands: list[list[str]]) -> list[list[str]]:
 
 
 def test_quickstart_cli_flags_exist(page, capsys):
+    """Every nexo subcommand and flag in the quickstart exists in the CLI help."""
     argv = _nexo_argv(_commands(page))
     assert {a[0] for a in argv} >= {"ingest", "ask", "review", "models"}
     for args in argv:
@@ -197,6 +222,7 @@ def test_quickstart_cli_flags_exist(page, capsys):
 
 
 def test_quickstart_files_settings_and_services_exist(page):
+    """Quickstart paths, env keys, compose files and compose services all exist."""
     commands = _commands(page)
     for command in commands:
         for word in command:
@@ -219,6 +245,7 @@ def test_quickstart_files_settings_and_services_exist(page):
 
 
 def test_quickstart_profiles_and_role_sets_are_valid(page):
+    """Profiles and role sets passed to the setup tools in the quickstart are valid."""
     uses = []
     for command in _commands(page):
         if command[0].endswith("ollama-setup.sh"):

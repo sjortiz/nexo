@@ -28,11 +28,18 @@ from contextlib import contextmanager
 from typing import Any
 
 from opentelemetry import metrics, trace
+from opentelemetry.exporter.otlp.proto.http.metric_exporter import OTLPMetricExporter
+from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
+from opentelemetry.instrumentation.genai.openai import OpenAIInstrumentor
 from opentelemetry.sdk.metrics import MeterProvider
 from opentelemetry.sdk.metrics.export import PeriodicExportingMetricReader
 from opentelemetry.sdk.resources import Resource
 from opentelemetry.sdk.trace import TracerProvider
-from opentelemetry.sdk.trace.export import BatchSpanProcessor, ConsoleSpanExporter, SimpleSpanProcessor
+from opentelemetry.sdk.trace.export import (
+    BatchSpanProcessor,
+    ConsoleSpanExporter,
+    SimpleSpanProcessor,
+)
 from opentelemetry.trace import Span
 
 from nexo.config import Settings
@@ -40,7 +47,8 @@ from nexo.config import Settings
 TRACER_NAME = "nexo"
 
 _setup_lock = threading.Lock()
-_providers: tuple[TracerProvider, MeterProvider | None] | None = None
+# The process-wide (tracer, meter) providers, once installed.
+_INSTALLED: dict[str, tuple[TracerProvider, MeterProvider | None]] = {}
 
 
 def apply_genai_env(settings: Settings) -> None:
@@ -50,10 +58,13 @@ def apply_genai_env(settings: Settings) -> None:
     conventions and, unless content capture is on, to redact every content
     attribute (an empty `gen_ai_unredacted_attributes=` list).
     """
-    os.environ.setdefault("OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT",
-                          settings.otel_instrumentation_genai_capture_message_content)
+    os.environ.setdefault(
+        "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT",
+        settings.otel_instrumentation_genai_capture_message_content,
+    )
     opt_in = settings.otel_semconv_stability_opt_in or (
-        "gen_ai_latest_experimental" if settings.capture_content
+        "gen_ai_latest_experimental"
+        if settings.capture_content
         else "gen_ai_latest_experimental,gen_ai_unredacted_attributes="
     )
     os.environ.setdefault("OTEL_SEMCONV_STABILITY_OPT_IN", opt_in)
@@ -61,10 +72,9 @@ def apply_genai_env(settings: Settings) -> None:
 
 def setup_telemetry(settings: Settings) -> TracerProvider:
     """Install the process-wide providers and instrumentation once (idempotent)."""
-    global _providers
     with _setup_lock:
-        if _providers is not None:
-            return _providers[0]
+        if "providers" in _INSTALLED:
+            return _INSTALLED["providers"][0]
         apply_genai_env(settings)
         resource = Resource.create(
             {
@@ -75,29 +85,36 @@ def setup_telemetry(settings: Settings) -> TracerProvider:
         tracer_provider = TracerProvider(resource=resource)
         meter_provider: MeterProvider | None = None
         if settings.otel_exporter_otlp_endpoint:
-            from opentelemetry.exporter.otlp.proto.http.metric_exporter import OTLPMetricExporter
-            from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
-
             base = settings.otel_exporter_otlp_endpoint.rstrip("/")
-            tracer_provider.add_span_processor(BatchSpanProcessor(OTLPSpanExporter(endpoint=f"{base}/v1/traces")))
+            tracer_provider.add_span_processor(
+                BatchSpanProcessor(OTLPSpanExporter(endpoint=f"{base}/v1/traces"))
+            )
             meter_provider = MeterProvider(
                 resource=resource,
-                metric_readers=[PeriodicExportingMetricReader(OTLPMetricExporter(endpoint=f"{base}/v1/metrics"))],
+                metric_readers=[
+                    PeriodicExportingMetricReader(
+                        OTLPMetricExporter(endpoint=f"{base}/v1/metrics")
+                    )
+                ],
             )
             metrics.set_meter_provider(meter_provider)
-        if settings.otel_console_export:  # stderr: stdout may carry a protocol (MCP stdio)
-            tracer_provider.add_span_processor(SimpleSpanProcessor(ConsoleSpanExporter(out=sys.stderr)))
+        # stderr: stdout may carry a protocol (MCP stdio)
+        if settings.otel_console_export:
+            tracer_provider.add_span_processor(
+                SimpleSpanProcessor(ConsoleSpanExporter(out=sys.stderr))
+            )
         trace.set_tracer_provider(tracer_provider)
         if settings.otel_instrument_openai:
             instrument_openai(tracer_provider, meter_provider)
-        _providers = (tracer_provider, meter_provider)
+        _INSTALLED["providers"] = (tracer_provider, meter_provider)
         return tracer_provider
 
 
-def instrument_openai(tracer_provider: TracerProvider | None = None,
-                      meter_provider: MeterProvider | None = None) -> None:
-    from opentelemetry.instrumentation.genai.openai import OpenAIInstrumentor
-
+def instrument_openai(
+    tracer_provider: TracerProvider | None = None,
+    meter_provider: MeterProvider | None = None,
+) -> None:
+    """Instrument the openai client once, on the given providers."""
     instrumentor = OpenAIInstrumentor()
     if not instrumentor.is_instrumented_by_opentelemetry:
         kwargs: dict[str, Any] = {"tracer_provider": tracer_provider}
@@ -108,21 +125,26 @@ def instrument_openai(tracer_provider: TracerProvider | None = None,
 
 def shutdown_telemetry() -> None:
     """Flush pending spans and metrics; call before process exit (CLI, worker shutdown)."""
-    if _providers is not None:
-        tracer_provider, meter_provider = _providers
+    if "providers" in _INSTALLED:
+        tracer_provider, meter_provider = _INSTALLED["providers"]
         tracer_provider.shutdown()
         if meter_provider is not None:
             meter_provider.shutdown()
 
 
 def get_tracer() -> trace.Tracer:
+    """Return the Nexo tracer from the current tracer provider."""
     return trace.get_tracer(TRACER_NAME)
 
 
 @contextmanager
-def traced_span(name: str, attributes: Mapping[str, Any] | None = None, **kwargs: Any) -> Iterator[Span]:
+def traced_span(
+    name: str, attributes: Mapping[str, Any] | None = None, **kwargs: Any
+) -> Iterator[Span]:
     """Start a current span; exceptions are recorded and set ERROR status."""
-    with get_tracer().start_as_current_span(name, attributes=clean_attributes(attributes or {}), **kwargs) as span:
+    with get_tracer().start_as_current_span(
+        name, attributes=clean_attributes(attributes or {}), **kwargs
+    ) as span:
         yield span
 
 

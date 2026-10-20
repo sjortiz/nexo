@@ -22,6 +22,8 @@ ReasoningEffort = Literal["none", "minimal", "low", "medium", "high"]
 
 @dataclass(frozen=True)
 class ModelEndpoint:
+    """Resolved connection settings for one model role."""
+
     base_url: str
     api_key: SecretStr
     model: str
@@ -29,7 +31,11 @@ class ModelEndpoint:
 
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
+    """All runtime settings, read from the environment or `.env`."""
+
+    model_config = SettingsConfigDict(
+        env_file=".env", env_file_encoding="utf-8", extra="ignore"
+    )
 
     # --- Default chat model (any OpenAI-compatible server: vLLM, Ollama, ...) --
     vllm_base_url: str = "http://vllm-inference-service:8000/v1"
@@ -123,7 +129,11 @@ class Settings(BaseSettings):
     agent_max_tool_calls: int = Field(default=16, ge=1)
     agent_timeout_s: float = 300.0
     agent_max_chunks_per_call: int = Field(default=10, ge=1)
-    seed_chunks: int = Field(default=5, ge=0, description="vector hits handed to the agent for vector/hybrid intents")
+    seed_chunks: int = Field(
+        default=5,
+        ge=0,
+        description="vector hits handed to the agent for vector/hybrid intents",
+    )
     tool_result_max_chars: int = 12_000
 
     # --- Orchestration ---------------------------------------------------------
@@ -148,7 +158,8 @@ class Settings(BaseSettings):
     # instrumentations. Prompts, answers and Cypher can carry PII: keep them off
     # spans unless the trace backend is cleared for that data.
     otel_instrumentation_genai_capture_message_content: Literal[
-        "no_content", "span_only", "event_only", "span_and_event"] = "no_content"
+        "no_content", "span_only", "event_only", "span_and_event"
+    ] = "no_content"
     # Strands reads this: latest GenAI conventions, and redact content attributes
     # (an empty unredacted list) unless content capture is enabled.
     otel_semconv_stability_opt_in: str | None = None
@@ -175,17 +186,30 @@ class Settings(BaseSettings):
     def _apply_local_profiles(self) -> Settings:
         if not self.local_profile:
             if self.remote_profile:
-                raise ValueError("REMOTE_PROFILE needs LOCAL_PROFILE (the Mac that runs Nexo)")
+                raise ValueError(
+                    "REMOTE_PROFILE needs LOCAL_PROFILE (the Mac that runs Nexo)"
+                )
             return self
         explicit = set(self.model_fields_set)
         if self.remote_profile:
-            heavy, light = plan(self.remote_profile, "heavy"), plan(self.local_profile, "light")
-            placement = {role: (heavy.roles[role], self.remote_base_url) for role in ("agent", "extraction")}
-            placement |= {role: (light.roles[role], self.local_base_url) for role in ("router", "judge", "embedding")}
+            heavy, light = plan(self.remote_profile, "heavy"), plan(
+                self.local_profile, "light"
+            )
+            placement = {
+                role: (heavy.roles[role], self.remote_base_url)
+                for role in ("agent", "extraction")
+            }
+            placement |= {
+                role: (light.roles[role], self.local_base_url)
+                for role in ("router", "judge", "embedding")
+            }
             parallel = heavy.num_parallel
         else:
             single = plan(self.local_profile, "single")
-            placement = {role: (model, self.local_base_url) for role, model in single.roles.items()}
+            placement = {
+                role: (model, self.local_base_url)
+                for role, model in single.roles.items()
+            }
             parallel = single.num_parallel
 
         def default(field: str, value: object) -> None:
@@ -194,11 +218,13 @@ class Settings(BaseSettings):
 
         for role in ("agent", "extraction", "router", "judge"):
             model, base_url = placement[role]
-            if model is None:  # role disabled by the profile (e.g. no judge on a small Mac)
+            # Role disabled by the profile (e.g. no judge on a small Mac).
+            if model is None:
                 continue
             default(f"{role}_model", model)
             default(f"{role}_base_url", base_url)
-            default(f"{role}_api_key", SecretStr("ollama"))  # Ollama ignores it; clients need one
+            # Ollama ignores the key; clients need one.
+            default(f"{role}_api_key", SecretStr("ollama"))
             if role != "agent" and needs_reasoning_off(model):
                 default(f"{role}_reasoning_effort", "none")
         embedding_model, embedding_url = placement["embedding"]
@@ -224,9 +250,14 @@ class Settings(BaseSettings):
 
     @property
     def capture_content(self) -> bool:
-        return self.otel_instrumentation_genai_capture_message_content in {"span_only", "span_and_event"}
+        """Whether GenAI spans may record prompt and completion content."""
+        return self.otel_instrumentation_genai_capture_message_content in {
+            "span_only",
+            "span_and_event",
+        }
 
 
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:
+    """Return the process-wide cached settings."""
     return Settings()

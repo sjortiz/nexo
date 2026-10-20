@@ -10,49 +10,84 @@ from datetime import date
 from pathlib import Path
 
 from nexo.config import get_settings
+from nexo.evaluation import (
+    extraction_scores,
+    grounded_key,
+    judge_faithfulness,
+    judge_relevancy,
+    record_metrics,
+    retrieval_scores,
+    triple_key,
+)
+from nexo.llm import (
+    build_chat_model,
+    build_embeddings,
+    check_model_servers,
+    resolved_models,
+)
 from nexo.logging_setup import configure_logging
-from nexo.telemetry import shutdown_telemetry
+from nexo.mcp_server import build_mcp_server
+from nexo.orchestration.graph import workflow_mermaid
+from nexo.service import (
+    build_investigator,
+    chunk_store_from_settings,
+    open_ingestor,
+    open_runtime,
+)
+from nexo.storage.graph_store import GraphStore
+from nexo.storage.ingest import ExtractionAids, IngestionTargets, KnowledgeGraphIngestor
+from nexo.storage.ontology import Ontology
+from nexo.storage.schemas import DocumentMetadata, Sensitivity, Triple
+from nexo.storage.sensitive_data import NoopDetector
+from nexo.storage.vector_store import LocalChunkStore
+from nexo.telemetry import setup_telemetry, shutdown_telemetry, traced_span
 
 log = logging.getLogger("nexo.cli")
 
 
 def _emit(message: str, model) -> None:
-    log.info(message, extra={"result": model.model_dump(mode="json", exclude_none=True)})
+    log.info(
+        message, extra={"result": model.model_dump(mode="json", exclude_none=True)}
+    )
 
 
 def _ingest(args: argparse.Namespace) -> int:
-    from nexo.service import open_ingestor
-    from nexo.storage.schemas import DocumentMetadata, Sensitivity
 
     metadata = DocumentMetadata(
         source_id=args.source_id or Path(args.file).stem,
         title=args.title or Path(args.file).stem,
         doc_type=args.doc_type,
         source_uri=args.source_uri or Path(args.file).resolve().as_uri(),
-        effective_date=date.fromisoformat(args.effective_date) if args.effective_date else None,
+        effective_date=(
+            date.fromisoformat(args.effective_date) if args.effective_date else None
+        ),
         sensitivity=Sensitivity(args.sensitivity),
     )
     with open_ingestor(get_settings()) as ingestor:
         report = ingestor.ingest(Path(args.file).read_text(encoding="utf-8"), metadata)
     if report.failed_chunk_ids:
-        log.warning("ingested %s with %d failed chunks", report.source_id, len(report.failed_chunk_ids),
-                    extra={"result": report.model_dump(mode="json")})
+        log.warning(
+            "ingested %s with %d failed chunks",
+            report.source_id,
+            len(report.failed_chunk_ids),
+            extra={"result": report.model_dump(mode="json")},
+        )
         return 1
     _emit(f"ingested {report.source_id}", report)
     return 0
 
 
 def _ask(args: argparse.Namespace) -> int:
-    from nexo.service import open_runtime
 
     with open_runtime(get_settings()) as runtime:
-        result = runtime.start(args.query, thread_id=args.thread_id, clearance=args.clearance)
+        result = runtime.start(
+            args.query, thread_id=args.thread_id, clearance=args.clearance
+        )
         _emit(f"thread {result.thread_id}: {result.status}", result)
     return 0
 
 
 def _review(args: argparse.Namespace) -> int:
-    from nexo.service import open_runtime
 
     decision = {
         "approval_status": "approved" if args.approve else "rejected",
@@ -62,12 +97,14 @@ def _review(args: argparse.Namespace) -> int:
     }
     with open_runtime(get_settings()) as runtime:
         result = runtime.review(args.thread_id, decision)
-        _emit(f"thread {result.thread_id}: {result.status} ({result.approval_status})", result)
+        _emit(
+            f"thread {result.thread_id}: {result.status} ({result.approval_status})",
+            result,
+        )
     return 0
 
 
 def _status(args: argparse.Namespace) -> int:
-    from nexo.service import open_runtime
 
     with open_runtime(get_settings()) as runtime:
         result = runtime.status(args.thread_id)
@@ -77,12 +114,6 @@ def _status(args: argparse.Namespace) -> int:
 
 def _eval(args: argparse.Namespace) -> int:
     """Each JSONL line: {"question", "relevant_chunk_ids": [...], "reference_answer"?}."""
-    from nexo.agents.investigator import Investigator
-    from nexo.evaluation import judge_faithfulness, judge_relevancy, record_metrics, retrieval_scores
-    from nexo.llm import build_chat_model, build_embeddings, build_strands_model
-    from nexo.storage.graph_store import GraphStore
-    from nexo.storage.vector_store import LocalChunkStore
-    from nexo.telemetry import setup_telemetry, traced_span
 
     settings = get_settings()
     setup_telemetry(settings)
@@ -90,9 +121,8 @@ def _eval(args: argparse.Namespace) -> int:
     if settings.judge_model:
         judge = build_chat_model(settings, role="judge")
     graph = GraphStore.from_settings(settings, read_only=True)
-    chunks = LocalChunkStore(build_embeddings(settings), settings.vector_store_path, mode=settings.retrieval_mode)
-    investigator = Investigator(model=build_strands_model(settings), graph=graph, chunks=chunks,
-                                settings=settings, schema_text=graph.describe_schema())
+    chunks = chunk_store_from_settings(settings)
+    investigator = build_investigator(settings, graph, chunks)
     try:
         for line in Path(args.dataset).read_text(encoding="utf-8").splitlines():
             if not line.strip():
@@ -103,51 +133,67 @@ def _eval(args: argparse.Namespace) -> int:
                 metrics = retrieval_scores(output, case.get("relevant_chunk_ids", []))
                 if judge and output.answer:
                     evidence = [c.text for c in chunks.get_by_ids(output.citations)]
-                    metrics["generation.faithfulness"] = judge_faithfulness(judge, output.answer, evidence).score
-                    metrics["generation.relevancy"] = judge_relevancy(judge, case["question"], output.answer).score
+                    metrics["generation.faithfulness"] = judge_faithfulness(
+                        judge, output.answer, evidence
+                    ).score
+                    metrics["generation.relevancy"] = judge_relevancy(
+                        judge, case["question"], output.answer
+                    ).score
                 record_metrics(metrics)
-            log.info("eval case scored", extra={"result": {"question": case["question"], **metrics}})
+            log.info(
+                "eval case scored",
+                extra={"result": {"question": case["question"], **metrics}},
+            )
     finally:
         graph.close()
     return 0
 
 
 def _eval_extraction(args: argparse.Namespace) -> int:
-    """Each JSONL line: {"text", "triples": [Triple, ...]} - scores extraction before any graph write."""
-    from nexo.evaluation import extraction_scores, grounded_key, triple_key
-    from nexo.llm import build_chat_model, build_embeddings
-    from nexo.storage.ingest import KnowledgeGraphIngestor
-    from nexo.storage.ontology import Ontology
-    from nexo.storage.schemas import DocumentMetadata, Triple
-    from nexo.storage.sensitive_data import NoopDetector
-    from nexo.storage.vector_store import LocalChunkStore
-    from nexo.telemetry import setup_telemetry
+    """Score triple extraction before any graph write.
+
+    Each JSONL line: {"text", "triples": [Triple, ...]}.
+    """
 
     settings = get_settings()
     setup_telemetry(settings)
     ontology = Ontology.load(settings.ontology_path) if settings.ontology_path else None
     ingestor = KnowledgeGraphIngestor(
-        llm=build_chat_model(settings, role="extraction"), chunk_store=LocalChunkStore(build_embeddings(settings)),
-        graph_writer=None, detector=NoopDetector(), settings=settings, ontology=ontology,
+        llm=build_chat_model(settings, role="extraction"),
+        detector=NoopDetector(),
+        settings=settings,
+        targets=IngestionTargets(
+            chunk_store=LocalChunkStore(build_embeddings(settings)), graph_writer=None
+        ),
+        aids=ExtractionAids(ontology=ontology),
     )
     totals: dict[str, list] = {"predicted": [], "gold": []}
-    for n, line in enumerate(Path(args.dataset).read_text(encoding="utf-8").splitlines()):
+    for n, line in enumerate(
+        Path(args.dataset).read_text(encoding="utf-8").splitlines()
+    ):
         if not line.strip():
             continue
         case = json.loads(line)
-        predicted, _ = ingestor.extract_triples(case["text"], DocumentMetadata(source_id=f"case-{n}"))
+        predicted, _ = ingestor.extract_triples(
+            case["text"], DocumentMetadata(source_id=f"case-{n}")
+        )
         pred = {grounded_key(t) for t in predicted}
         gold = {triple_key(Triple.model_validate(t), ontology) for t in case["triples"]}
         totals["predicted"] += [(n, *k) for k in pred]
         totals["gold"] += [(n, *k) for k in gold]
-        log.info("extraction case scored", extra={"result": {"case": n, **extraction_scores(pred, gold)}})
-    log.info("extraction overall", extra={"result": extraction_scores(totals["predicted"], totals["gold"])})
+        log.info(
+            "extraction case scored",
+            extra={"result": {"case": n, **extraction_scores(pred, gold)}},
+        )
+    log.info(
+        "extraction overall",
+        extra={"result": extraction_scores(totals["predicted"], totals["gold"])},
+    )
     return 0
 
 
 def _graph(args: argparse.Namespace) -> int:
     """Mermaid diagram of the LangGraph workflow, generated from the compiled graph."""
-    from nexo.orchestration.graph import workflow_mermaid
 
     diagram = workflow_mermaid()
     if args.output:
@@ -160,34 +206,49 @@ def _graph(args: argparse.Namespace) -> int:
 
 def _models(args: argparse.Namespace) -> int:
     """Which model and server each role uses, after profiles and explicit settings."""
-    from nexo.llm import check_model_servers, resolved_models
 
     settings = get_settings()
     rows = resolved_models(settings)
     if args.check:
         rows = check_model_servers(settings, rows)
     failed = [row["role"] for row in rows if row.get("check", "ok") != "ok"]
-    profiles = f"LOCAL_PROFILE={settings.local_profile or '-'} REMOTE_PROFILE={settings.remote_profile or '-'}"
-    result = {"local_profile": settings.local_profile, "remote_profile": settings.remote_profile, "roles": rows}
+    profiles = (
+        f"LOCAL_PROFILE={settings.local_profile or '-'} "
+        f"REMOTE_PROFILE={settings.remote_profile or '-'}"
+    )
+    result = {
+        "local_profile": settings.local_profile,
+        "remote_profile": settings.remote_profile,
+        "roles": rows,
+    }
     if failed:
-        log.error("models (%s): check failed for %s", profiles, ", ".join(failed), extra={"result": result})
+        log.error(
+            "models (%s): check failed for %s",
+            profiles,
+            ", ".join(failed),
+            extra={"result": result},
+        )
         return 1
-    log.info("models (%s)%s", profiles, ": all reachable" if args.check else "", extra={"result": result})
+    log.info(
+        "models (%s)%s",
+        profiles,
+        ": all reachable" if args.check else "",
+        extra={"result": result},
+    )
     return 0
 
 
 def _mcp(args: argparse.Namespace) -> int:
     """Serve the knowledge graph and chunk store as read-only MCP tools."""
-    from nexo.llm import build_embeddings
-    from nexo.mcp_server import build_mcp_server
-    from nexo.storage.graph_store import GraphStore
-    from nexo.storage.vector_store import LocalChunkStore
-    from nexo.telemetry import setup_telemetry
 
     settings = get_settings()
     setup_telemetry(settings)
     graph = GraphStore.from_settings(settings, read_only=True)
-    chunks = LocalChunkStore(build_embeddings(settings), settings.vector_store_path, mode=settings.retrieval_mode)
+    chunks = LocalChunkStore(
+        build_embeddings(settings),
+        settings.vector_store_path,
+        mode=settings.retrieval_mode,
+    )
     server = build_mcp_server(graph=graph, chunks=chunks, settings=settings)
     log.info("serving MCP over %s", args.transport)
     try:
@@ -201,17 +262,24 @@ def _mcp(args: argparse.Namespace) -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
+    """Parse the command line, run the chosen subcommand and return its exit code."""
     parser = argparse.ArgumentParser(prog="nexo")
     sub = parser.add_subparsers(dest="command", required=True)
 
-    ingest = sub.add_parser("ingest", help="chunk, embed and extract a text/Markdown document")
+    ingest = sub.add_parser(
+        "ingest", help="chunk, embed and extract a text/Markdown document"
+    )
     ingest.add_argument("file")
     ingest.add_argument("--source-id")
     ingest.add_argument("--title")
     ingest.add_argument("--doc-type", default="general")
     ingest.add_argument("--source-uri")
     ingest.add_argument("--effective-date", help="YYYY-MM-DD")
-    ingest.add_argument("--sensitivity", default="internal", choices=["public", "internal", "pii", "phi"])
+    ingest.add_argument(
+        "--sensitivity",
+        default="internal",
+        choices=["public", "internal", "pii", "phi"],
+    )
     ingest.set_defaults(handler=_ingest)
 
     ask = sub.add_parser("ask", help="start an investigation (pauses for review)")
@@ -234,31 +302,47 @@ def main(argv: list[str] | None = None) -> int:
     status.add_argument("thread_id")
     status.set_defaults(handler=_status)
 
-    evaluate = sub.add_parser("eval", help="run the investigator over a JSONL golden set")
+    evaluate = sub.add_parser(
+        "eval", help="run the investigator over a JSONL golden set"
+    )
     evaluate.add_argument("dataset")
     evaluate.set_defaults(handler=_eval)
 
-    evaluate_extraction = sub.add_parser("eval-extraction", help="score triple extraction against gold triples")
+    evaluate_extraction = sub.add_parser(
+        "eval-extraction", help="score triple extraction against gold triples"
+    )
     evaluate_extraction.add_argument("dataset")
     evaluate_extraction.set_defaults(handler=_eval_extraction)
 
     graph = sub.add_parser("graph", help="Mermaid diagram of the LangGraph workflow")
-    graph.add_argument("--output", help="write the diagram to this file (e.g. workflow.mmd)")
+    graph.add_argument(
+        "--output", help="write the diagram to this file (e.g. workflow.mmd)"
+    )
     graph.set_defaults(handler=_graph)
 
     models = sub.add_parser("models", help="show the model and server each role uses")
-    models.add_argument("--check", action="store_true", help="ask each server whether it serves the model")
+    models.add_argument(
+        "--check",
+        action="store_true",
+        help="ask each server whether it serves the model",
+    )
     models.set_defaults(handler=_models)
 
-    serve = sub.add_parser("mcp", help="serve the knowledge graph as read-only MCP tools")
-    serve.add_argument("--transport", choices=["stdio", "streamable-http"], default="stdio")
+    serve = sub.add_parser(
+        "mcp", help="serve the knowledge graph as read-only MCP tools"
+    )
+    serve.add_argument(
+        "--transport", choices=["stdio", "streamable-http"], default="stdio"
+    )
     serve.add_argument("--host", default="127.0.0.1")
     serve.add_argument("--port", type=int, default=8765)
     serve.set_defaults(handler=_mcp)
 
     args = parser.parse_args(argv)
     # MCP over stdio uses stdout for the protocol: logs go to stderr there.
-    configure_logging(get_settings(), stream=sys.stderr if args.command == "mcp" else None)
+    configure_logging(
+        get_settings(), stream=sys.stderr if args.command == "mcp" else None
+    )
     try:
         return args.handler(args)
     finally:
