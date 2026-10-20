@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+from pathlib import Path
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
@@ -48,6 +49,16 @@ class MemoryKeyring:
     def delete_password(self, service, username):
         """Forget a value."""
         self.items.pop((service, username), None)
+
+
+ROOT = Path(__file__).resolve().parent.parent
+
+
+@pytest.fixture(name="workdir")
+def fixture_workdir(tmp_path: Path) -> Path:
+    """A checkout-like folder: the repo's deploy/ fragments, its own .nexo and .env."""
+    (tmp_path / "deploy").symlink_to(ROOT / "deploy")
+    return tmp_path
 
 
 @pytest.fixture(autouse=True)
