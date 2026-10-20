@@ -15,7 +15,8 @@ from typing import Any
 
 from nexo.local_profiles import MODEL_SIZES_GB, parse_profile
 from nexo.setup.components import MEMORY_GB
-from nexo.setup.envfile import missing_required
+from nexo.secret_store import SecretStore, SecretStoreError
+from nexo.setup.envfile import generated_keys, missing_required, read_env
 from nexo.setup.render import Host
 from nexo.setup.schema import Casting
 
@@ -138,8 +139,27 @@ def memory_budget(
     return budget
 
 
+def secrets_finding(store: SecretStore, on: set[str], env_path: Path) -> Finding:
+    """The provider answers, and nothing up cannot create itself is missing."""
+    needed = generated_keys(on)
+    try:
+        found = store.get(needed)
+    except SecretStoreError as exc:
+        return Finding("secrets", False, str(exc))
+    missing = missing_required(env_path, on)
+    if not store.writable:  # opted out: the environment or .env must provide them
+        dot_env = read_env(env_path)
+        missing += [k for k in needed if k not in found and not dot_env.get(k)]
+    detail = store.label + (f"; set: {', '.join(missing)}" if missing else "")
+    return Finding("secrets", not missing, detail)
+
+
 def preflight(
-    casting: Casting, lock: dict[str, Any], on: set[str], host: Host, root: Path
+    casting: Casting,
+    lock: dict[str, Any],
+    on: set[str],
+    host: Host,
+    store: SecretStore,
 ) -> list[Finding]:
     """Everything `up` needs from this machine, without starting anything."""
     findings = [
@@ -147,17 +167,9 @@ def preflight(
             "engine",
             bool(_run(host.engine, "compose", "version")),
             f"{host.engine} compose ({host.os})",
-        )
+        ),
+        secrets_finding(store, on, Path.cwd() / ".env"),
     ]
-    env_path = root / ".env"
-    missing = missing_required(env_path, on)
-    findings.append(
-        Finding(
-            "secrets",
-            env_path.exists() and not missing,
-            f"set in .env: {', '.join(missing)}" if missing else ".env",
-        )
-    )
     models = casting.spec.models
     if models.provider == "ollama":
         ollama = shutil.which("ollama")

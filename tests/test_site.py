@@ -221,8 +221,9 @@ def test_quickstart_files_targets_and_presets_exist(page):
             else:
                 assert re.search(rf"^{name}\s*\?=", makefile, re.MULTILINE), name
     env_example = (ROOT / "deploy/local/local.env.example").read_text()
-    for key in ("NEO4J_PASSWORD", "SIGNOZ_USER_PASSWORD"):
+    for key in ("NEO4J_USER", "SIGNOZ_USER_EMAIL"):
         assert re.search(rf"^{key}=", env_example, re.MULTILINE), key
+    assert not re.search(r"^NEO4J_PASSWORD=", env_example, re.MULTILINE)
 
 
 def test_quickstart_profiles_and_role_sets_are_valid(page):
