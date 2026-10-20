@@ -454,7 +454,7 @@ def test_row_cap_tool_redaction_and_db_span(store, settings, spans):
             chunk_filter=ChunkFilter(max_sensitivity=Sensitivity.PUBLIC)
         ),
     )
-    query, _ = build_investigation_tools(
+    query, *_ = build_investigation_tools(
         graph=store, chunks=None, ctx=ctx, settings=settings
     )
     spans.clear()

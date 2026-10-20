@@ -30,10 +30,10 @@ def _tools(settings, graph, chunk_store, *, clearance=Sensitivity.INTERNAL, budg
         max_tool_calls=budget,
         scope=InvestigationScope(chunk_filter=ChunkFilter(max_sensitivity=clearance)),
     )
-    query, fetch = build_investigation_tools(
+    query, fetch, search = build_investigation_tools(
         graph=graph, chunks=chunk_store, ctx=ctx, settings=settings
     )
-    return ctx, query, fetch
+    return ctx, query, fetch, search
 
 
 def test_query_tool_collects_chunk_ids_and_redacts_above_clearance(
@@ -55,7 +55,7 @@ def test_query_tool_collects_chunk_ids_and_redacts_above_clearance(
             },
         ]
     )
-    ctx, query, _ = _tools(settings, graph, chunk_store)
+    ctx, query, _, _ = _tools(settings, graph, chunk_store)
     out = json.loads(query("MATCH (a)-[r]-(b) RETURN a, r AS hop LIMIT 5"))
     assert out["chunk_ids_found"] == [
         "chk_" + "1" * 16,
@@ -68,7 +68,7 @@ def test_query_tool_collects_chunk_ids_and_redacts_above_clearance(
 def test_query_tool_rejects_writes_before_reaching_neo4j(settings, chunk_store):
     """Write Cypher is refused as a failed call without querying the graph."""
     graph = FakeGraph()
-    ctx, query, _ = _tools(settings, graph, chunk_store)
+    ctx, query, _, _ = _tools(settings, graph, chunk_store)
     out = json.loads(query("MATCH (n) DETACH DELETE n"))
     assert "DETACH" in out["error"] and not graph.queries and not ctx.calls[0].ok
 
@@ -79,12 +79,12 @@ def test_query_tool_returns_neo4j_errors_as_feedback(settings, chunk_store):
     syntax = Neo4jError._hydrate_neo4j(  # pylint: disable=protected-access
         code="Neo.ClientError.Statement.SyntaxError", message="Invalid input 'RETRN'"
     )
-    _, query, _ = _tools(settings, FakeGraph(error=syntax), chunk_store)
+    _, query, _, _ = _tools(settings, FakeGraph(error=syntax), chunk_store)
     assert (
         json.loads(query("MATCH (n) RETRN n"))["code"]
         == "Neo.ClientError.Statement.SyntaxError"
     )
-    _, query, _ = _tools(
+    _, query, _, _ = _tools(
         settings, FakeGraph(error=ServiceUnavailable("down")), chunk_store
     )
     assert "unavailable" in json.loads(query("MATCH (n) RETURN n"))["error"]
@@ -95,7 +95,7 @@ def test_fetch_tool_enforces_clearance_validates_ids_and_budget(settings, chunk_
     public = make_chunk("d", 0, "Acme acquired Beta.")
     phi = make_chunk("d", 1, "Patient X diagnosed.", Sensitivity.PHI)
     chunk_store.upsert([public, phi], [public.text, phi.text])
-    ctx, _, fetch = _tools(settings, FakeGraph(), chunk_store, budget=1)
+    ctx, _, fetch, _ = _tools(settings, FakeGraph(), chunk_store, budget=1)
 
     out = json.loads(
         fetch([public.chunk_id, phi.chunk_id, "not-an-id", "chk_" + "f" * 16])
@@ -339,6 +339,7 @@ def test_strands_agent_crawls_graph_then_vectors(settings, chunk_store):
     assert {t["function"]["name"] for t in client.requests[0]["tools"]} == {
         "query_knowledge_graph",
         "fetch_vector_chunks",
+        "search_chunks",
     }
     assert evidence.chunk_id in json.dumps(client.requests[1]["messages"])
 
@@ -502,3 +503,112 @@ def test_hybrid_strategy_seeds_vector_hits_into_prompt(settings, chunk_store):
         seed.chunk_id
     ]
     assert "diagnostic kits" in json.dumps(client.requests[0]["messages"])
+
+
+# --- text search when the graph lacks the entity -----------------------------
+
+
+def _text_corpus(chunk_store):
+    """Two chunks, one of which mentions Delta Devices; the other is unrelated."""
+    delta = make_chunk("note", 0, "Before Beta Labs she led product at Delta Devices.")
+    other = make_chunk("note", 1, "AHI expects Beta Labs to expand in 2026.")
+    chunk_store.upsert([delta, other], [delta.text, other.text])
+    return delta, other
+
+
+def test_search_tool_returns_matching_chunks_as_citable_evidence(settings, chunk_store):
+    """Search ranks the chunk that states the fact first and records it as evidence."""
+    delta, other = _text_corpus(chunk_store)
+    ctx, _, _, search = _tools(settings, FakeGraph(), chunk_store)
+
+    out = json.loads(search("Delta Devices", 1))
+
+    assert [c["chunk_id"] for c in out["chunks"]] == [delta.chunk_id]
+    assert "led product at Delta Devices" in out["chunks"][0]["text"]
+    assert ctx.evidence.fetched == {delta.chunk_id: "internal"}
+    assert other.chunk_id not in ctx.evidence.fetched  # only what was returned counts
+
+
+def test_search_tool_never_returns_text_above_clearance_or_past_budget(
+    settings, chunk_store
+):
+    """A PII chunk stays out of results and the ledger for an internal caller; budget applies."""
+    pii = make_chunk(
+        "note", 0, "Jane Roe led product at Delta Devices.", Sensitivity.PII
+    )
+    chunk_store.upsert([pii], [pii.text])
+    ctx, _, _, search = _tools(settings, FakeGraph(), chunk_store, budget=1)
+
+    out = json.loads(search("Delta Devices"))
+    assert out["chunks"] == [] and not ctx.evidence.fetched
+    assert "budget" in json.loads(search("Delta Devices"))["error"]
+
+    cleared_ctx, _, _, cleared = _tools(
+        settings, FakeGraph(), chunk_store, clearance=Sensitivity.PII
+    )
+    assert [c["chunk_id"] for c in json.loads(cleared("Delta"))["chunks"]] == [
+        pii.chunk_id
+    ]
+    assert cleared_ctx.evidence.fetched == {pii.chunk_id: "pii"}
+
+
+def test_agent_searches_text_when_the_graph_has_no_such_entity(settings, chunk_store):
+    """Empty graph result, then search_chunks: the answer cites a chunk the agent received."""
+    delta, _ = _text_corpus(chunk_store)
+    client = ScriptedClient(
+        [
+            _tool_call(
+                "t1",
+                "query_knowledge_graph",
+                {
+                    "cypher_query": "MATCH (e:Entity) WHERE e.name CONTAINS 'Delta' RETURN e"
+                },
+            ),
+            _tool_call("t2", "search_chunks", {"query": "Delta Devices", "k": 3}),
+            _completion(
+                {
+                    "content": f"She led product at Delta Devices [chunk:{delta.chunk_id}]."
+                },
+                "stop",
+            ),
+        ]
+    )
+    investigator = Investigator(
+        model=OpenAIModel(client=client, model_id="m", stream=False),
+        graph=FakeGraph(),
+        chunks=chunk_store,
+        settings=settings,
+    )
+
+    output = investigator.investigate(
+        "How is Acme connected to Delta Devices?",
+        scope=InvestigationScope(strategy="graph"),
+    )
+
+    assert output.seed_chunk_ids == []  # the graph strategy seeds nothing
+    assert [c.tool for c in output.tool_calls] == [
+        "query_knowledge_graph",
+        "search_chunks",
+    ]
+    assert (
+        output.citations == [delta.chunk_id]
+        and delta.chunk_id in output.fetched_chunk_ids
+    )
+    assert delta.chunk_id in json.dumps(client.requests[2]["messages"])
+
+
+def test_system_prompt_says_absence_from_the_graph_is_not_evidence(
+    settings, chunk_store
+):
+    """The prompt sent to the model tells it to search the text before concluding absence."""
+    client = ScriptedClient([_completion({"content": "No data."}, "stop")])
+    investigator = Investigator(
+        model=OpenAIModel(client=client, model_id="m", stream=False),
+        graph=FakeGraph(),
+        chunks=chunk_store,
+        settings=settings,
+    )
+    investigator.investigate("Who is X?", scope=InvestigationScope(strategy="graph"))
+    system = client.requests[0]["messages"][0]["content"]
+    assert "Absence from the graph is not evidence of absence" in system
+    assert "search_chunks" in system
