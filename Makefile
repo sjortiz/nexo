@@ -31,7 +31,7 @@ NEO4J_TEST_PASSWORD ?= nexo-test-pass
 
 .DEFAULT_GOAL := help
 .PHONY: help install install-notebook install-keychain env models up down check render lock compose-file \
-        ingest ask mcp graph app \
+        ingest ask mcp review-ui graph app \
         lint format test neo4j-test test-neo4j neo4j-test-down test-live ci \
         walkthrough site serve-site notebook clean
 
@@ -86,6 +86,9 @@ ask: ## Ask a question (pauses for review): make ask Q="How is A connected to B?
 
 mcp: ## Serve the knowledge graph to MCP clients over stdio
 	$(RUN)nexo mcp
+
+review-ui: ## Serve the demo review page on 127.0.0.1 (no authentication; never part of `make up`)
+	$(RUN)nexo review-ui
 
 graph: ## Print the LangGraph workflow as Mermaid
 	$(RUN)nexo graph
