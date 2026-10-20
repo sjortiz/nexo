@@ -634,7 +634,8 @@ def test_ports_finding_names_who_holds_a_port(monkeypatch):
         def podman(project: str) -> str:
             labels = {"com.docker.compose.project": project}
             ports = [{"host_port": port - 1, "range": 2}]
-            return json.dumps([{"Names": ["n-1"], "Labels": labels, "Ports": ports}])
+            containers = [{"Names": ["n-1"], "Labels": labels, "Ports": ports}]
+            return json.dumps(containers, indent=4)  # as podman ps prints it
 
         engine["ps"] = podman("nexo")
         assert check.ports_finding(compose, MAC).ok
@@ -860,6 +861,9 @@ def test_parse_ps_skips_podman_compose_banners():
     assert len(parse_ps("\n".join([banner, "", *lines]))) == 3
     assert len(parse_ps(banner + "\n[" + ",".join(lines) + "]\n")) == 3
     assert not parse_ps(banner)
+    # podman ps indents its array over many lines.
+    indented = json.dumps([json.loads(line) for line in lines], indent=4)
+    assert parse_ps(banner + "\n" + indented) == [json.loads(line) for line in lines]
 
 
 def test_up_fails_when_neo4j_refuses_the_providers_password(fake_up, capfd):
