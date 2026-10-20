@@ -20,8 +20,8 @@ import jsonpatch
 import yaml
 
 from nexo.setup.components import COMPONENTS, load_fragment, merge_compose, merge_patch
-from nexo.setup.lock import VLLM_EMBEDDING_URL, VLLM_URL, resolve
-from nexo.setup.schema import Casting, SetupError
+from nexo.setup.lock import resolve, vllm_urls
+from nexo.setup.schema import Casting, Ports, SetupError
 
 COLLECTOR_BASE = "deploy/otel-collector.yaml"
 QUERY_TEXT = "nexo.query.text"
@@ -50,6 +50,26 @@ ORDER = (
     "app",
 )
 COLLECTOR_ADDONS = ("hostMetrics", "langfuse", "jaeger", "langsmith")
+# Each port a fragment publishes, by service and container port: the spec.ports field
+# that sets its host port.
+PUBLISHED = {
+    ("neo4j", 7474): "neo4j_http",
+    ("neo4j", 7687): "neo4j_bolt",
+    ("otel-collector", 4318): "otlp",
+    ("otel-collector", 8889): "metrics",
+    ("signoz", 8080): "signoz",
+    ("langfuse-web", 3000): "langfuse",
+    ("langfuse-storage", 8333): "langfuse_storage",
+    ("jaeger", 16686): "jaeger",
+    ("agent-inbox", 3000): "agent_inbox",
+    ("vllm-inference-service", 8000): "vllm",
+    ("vllm-embedding-service", 8000): "vllm_embedding",
+}
+# URLs a service hands the browser, so they name host ports.
+BROWSER_URLS = {
+    "NEXTAUTH_URL": "langfuse",
+    "LANGFUSE_S3_MEDIA_UPLOAD_ENDPOINT": "langfuse_storage",
+}
 
 
 class _Dumper(yaml.SafeDumper):
@@ -180,26 +200,6 @@ def _app_environment(casting: Casting, host: Host) -> dict[str, str]:
     return env
 
 
-def inbox_ports(casting: Casting) -> tuple[int, int]:
-    """(Agent Inbox page, review adapter) host ports: addons.agentInbox.config port, adapterPort.
-
-    Defaults until spec.ports (PR 13) exists; both are published on 127.0.0.1 only.
-    """
-    addon = casting.spec.addons.get("agentInbox")
-    config = addon.config if addon is not None else {}
-    ports = (config.get("port", 3030), config.get("adapterPort", 2024))
-    for key, port in zip(("port", "adapterPort"), ports):
-        if (
-            not isinstance(port, int)
-            or isinstance(port, bool)
-            or not 1 <= port <= 65535
-        ):
-            raise SetupError(f"addons.agentInbox.config.{key}: expected a port")
-    if ports[0] == ports[1]:
-        raise SetupError("addons.agentInbox.config: port and adapterPort must differ")
-    return ports
-
-
 def _apply_environment(
     services: dict[str, Any], casting: Casting, on: set[str]
 ) -> None:
@@ -212,14 +212,33 @@ def _apply_environment(
             main = services[component.main].setdefault("environment", {})
             main.update(overrides[name].env)
         collector.update(component.collector_env)
-    if "agentInbox" in on:
-        page = inbox_ports(casting)[0]
-        services["agent-inbox"]["ports"] = [f"127.0.0.1:{page}:3000"]
     if "langsmith" in on:
         langsmith = casting.spec.addons.get("langsmith")
         collector["LANGSMITH_PROJECT"] = (langsmith and langsmith.project) or "nexo"
     if not collector:
         del services["otel-collector"]["environment"]
+
+
+def publish_ports(services: dict[str, Any], ports: Ports) -> None:
+    """Host ports from spec.ports, and the browser-facing URLs that name them."""
+    for name, service in services.items():
+        published = []
+        for mapping in service.get("ports", []):
+            address, container = mapping.rsplit(":", 1)
+            field_name = PUBLISHED.get((name, int(container)))
+            if field_name is None:
+                raise SetupError(f"{name} publishes {container}: no spec.ports field")
+            ip = address.rpartition(":")[
+                0
+            ]  # "127.0.0.1:7687" -> 127.0.0.1; "7687" -> ""
+            host_port = f"{getattr(ports, field_name)}:{container}"
+            published.append(f"{ip}:{host_port}" if ip else host_port)
+        if published:
+            service["ports"] = published
+        environment = service.get("environment", {})
+        for variable, field_name in BROWSER_URLS.items():
+            if str(environment.get(variable, "")).startswith("http://localhost:"):
+                environment[variable] = f"http://localhost:{getattr(ports, field_name)}"
 
 
 def build_compose(
@@ -235,6 +254,7 @@ def build_compose(
     compose["volumes"] = {name: spec or {} for name, spec in compose["volumes"].items()}
     services = compose["services"]
     _apply_environment(services, casting, on)
+    publish_ports(services, casting.spec.ports)
     services["otel-collector"].setdefault("volumes", []).insert(
         0, f"{layout.path(out / 'otel-collector.yaml')}:/etc/otelcol/config.yaml:ro"
     )
@@ -360,8 +380,8 @@ def build_env(casting: Casting) -> dict[str, str]:
     """Settings Nexo reads after .env (so the setup file wins); endpoints as the host sees them."""
     spec = casting.spec
     env = {
-        "NEO4J_URI": "bolt://localhost:7687",
-        "OTEL_EXPORTER_OTLP_ENDPOINT": "http://localhost:4318",
+        "NEO4J_URI": spec.ports.bolt,
+        "OTEL_EXPORTER_OTLP_ENDPOINT": f"http://localhost:{spec.ports.otlp}",
         "OTEL_LOGS_EXPORTER": spec.telemetry.logs,
         "TRACE_QUERY_TEXT": "true" if spec.telemetry.query_text else "false",
     }
@@ -377,16 +397,22 @@ def build_env(casting: Casting) -> dict[str, str]:
             env["REMOTE_PROFILE"] = models.remote.profile
             env["REMOTE_BASE_URL"] = f"http://localhost:{models.remote.port}/v1"
     elif models.provider == "vllm":
+        chat, embedding = vllm_urls(spec.ports)
         env |= {
-            "VLLM_BASE_URL": VLLM_URL,
+            "VLLM_BASE_URL": chat,
             "VLLM_MODEL": models.vllm.model,
-            "EMBEDDING_BASE_URL": VLLM_EMBEDDING_URL,
+            "EMBEDDING_BASE_URL": embedding,
             "EMBEDDING_MODEL": models.vllm.embedding,
         }
-    inbox = spec.addons.get("agentInbox")
-    if inbox is not None and inbox.config:
-        page, adapter = inbox_ports(casting)
-        env |= {"AGENT_INBOX_PORT": str(page), "REVIEW_INBOX_PORT": str(adapter)}
+    ports, defaults = spec.ports, Ports()
+    if (ports.agent_inbox, ports.review_inbox) != (
+        defaults.agent_inbox,
+        defaults.review_inbox,
+    ):  # the adapter on the host reads them; its defaults match
+        env |= {
+            "AGENT_INBOX_PORT": str(ports.agent_inbox),
+            "REVIEW_INBOX_PORT": str(ports.review_inbox),
+        }
     for role, override in models.roles.items():
         if override.model:
             env[f"{role.upper()}_MODEL"] = override.model
