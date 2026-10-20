@@ -8,7 +8,7 @@ operations on the rendered files as the escape hatch.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
@@ -19,6 +19,7 @@ API_VERSION = "nexo/v1alpha1"
 CORE = ("neo4j", "collector", "signoz")
 ADDONS = ("langfuse", "jaeger", "langsmith", "hostMetrics")
 ROLES = ("agent", "extraction", "router", "judge", "embedding")
+Port = Annotated[int, Field(ge=1, le=65535)]
 
 
 class SetupError(ValueError):
@@ -42,7 +43,7 @@ class Machine(_Strict):
     """A machine that serves models with Ollama, named by its hardware profile."""
 
     profile: str
-    port: int = Field(default=11434, ge=1, le=65535)
+    port: Port = 11434
 
     @model_validator(mode="after")
     def _known_profile(self) -> Machine:
@@ -148,6 +149,26 @@ class Secrets(_Strict):
         return self
 
 
+class Ports(_Strict):
+    """Host ports the stack publishes on 127.0.0.1: change them to run a second stack."""
+
+    neo4j_bolt: Port = Field(default=7687, alias="neo4jBolt")
+    neo4j_http: Port = Field(default=7474, alias="neo4jHttp")
+    otlp: Port = 4318
+    metrics: Port = 8889  # the collector's Prometheus endpoint
+    signoz: Port = 8080
+    langfuse: Port = 3000
+    langfuse_storage: Port = Field(default=9090, alias="langfuseStorage")
+    jaeger: Port = 16686
+    vllm: Port = 8000
+    vllm_embedding: Port = Field(default=8001, alias="vllmEmbedding")
+
+    @property
+    def bolt(self) -> str:
+        """Neo4j as the host sees it."""
+        return f"bolt://localhost:{self.neo4j_bolt}"
+
+
 class Patch(_Strict):
     """RFC 6902 operations on one rendered file (relative to the render folder)."""
 
@@ -164,6 +185,7 @@ class Spec(_Strict):
     addons: dict[Literal[ADDONS], Component] = Field(default_factory=dict)
     telemetry: Telemetry = Field(default_factory=Telemetry)
     secrets: Secrets = Field(default_factory=Secrets)
+    ports: Ports = Field(default_factory=Ports)
     patches: list[Patch] = Field(default_factory=list)
 
     @model_validator(mode="after")
@@ -171,6 +193,25 @@ class Spec(_Strict):
         off = [name for name, c in self.components.items() if c.enabled is False]
         if off:
             raise ValueError(f"core components cannot be disabled yet: {off}")
+        return self
+
+    @model_validator(mode="after")
+    def _ports_distinct(self) -> Spec:
+        taken = {
+            f"ports.{name}": port
+            for name, port in self.ports.model_dump(by_alias=True).items()
+        }
+        for name in ("local", "remote"):
+            if (machine := getattr(self.models, name)) is not None:
+                taken[f"models.{name}.port"] = machine.port
+        first: dict[int, str] = {}
+        clashes = []
+        for where, port in taken.items():
+            if port in first:
+                clashes.append(f"{first[port]} and {where} are both {port}")
+            first.setdefault(port, where)
+        if clashes:
+            raise ValueError("; ".join(clashes))
         return self
 
 

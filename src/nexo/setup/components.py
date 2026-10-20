@@ -119,11 +119,12 @@ MEMORY_GB = {
     "langfuse": 3.0,  # web 1.4, worker 0.8, ClickHouse 0.65, storage, Postgres, Redis
     "jaeger": 0.01,
 }
+# Web UIs up prints: component -> its spec.ports field.
 UIS = {
-    "neo4j": "http://localhost:7474",
-    "signoz": "http://localhost:8080",
-    "langfuse": "http://localhost:3000",
-    "jaeger": "http://localhost:16686",
+    "neo4j": "neo4j_http",
+    "signoz": "signoz",
+    "langfuse": "langfuse",
+    "jaeger": "jaeger",
 }
 
 
