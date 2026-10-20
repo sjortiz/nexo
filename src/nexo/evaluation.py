@@ -82,6 +82,19 @@ def retrieval_scores(
     }
 
 
+def answer_scores(
+    answer: str, answer_contains: Iterable[str]
+) -> dict[str, float | None]:
+    """Share of the expected phrases the answer contains (case-insensitive).
+
+    A check that needs no judge model: put the facts a correct answer must state in the
+    golden case's `answer_contains`.
+    """
+    expected = [phrase.lower() for phrase in answer_contains]
+    found = sum(phrase in answer.lower() for phrase in expected)
+    return {"generation.answer_contains": _ratio(found, len(expected))}
+
+
 class JudgeScore(BaseModel):
     """A judge's 1-5 score with its rationale and any unsupported claims."""
 
