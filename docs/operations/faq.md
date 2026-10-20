@@ -24,6 +24,12 @@ sources:
     title: MCP server
 ---
 
+# Which setup should I choose?
+
+Start from your hardware: [Choosing a setup](decision-guide.md) has a decision matrix per choice
+(preset, one or two machines, model serving, observability add-ons, memory per combination, how to
+run the services).
+
 # Which observability backend should I use: SigNoz, Langfuse, Jaeger or LangSmith?
 
 They answer different questions, and all of them receive the same telemetry from the same collector,
@@ -38,7 +44,8 @@ so switching never changes Nexo itself.[^adr-0015]
 
 SigNoz, Langfuse and Jaeger run on your machine. LangSmith is a cloud service: traces leave
 your machine (without message content), so sensitive data needs a BAA or LangSmith's Enterprise
-self-hosting. Details: [Observability](observability.md).[^observability]
+self-hosting. Details: [Observability](observability.md);[^observability] memory and cost side by side:
+[Choosing a setup](decision-guide.md#4-which-observability-to-turn-on).
 
 # How do I collect logs?
 
