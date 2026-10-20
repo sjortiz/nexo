@@ -14,7 +14,8 @@ import yaml
 from nexo import cli
 from nexo.config import Settings
 from nexo.local_profiles import plan
-from nexo.setup.check import memory_budget
+from nexo.setup import check
+from nexo.setup.check import Finding, memory_budget
 from nexo.setup import commands
 from nexo.setup.commands import model_lines
 from nexo.setup.components import COMPONENTS, MEMORY_GB, default_images
@@ -376,19 +377,20 @@ def _fake_up(workdir, monkeypatch):
     monkeypatch.chdir(workdir)
     monkeypatch.setattr(commands.subprocess, "run", _recording_run(seen))
     monkeypatch.setattr(commands, "detect_host", lambda _casting: MAC)
-    monkeypatch.setattr(commands, "preflight", lambda *_args: [])
+    findings: list[Finding] = []
+    monkeypatch.setattr(commands, "preflight", lambda *_args: findings)
     _setup(workdir, "mac-single")
 
     def up(*addons: str, force: bool = False) -> int:
         argv = ["setup", "up", "--skip-models", *(f"--addon={a}" for a in addons)]
         return cli.main(argv + (["--force"] if force else []))
 
-    return up, seen
+    return up, seen, findings
 
 
 def test_a_plain_up_removes_add_ons_a_previous_run_enabled(workdir, fake_up):
     """make up LANGFUSE=1, then make up: Langfuse is gone from the render and its containers go."""
-    up, seen = fake_up
+    up, seen, _ = fake_up
     assert up("langfuse") == 0
     assert "langfuse-web" in (workdir / RENDER_DIR / "compose.yaml").read_text()
     assert up() == 0
@@ -396,3 +398,48 @@ def test_a_plain_up_removes_add_ons_a_previous_run_enabled(workdir, fake_up):
     compose_up = [c for c in seen if c[1:2] == ["compose"] and "up" in c]
     assert len(compose_up) == 2
     assert all("--remove-orphans" in c for c in compose_up)
+
+
+def _memory(workdir, monkeypatch, preset, sizes, addons=()):
+    """memory_findings for a preset; sizes = (machine GiB, Podman VM GiB or None)."""
+    machine_gb, vm_gb = sizes
+    monkeypatch.setattr(check, "machine_memory_gb", lambda: machine_gb)
+    monkeypatch.setattr(check, "engine_memory_gb", lambda _host: vm_gb)
+    path = _setup(workdir, preset)
+    casting = load_casting(path)
+    locked = lock(casting, path, workdir)
+    on = {n for n, enabled in locked["enabled"].items() if enabled} | set(addons)
+    return {f.name: f for f in check.memory_findings(casting, locked, on, MAC)}
+
+
+def test_memory_is_checked_against_the_real_machine_and_vm(workdir, monkeypatch):
+    """A 64 GB profile on a 24 GB machine fails; so do add-ons beyond the VM or the machine."""
+    fits = _memory(workdir, monkeypatch, "mac-single", (24.0, 8.0))
+    assert all(f.ok for f in fits.values()), fits
+    wrong = _memory(workdir, monkeypatch, "linux-cpu", (24.0, None))
+    assert not wrong["profile"].ok and "cpu-64 is for 64 GB" in wrong["profile"].detail
+    assert not wrong["memory"].ok  # 64 GB tier models on 24 GB
+    vm = _memory(
+        workdir, monkeypatch, "mac-single", (24.0, 4.0), ("langfuse", "jaeger")
+    )
+    assert not vm["podman vm"].ok and "of 4.0 GB" in vm["podman vm"].detail
+    small = _memory(workdir, monkeypatch, "mac-single", (12.0, None), ("langfuse",))
+    assert not small["memory"].ok
+
+
+@pytest.mark.parametrize(
+    "failed, force, blocked",
+    [
+        ("memory", False, True),
+        ("memory", True, False),
+        ("podman vm", True, False),
+        ("engine", True, True),  # --force never overrides a missing engine or secret
+    ],
+)
+def test_memory_failures_block_up_unless_forced(fake_up, failed, force, blocked):
+    """check and up stop on a failed memory check; --force (FORCE=1) lets them go ahead."""
+    up, seen, findings = fake_up
+    findings.append(Finding(failed, False, "too much"))
+    assert up(force=force) == (1 if blocked else 0)
+    started = [c for c in seen if c[1:2] == ["compose"] and "up" in c]
+    assert bool(started) is not blocked
