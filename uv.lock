@@ -1880,7 +1880,6 @@ version = "0.1.0"
 source = { editable = "." }
 dependencies = [
     { name = "jsonpatch" },
-    { name = "keyring" },
     { name = "langchain-core" },
     { name = "langchain-openai" },
     { name = "langchain-text-splitters" },
@@ -1907,6 +1906,9 @@ dependencies = [
 aws = [
     { name = "boto3" },
 ]
+keychain = [
+    { name = "keyring" },
+]
 notebook = [
     { name = "ipykernel" },
     { name = "jupyterlab" },
@@ -1931,7 +1933,7 @@ requires-dist = [
     { name = "ipykernel", marker = "extra == 'notebook'", specifier = ">=6.29" },
     { name = "jsonpatch", specifier = ">=1.33,<2" },
     { name = "jupyterlab", marker = "extra == 'notebook'", specifier = ">=4.2,<5" },
-    { name = "keyring", specifier = ">=25.6,<26" },
+    { name = "keyring", marker = "extra == 'keychain'", specifier = ">=25.6,<26" },
     { name = "langchain-core", specifier = ">=1.6,<2" },
     { name = "langchain-openai", specifier = ">=1.7,<2" },
     { name = "langchain-text-splitters", specifier = ">=1.1,<2" },
@@ -1956,7 +1958,7 @@ requires-dist = [
     { name = "strands-agents", extras = ["openai"], specifier = ">=1.61,<2" },
     { name = "tenacity", specifier = ">=9.2,<10" },
 ]
-provides-extras = ["postgres", "aws", "notebook"]
+provides-extras = ["postgres", "aws", "notebook", "keychain"]
 
 [package.metadata.requires-dev]
 dev = [

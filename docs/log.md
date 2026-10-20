@@ -1,6 +1,7 @@
 # Bundle Update Log
 
 ## 2026-10-20
+* **Update**: The keychain is an optional extra (`make install-keychain`): nothing imports `keyring` unless `secrets.provider: keychain` is chosen, so tests and CI run without it ([Testing](operations/testing.md)).
 * **Update**: Generated secrets live in a provider (`spec.secrets.provider`): `~/.config/nexo/config` by default, keychain, SOPS or Vault opt-in; clusters mount them as files read in-process, never environment variables; locally compose gets them through the environment; `check` and `up` log in to Neo4j ([ADR-0017](decisions/adr-0017-secrets-from-a-provider.md), [Choosing a setup](operations/decision-guide.md#9-where-secrets-live)).
 * **Creation**: [Choosing a setup](operations/decision-guide.md): decision matrices for presets per hardware, one or two machines, model serving, observability add-ons, memory per combination, flags versus `nexo.yaml`, how to run the services and content in telemetry.
 * **Update**: One setup file, `nexo.yaml`, rendered by `nexo setup` (lock, preflight with a memory budget, presets for five setups); `make` keeps its targets and add-on flags; `docker-compose.yml` is generated from the mac-single preset; the GPU and Linux overrides are gone ([How local setup works](operations/local-setup.md), [ADR-0016](decisions/adr-0016-declarative-setup-file.md)).

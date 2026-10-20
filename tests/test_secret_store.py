@@ -7,15 +7,14 @@ import io
 import json
 import os
 import stat
+import subprocess
 import sys
 import threading
+import types
 import uuid
-import subprocess
 import urllib.error
 from pathlib import Path
 
-import keyring
-import keyring.backends.fail
 import pytest
 
 from nexo import secret_store
@@ -49,21 +48,54 @@ def test_default_is_the_private_config_file():
     assert stat.S_IMODE(store.path.parent.stat().st_mode) == 0o700
 
 
-def test_keychain_is_opt_in_and_per_stack(memory_keychain):
-    """provider keychain: one entry per key under nexo/<stack>; no keychain is an error."""
-    nexo = store_from_options(
-        {"NEXO_STACK": "nexo", "NEXO_SECRETS_PROVIDER": "keychain"}
-    )
-    assert isinstance(nexo, KeychainStore)
+def test_keychain_entries_are_per_stack(memory_keychain):
+    """One entry per key under nexo/<stack>; another stack (metadata.name) has its own."""
+    nexo = KeychainStore("nexo", backend=memory_keychain)
     nexo.put({"NEO4J_PASSWORD": "one"})
-    other = store_from_options(
-        {"NEXO_STACK": "nexoask", "NEXO_SECRETS_PROVIDER": "keychain"}
-    )
-    assert not other.get(["NEO4J_PASSWORD"])
+    assert nexo.get(["NEO4J_PASSWORD"]) == {"NEO4J_PASSWORD": "one"}
+    assert not KeychainStore("nexoask", backend=memory_keychain).get(["NEO4J_PASSWORD"])
     assert ("nexo/nexo", "NEO4J_PASSWORD") in memory_keychain.items
-    keyring.set_keyring(keyring.backends.fail.Keyring())
-    with pytest.raises(SecretStoreError, match="no keychain"):
+
+
+def test_keychain_without_the_extra_says_how_to_install_it(monkeypatch):
+    """provider keychain without keyring installed: a clear error, not an ImportError."""
+    monkeypatch.setitem(
+        sys.modules, "keyring", None
+    )  # as if the extra were not installed
+    with pytest.raises(SecretStoreError, match="uv sync --extra keychain"):
         store_from_options({"NEXO_SECRETS_PROVIDER": "keychain"})
+
+
+def test_keychain_on_a_machine_without_one_is_an_error(monkeypatch):
+    """keyring installed but only its fail backend (headless Linux): say so."""
+
+    fail_keyring = type(
+        "Keyring", (), {}
+    )  # stands in for keyring.backends.fail.Keyring
+    fail = types.SimpleNamespace(Keyring=fail_keyring)
+    monkeypatch.setitem(
+        sys.modules, "keyring", types.SimpleNamespace(get_keyring=fail_keyring)
+    )
+    monkeypatch.setitem(
+        sys.modules, "keyring.backends", types.SimpleNamespace(fail=fail)
+    )
+    monkeypatch.setitem(sys.modules, "keyring.backends.fail", fail)
+    with pytest.raises(SecretStoreError, match="no keychain on this machine"):
+        store_from_options({"NEXO_SECRETS_PROVIDER": "keychain"})
+
+
+def test_nexo_never_imports_keyring_unless_the_keychain_is_chosen():
+    """keyring is an optional extra: Nexo, nexo setup and the CLI load without it."""
+    code = (
+        "import sys; sys.modules['keyring'] = None\n"
+        "import nexo.secret_store, nexo.config, nexo.setup.commands, nexo.cli\n"
+        "from nexo.secret_store import store_from_options\n"
+        "store_from_options({'NEXO_STACK': 'nexo'}).get(['NEO4J_PASSWORD'])\n"
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", code], capture_output=True, text=True, check=False
+    )
+    assert result.returncode == 0, result.stderr
 
 
 def _mounted(tmp_path: Path, files: dict[str, str]) -> Path:
@@ -232,17 +264,17 @@ def test_vault_errors_name_the_problem_not_the_token(monkeypatch):
 
 
 def test_settings_take_generated_secrets_from_the_provider(tmp_path, monkeypatch):
-    """The keychain wins over a stale .env; the environment wins over both; tools opt out."""
+    """The store wins over a stale .env; the environment wins over both; tools opt out."""
     monkeypatch.chdir(tmp_path)
     monkeypatch.delenv("NEO4J_PASSWORD", raising=False)
     (tmp_path / ".env").write_text("NEO4J_PASSWORD=stale\n")
     assert Settings().neo4j_password.get_secret_value() == "stale"  # no nexo setup yet
     (tmp_path / ".nexo/render").mkdir(parents=True)
     (tmp_path / ".nexo/render/nexo.env").write_text(
-        "NEXO_STACK=nexo\nNEXO_SECRETS_PROVIDER=keychain\n"  # opted in
+        "NEXO_STACK=nexo\nNEXO_SECRETS_PROVIDER=file\n"
     )
-    KeychainStore("nexo").put({"NEO4J_PASSWORD": "from-keychain"})
-    assert Settings().neo4j_password.get_secret_value() == "from-keychain"
+    store_from_options({"NEXO_STACK": "nexo"}).put({"NEO4J_PASSWORD": "from-store"})
+    assert Settings().neo4j_password.get_secret_value() == "from-store"
     assert Settings(_env_file=None).neo4j_password.get_secret_value() == ""
     monkeypatch.setenv("NEO4J_PASSWORD", "from-env")
     assert Settings().neo4j_password.get_secret_value() == "from-env"
@@ -269,7 +301,7 @@ def test_a_keychain_that_does_not_answer_times_out(memory_keychain, monkeypatch)
     monkeypatch.setattr(KeychainStore, "timeout_s", 0.05)
     try:
         with pytest.raises(SecretStoreError, match="no answer"):
-            KeychainStore("nexo").get(["NEO4J_PASSWORD"])
+            KeychainStore("nexo", backend=memory_keychain).get(["NEO4J_PASSWORD"])
     finally:
         release.set()
 
@@ -280,18 +312,10 @@ def test_a_keychain_that_does_not_answer_times_out(memory_keychain, monkeypatch)
 )
 def test_real_keychain_round_trip():
     """Opt-in, local only: a temporary entry in the real keychain, written then removed."""
-    if sys.platform == "darwin":
-        from keyring.backends.macOS import (  # pylint: disable=import-outside-toplevel  # macOS only
-            Keyring as Real,
-        )
-    else:
-        from keyring.backends.SecretService import (  # pylint: disable=import-outside-toplevel  # Linux only
-            Keyring as Real,
-        )
-    keyring.set_keyring(Real())
-    store = KeychainStore(f"test-{uuid.uuid4().hex[:8]}")
+    pytest.importorskip("keyring", reason="the keychain extra is not installed")
+    store = KeychainStore(f"test-{uuid.uuid4().hex[:8]}")  # this machine's keychain
     try:
         store.put({"NEXO_TEST": "value"})
         assert store.get(["NEXO_TEST"]) == {"NEXO_TEST": "value"}
     finally:
-        keyring.delete_password(store.service, "NEXO_TEST")
+        store.backend.delete_password(store.service, "NEXO_TEST")

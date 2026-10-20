@@ -152,7 +152,7 @@ For every setting, the first match wins:[^config]
 Generated secrets (Neo4j, SigNoz and Langfuse passwords and keys) never sit in a file you copy
 between machines.[^adr-0017] By default they live in `~/.config/nexo/config` (a `[stack]`
 section, owner-only), which every checkout of the stack on this machine shares, so one stack per
-machine works from any checkout. `spec.secrets.provider` opts in to the OS keychain, SOPS or Vault; on
+machine works from any checkout. `spec.secrets.provider` opts in to the OS keychain (`make install-keychain` first), SOPS or Vault; on
 a cluster, `file` with a `path` reads what the platform mounts, read-only and never as environment
 variables. Locally, `nexo setup` hands the values to compose through the environment. The SigNoz and
 Langfuse logins are in `~/.config/nexo/config` under `[nexo]`. Secrets found in an older `.env` move into the store on the next

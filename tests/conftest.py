@@ -7,8 +7,6 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
 
-import keyring
-import keyring.backend
 import pytest
 from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import AIMessage
@@ -25,11 +23,6 @@ from nexo.storage.schemas import ChunkRecord, Sensitivity
 from nexo.storage.vector_store import LocalChunkStore
 from nexo.telemetry import instrument_openai
 
-# Tests never reach a real keychain (it can block on an unlock prompt): keyring picks its
-# backend on first use, so this applies here and in subprocesses; the fixture below
-# installs an in-memory one per test.
-os.environ.setdefault("PYTHON_KEYRING_BACKEND", "keyring.backends.fail.Keyring")
-
 _EXPORTER = InMemorySpanExporter()
 _provider = TracerProvider()
 _provider.add_span_processor(SimpleSpanProcessor(_EXPORTER))
@@ -38,37 +31,38 @@ os.environ.pop("OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT", None)
 instrument_openai(_provider)
 
 
-class MemoryKeyring(keyring.backend.KeyringBackend):
-    """A keychain that lives for one test."""
-
-    priority = 1
+class MemoryKeyring:
+    """A keychain that lives for one test (keyring's get/set/delete_password interface)."""
 
     def __init__(self):
-        super().__init__()
         self.items: dict[tuple[str, str], str] = {}
 
     def get_password(self, service, username):
+        """The stored value, or None."""
         return self.items.get((service, username))
 
     def set_password(self, service, username, password):
+        """Store a value."""
         self.items[(service, username)] = password
 
     def delete_password(self, service, username):
+        """Forget a value."""
         self.items.pop((service, username), None)
 
 
 @pytest.fixture(autouse=True)
-def memory_keychain(tmp_path_factory, monkeypatch):
-    """No test reads or writes the real keychain or ~/.config/nexo."""
-    backend = MemoryKeyring()
-    previous = keyring.get_keyring()
-    keyring.set_keyring(backend)
+def isolated_config(tmp_path_factory, monkeypatch):
+    """No test reads or writes ~/.config/nexo or sees NEXO_* settings from the shell."""
     for key in [k for k in os.environ if k.startswith("NEXO_")]:
         monkeypatch.delenv(key)
     # After the cleanup above: every test gets its own ~/.config/nexo.
     monkeypatch.setenv("NEXO_CONFIG_DIR", str(tmp_path_factory.mktemp("nexo-config")))
-    yield backend
-    keyring.set_keyring(previous)
+
+
+@pytest.fixture
+def memory_keychain() -> MemoryKeyring:
+    """A fake keychain to inject: KeychainStore(stack, backend=memory_keychain)."""
+    return MemoryKeyring()
 
 
 @pytest.fixture

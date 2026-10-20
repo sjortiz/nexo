@@ -14,7 +14,7 @@ import yaml
 
 from nexo import cli
 from nexo.config import Settings
-from nexo.secret_store import FileStore, KeychainStore, store_from_options
+from nexo.secret_store import FileStore, store_from_options
 from nexo.local_profiles import plan
 from nexo.setup import check
 from nexo.setup.check import Finding, memory_budget
@@ -707,7 +707,7 @@ def test_up_fails_when_neo4j_refuses_the_providers_password(fake_up, capfd):
 
 def test_neo4j_finding(monkeypatch):
     """check: a refused login fails; a Neo4j that is not running is not checked."""
-    store = KeychainStore("nexo")
+    store = store_from_options({"NEXO_STACK": "nexo"})
     store.put({"NEO4J_PASSWORD": "pw"})
     for result, expected in (("refused", False), (None, True), ("unreachable", None)):
         monkeypatch.setattr(check, "neo4j_login", lambda *_a, r=result: r)
