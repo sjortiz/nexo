@@ -21,7 +21,7 @@ from pathlib import Path
 
 from nexo.config import Settings
 from nexo.llm import check_model_servers, resolved_models
-from nexo.setup.check import detect_host, preflight
+from nexo.setup.check import FORCEABLE, detect_host, preflight
 from nexo.setup.components import UIS
 from nexo.setup.envfile import ensure_secrets
 from nexo.setup.lock import lock as resolve_lock
@@ -37,7 +37,6 @@ from nexo.setup.schema import ADDONS, Casting, SetupError, load_casting
 
 log = logging.getLogger(__name__)
 PRESETS = "examples/setups"
-BLOCKING = {"engine", "secrets", "ollama"}
 # Containers of add-ons a previous run enabled are orphans of this render: remove them.
 UP = ["up", "-d", "--remove-orphans"]
 
@@ -121,14 +120,26 @@ def _render(args: argparse.Namespace) -> int:
     return 0
 
 
-def _report(casting: Casting, lock: dict, on: set[str], host: Host) -> bool:
-    """Log the preflight; False when something `up` cannot work without failed."""
+def _report(
+    casting: Casting, lock: dict, on: set[str], host: Host, force: bool
+) -> bool:
+    """Log the preflight; False when a check failed (memory ones pass with --force)."""
     findings = preflight(casting, lock, on, host, Path.cwd())
+    blocked = False
     for finding in findings:
+        forced = not finding.ok and force and finding.name in FORCEABLE
+        status = "ok  " if finding.ok else "WARN" if forced else "FAIL"
         (log.info if finding.ok else log.warning)(
-            "%s %s: %s", "ok  " if finding.ok else "FAIL", finding.name, finding.detail
+            "%s %s: %s%s",
+            status,
+            finding.name,
+            finding.detail,
+            " (--force)" if forced else "",
         )
-    return not any(not f.ok and f.name in BLOCKING for f in findings)
+        blocked = blocked or (not finding.ok and not forced)
+    if blocked and any(not f.ok and f.name in FORCEABLE for f in findings):
+        log.warning("to go ahead anyway: --force (make ... FORCE=1)")
+    return not blocked
 
 
 def model_lines(rows: list[dict]) -> list[tuple[bool, str]]:
@@ -163,7 +174,7 @@ def _check(args: argparse.Namespace) -> int:
     casting, lock = _context(args)
     host = detect_host(casting)
     render(casting, lock, Path.cwd(), host, _addons(args))
-    ok = _report(casting, lock, enabled_set(lock, _addons(args)), host)
+    ok = _report(casting, lock, enabled_set(lock, _addons(args)), host, args.force)
     if not args.no_models:
         ok = _models_reachable() and ok
     return 0 if ok else 1
@@ -184,7 +195,7 @@ def _up(args: argparse.Namespace) -> int:
     on = enabled_set(lock, _addons(args))
     ensure_secrets(Path.cwd() / ".env", Path.cwd(), on)
     render(casting, lock, Path.cwd(), host, _addons(args))
-    if not _report(casting, lock, on, host):
+    if not _report(casting, lock, on, host, args.force):
         return 1
     if casting.spec.models.provider == "ollama" and not args.skip_models:
         if code := _start_models(casting):
@@ -250,14 +261,20 @@ def add_parser(
         action="store_true",
         help="write docker-compose.yml and deploy/rendered/ (repo-relative paths)",
     )
-    verb(
-        "check", _check, "preflight and model server checks", addons=True
-    ).add_argument(
+    check = verb("check", _check, "preflight and model server checks", addons=True)
+    check.add_argument(
         "--no-models", action="store_true", help="skip asking the model servers"
     )
-    verb("up", _up, "start the stack (and Ollama's models)", addons=True).add_argument(
+    up = verb("up", _up, "start the stack (and Ollama's models)", addons=True)
+    up.add_argument(
         "--skip-models", action="store_true", help="do not run ollama-setup.sh"
     )
+    for parser in (check, up):
+        parser.add_argument(
+            "--force",
+            action="store_true",
+            help="go ahead although the memory or profile checks fail",
+        )
     verb("down", _down, "stop the stack; volumes are kept")
     verb("compose", _passthrough, "run compose on the rendered stack").add_argument(
         "compose_args", nargs=argparse.REMAINDER

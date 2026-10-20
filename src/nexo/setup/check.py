@@ -15,7 +15,12 @@ from nexo.local_profiles import MODEL_SIZES_GB, parse_profile
 from nexo.setup.components import MEMORY_GB
 from nexo.setup.envfile import missing_required
 from nexo.setup.render import Host
-from nexo.setup.schema import Casting, SetupError
+from nexo.setup.schema import Casting
+
+# Share of memory the setup may use: the rest is for the system and your apps.
+MEMORY_SHARE, VM_SHARE = 0.85, 0.9
+# Findings that stop check and up unless --force: the machine may still cope.
+FORCEABLE = {"profile", "memory", "podman vm"}
 
 
 @dataclass(frozen=True)
@@ -59,9 +64,9 @@ def detect_host(casting: Casting) -> Host:
 
 
 def machine_memory_gb() -> float | None:
-    """This machine's physical memory."""
+    """This machine's physical memory in GiB (how profiles name it: 24 on a 24 GB Mac)."""
     try:
-        return os.sysconf("SC_PAGE_SIZE") * os.sysconf("SC_PHYS_PAGES") / 1e9
+        return os.sysconf("SC_PAGE_SIZE") * os.sysconf("SC_PHYS_PAGES") / 2**30
     except (ValueError, OSError, AttributeError):
         return None
 
@@ -71,7 +76,7 @@ def engine_memory_gb(host: Host) -> float | None:
     if host.engine != "podman" or host.os != "macos":
         return None
     mib = _run("podman", "machine", "inspect", "--format", "{{.Resources.Memory}}")
-    return int(mib.splitlines()[0]) * 1.048576 / 1000 if mib else None
+    return int(mib.splitlines()[0]) / 1024 if mib else None
 
 
 def memory_budget(
@@ -132,49 +137,51 @@ def preflight(
                     f" ssh -N -L {remote.port}:127.0.0.1:11434 <remote host>",
                 )
             )
-    findings += _memory_findings(casting, lock, on, host)
+    findings += memory_findings(casting, lock, on, host)
     return findings
 
 
-def _memory_findings(
+def memory_findings(
     casting: Casting, lock: dict[str, Any], on: set[str], host: Host
 ) -> list[Finding]:
+    """Does the setup fit this machine (its real memory) and the Podman VM?"""
     budget = memory_budget(casting, lock, on)
     containers = round(sum(v for k, v in budget.items() if k != "models"), 1)
     total = round(sum(budget.values()), 1)
-    models = casting.spec.models
-    # The profile names this machine's memory; otherwise ask the OS.
-    machine = (
-        parse_profile(models.local.profile).memory_gb
-        if models.local is not None
-        else machine_memory_gb()
-    )
     parts = ", ".join(f"{k} {v}" for k, v in budget.items())
-    findings = [
+    machine = machine_memory_gb()
+    models = casting.spec.models
+    findings = []
+    if models.local is not None and machine is not None:
+        claimed = parse_profile(models.local.profile).memory_gb
+        findings.append(
+            Finding(
+                "profile",
+                claimed <= machine * 1.1,
+                f"{models.local.profile} is for {claimed} GB; this machine has"
+                f" {machine:.0f} GB",
+            )
+        )
+    findings.append(
         Finding(
             "memory",
-            machine is None or total <= machine * 0.85,
+            machine is None or total <= machine * MEMORY_SHARE,
             (
-                f"{total} GB of {machine:.0f} GB ({parts})"
+                f"{total} GB of {machine:.0f} GB ({parts}); at most"
+                f" {MEMORY_SHARE:.0%} leaves room for the system"
                 if machine
                 else f"{total} GB ({parts})"
             ),
         )
-    ]
+    )
     vm = engine_memory_gb(host)
     if vm is not None:
         findings.append(
             Finding(
                 "podman vm",
-                containers <= vm * 0.9,
-                f"containers {containers} GB of {vm:.1f} GB (podman machine set --memory to raise)",
+                containers <= vm * VM_SHARE,
+                f"containers {containers} GB of {vm:.1f} GB"
+                " (podman machine set --memory to raise)",
             )
         )
     return findings
-
-
-def require(findings: list[Finding]) -> None:
-    """Raise with every failed finding."""
-    failed = [f"{f.name}: {f.detail}" for f in findings if not f.ok]
-    if failed:
-        raise SetupError("preflight failed - " + "; ".join(failed))

@@ -15,6 +15,7 @@ LANGFUSE  ?=
 JAEGER    ?=
 LANGSMITH ?=
 UPGRADE   ?=
+FORCE     ?=
 NEXO_SETUP = $(RUN)nexo setup -f $(SETUP)
 ADDONS     = $(if $(LANGFUSE),--addon langfuse) $(if $(JAEGER),--addon jaeger) \
              $(if $(LANGSMITH),--addon langsmith)
@@ -54,14 +55,14 @@ models: ## Pull and start the profile's models in Ollama (PROFILE=m1-max-64 ROLE
 
 ##@ Run
 
-up: ## Start the models and the stack in nexo.yaml (one run: LANGFUSE=1, JAEGER=1, LANGSMITH=1)
-	$(NEXO_SETUP) up $(ADDONS)
+up: ## Start the models and the stack in nexo.yaml (one run: LANGFUSE=1 JAEGER=1 LANGSMITH=1; FORCE=1)
+	$(NEXO_SETUP) up $(ADDONS) $(if $(FORCE),--force)
 
 down: ## Stop the stack (data volumes are kept)
 	$(NEXO_SETUP) down
 
 check: ## Preflight (engine, secrets, memory), then each model role's server and model
-	$(NEXO_SETUP) check $(ADDONS)
+	$(NEXO_SETUP) check $(ADDONS) $(if $(FORCE),--force)
 
 render: ## Write .nexo/render/ from nexo.yaml without starting anything
 	$(NEXO_SETUP) render $(ADDONS)

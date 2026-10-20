@@ -96,7 +96,8 @@ system ([ADR-0015](../decisions/adr-0015-signoz-default-observability.md)).[^adr
 # 5. Memory for each combination
 
 Containers, measured; models are the 24 GB profile's (6.5 GB resident). The Podman VM's default
-limit is 8 GiB; `make check` warns when the containers would exceed it.
+limit is 8 GiB. `make check` and `make up` stop when the setup would not fit this machine's real
+memory (85%) or the Podman VM (90%); `FORCE=1` goes ahead anyway.
 
 | Turned on | Containers | With the models (24 GB Mac) | Fits the default Podman VM |
 |---|---|---|---|

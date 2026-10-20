@@ -87,7 +87,7 @@ Kubernetes comes after the compose target. Presets live in `examples/setups/`.[^
 | `make env` | `nexo setup init`, `nexo setup secrets` | `nexo.yaml` from a preset (kept if it exists); `.env` from the template with random secrets for the enabled components (existing values kept) |
 | `make lock` | `nexo setup lock` | `nexo.lock`: the components on, every service's image and each role's model. Pins stay when `nexo.yaml` changes; `UPGRADE=1` moves them to the current defaults |
 | `make render` | `nexo setup render` | `.nexo/render/`: `compose.yaml` (only the enabled services), `otel-collector.yaml` (the base plus each add-on's pipeline), `nexo.env` |
-| `make check` | `nexo setup check` | Preflight (engine, secrets, Ollama, memory budget, Podman VM limit), then each role's server and model |
+| `make check` | `nexo setup check` | Preflight (engine, secrets, Ollama, the profile against this machine's memory, memory budget, Podman VM limit), then each role's server and model; a failed memory check stops `check` and `up` unless `FORCE=1` |
 | `make up` | `nexo setup up` | Secrets, render, preflight, `ollama-setup.sh` for this machine's roles, `compose up -d` |
 | `make down` / `make app` | `nexo setup down` / `compose run nexo` | Stop (volumes kept) / the CLI in a container |
 
@@ -176,7 +176,9 @@ authentication, SSH provides it.
 |---|---|---|
 | `nexo.yaml: ...` error naming a field | A typo or an impossible combination | Fix that field; the presets show valid files. |
 | `FAIL secrets: set in .env: HF_TOKEN` | A key only you can provide | Add it to `.env`. |
-| `FAIL podman vm` | The enabled containers need more than the Podman VM has | `podman machine set --memory 10240`, or turn off an add-on. |
+| `FAIL profile: ... is for 64 GB; this machine has 24 GB` | The profile names more memory than the machine has | Set the profile for this machine; `FORCE=1` to go ahead anyway. |
+| `FAIL memory` | Models plus containers need more than 85% of this machine's memory | A smaller profile, fewer add-ons, or `FORCE=1`. |
+| `FAIL podman vm` | The enabled containers need more than 90% of the Podman VM | `podman machine set --memory 10240`, turn off an add-on, or `FORCE=1`. |
 | `unreachable ... Connection refused` on 11434 | Ollama is not running | `make up` (or `make models`), or start the service. |
 | The same on 11435 | The SSH tunnel is down | Re-run the `ssh -N -L ...` command. |
 | `model not served here` | Role sets do not match, the model was not pulled, or an explicit `*_MODEL` has a typo | Re-run the setup with the role set from the table; the output lists what the server has. |
