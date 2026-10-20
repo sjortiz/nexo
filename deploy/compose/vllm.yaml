@@ -1,0 +1,43 @@
+# vLLM on NVIDIA GPUs (models.provider: vllm). `nexo setup render` sets the model and GPU
+# count from models.vllm in nexo.yaml; HF_TOKEN (gated models) is yours to set in .env.
+# Published on 127.0.0.1 so Nexo on the host reaches them: 8000 chat, 8001 embeddings.
+services:
+  vllm-inference-service:
+    image: vllm/vllm-openai:v0.31.0
+    command:
+      - --model=meta-llama/Llama-3.3-70B-Instruct
+      - --served-model-name=meta-llama/Llama-3.3-70B-Instruct
+      - --tensor-parallel-size=4
+      - --max-model-len=32768
+      # Required for the Strands agent: turns Llama 3.x tool-call output into
+      # OpenAI tool_calls. Without these the agent never calls its tools.
+      - --enable-auto-tool-choice
+      - --tool-call-parser=llama3_json
+      - --api-key=${VLLM_API_KEY:?run make env}
+    environment:
+      HF_TOKEN: ${HF_TOKEN:?set HF_TOKEN in .env for the gated model}
+    ipc: host
+    ports: ["127.0.0.1:8000:8000"]
+    volumes: [hf-cache:/root/.cache/huggingface]
+    deploy:
+      resources:
+        reservations:
+          devices: [{ driver: nvidia, count: 4, capabilities: [gpu] }]
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8000/health"]
+      interval: 30s
+      start_period: 15m
+
+  vllm-embedding-service:
+    image: vllm/vllm-openai:v0.31.0
+    # Embedding architectures are served by the pooling runner automatically.
+    command: ["--model=BAAI/bge-m3", "--api-key=${EMBEDDING_API_KEY:?run make env}"]
+    ports: ["127.0.0.1:8001:8000"]
+    volumes: [hf-cache:/root/.cache/huggingface]
+    deploy:
+      resources:
+        reservations:
+          devices: [{ driver: nvidia, count: 1, capabilities: [gpu] }]
+
+volumes:
+  hf-cache:

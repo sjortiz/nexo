@@ -1,0 +1,30 @@
+# Add-on (addons.hostMetrics): the machine the containers run on and each container, like
+# New Relic's infrastructure agent. The container's /proc reports machine-wide numbers;
+# filesystems come from the read-only /hostfs mount.
+receivers:
+  hostmetrics:
+    collection_interval: 30s
+    scrapers:
+      cpu: {}
+      load: {}
+      memory: {}
+      paging: {}
+      disk: {}
+      filesystem:
+        include_mount_points: { mount_points: [/hostfs], match_type: strict }
+  docker_stats:
+    endpoint: unix:///var/run/docker.sock
+    collection_interval: 30s
+
+processors:
+  # Names the infrastructure data (host.name from OTEL_RESOURCE_ATTRIBUTES).
+  resourcedetection:
+    detectors: [env, system]
+    system: { hostname_sources: [os] }
+
+service:
+  pipelines:
+    metrics/infra:
+      receivers: [hostmetrics, docker_stats]
+      processors: [resourcedetection, batch]
+      exporters: [otlp/signoz]

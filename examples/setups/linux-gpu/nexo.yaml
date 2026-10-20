@@ -1,0 +1,13 @@
+# Linux with one NVIDIA or AMD GPU: Ollama sized by VRAM.
+#   make env && make up
+apiVersion: nexo/v1alpha1
+kind: Setup
+metadata:
+  name: nexo
+spec:
+  models:
+    provider: ollama
+    local:
+      profile: gpu-24  # gpu-<VRAM GB>
+  addons:
+    hostMetrics: { enabled: true }

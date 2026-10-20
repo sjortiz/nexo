@@ -1,0 +1,235 @@
+"""`nexo setup`: check, render and run the stack a setup file describes.
+
+nexo setup init [--preset mac-single]   write nexo.yaml from a preset
+nexo setup secrets                      fill missing secrets in .env
+nexo setup lock [--upgrade]             resolve nexo.yaml into nexo.lock
+nexo setup render [--addon NAME]        write .nexo/render/
+nexo setup check [--no-models]          preflight, then ask each model server
+nexo setup up [--addon NAME]            secrets, render, models, compose up
+nexo setup down                         compose down (volumes kept)
+nexo setup compose ARGS...              the container engine's compose on the render
+"""
+
+from __future__ import annotations
+
+import argparse
+import logging
+import platform
+import shutil
+import subprocess
+from pathlib import Path
+
+from nexo.config import Settings
+from nexo.llm import check_model_servers, resolved_models
+from nexo.setup.check import detect_host, preflight
+from nexo.setup.components import UIS
+from nexo.setup.envfile import ensure_secrets
+from nexo.setup.lock import lock as resolve_lock
+from nexo.setup.render import RENDER_DIR, Host, enabled_set, render
+from nexo.setup.schema import ADDONS, Casting, SetupError, load_casting
+
+log = logging.getLogger(__name__)
+PRESETS = "examples/setups"
+BLOCKING = {"engine", "secrets", "ollama"}
+
+
+def _context(args: argparse.Namespace):
+    casting_path = Path(args.file)
+    casting = load_casting(casting_path)
+    lock = resolve_lock(
+        casting, casting_path, Path.cwd(), upgrade=getattr(args, "upgrade", False)
+    )
+    return casting, lock
+
+
+def _addons(args: argparse.Namespace) -> frozenset[str]:
+    return frozenset(getattr(args, "addon", None) or ())
+
+
+def _compose(host: Host, args: list[str]) -> int:
+    root = Path.cwd()
+    command = [host.engine, "compose", "-f", str(root / RENDER_DIR / "compose.yaml")]
+    if (root / ".env").exists():
+        command += ["--env-file", str(root / ".env")]
+    log.info("%s", " ".join(command + args))
+    return subprocess.run(command + args, check=False).returncode
+
+
+def _ensure_render(args: argparse.Namespace) -> Host:
+    casting, lock = _context(args)
+    host = detect_host(casting)
+    if not (Path.cwd() / RENDER_DIR / "compose.yaml").exists():
+        render(casting, lock, Path.cwd(), host)
+    return host
+
+
+def _init(args: argparse.Namespace) -> int:
+    target = Path(args.file)
+    if target.exists() and not args.force:
+        log.info("%s exists; keeping it (--force to replace)", target)
+        return 0
+    preset = args.preset or (
+        "mac-single" if platform.system() == "Darwin" else "linux-cpu"
+    )
+    source = Path.cwd() / PRESETS / preset / "nexo.yaml"
+    if not source.exists():
+        names = sorted(p.name for p in (Path.cwd() / PRESETS).iterdir() if p.is_dir())
+        raise SetupError(f"no preset {preset!r}; presets: {', '.join(names)}")
+    shutil.copyfile(source, target)
+    log.info(
+        "wrote %s from preset %s: set models.local.profile for this machine",
+        target,
+        preset,
+    )
+    return 0
+
+
+def _secrets(args: argparse.Namespace) -> int:
+    on = {"neo4j", "signoz"}
+    if Path(args.file).exists():
+        _, lock = _context(args)
+        on = enabled_set(lock, _addons(args))
+    ensure_secrets(Path.cwd() / ".env", Path.cwd(), on)
+    return 0
+
+
+def _lock(args: argparse.Namespace) -> int:
+    _, lock = _context(args)
+    on = sorted(name for name, enabled in lock["enabled"].items() if enabled)
+    log.info("%s: %s", Path(args.file).with_suffix(".lock"), ", ".join(on))
+    return 0
+
+
+def _render(args: argparse.Namespace) -> int:
+    casting, lock = _context(args)
+    out = render(casting, lock, Path.cwd(), detect_host(casting), _addons(args))
+    log.info("rendered %s", out)
+    return 0
+
+
+def _report(casting: Casting, lock: dict, on: set[str], host: Host) -> bool:
+    """Log the preflight; False when something `up` cannot work without failed."""
+    findings = preflight(casting, lock, on, host, Path.cwd())
+    for finding in findings:
+        (log.info if finding.ok else log.warning)(
+            "%s %s: %s", "ok  " if finding.ok else "FAIL", finding.name, finding.detail
+        )
+    return not any(not f.ok and f.name in BLOCKING for f in findings)
+
+
+def _models_reachable() -> bool:
+    """Ask each role's server for its model, as `nexo models --check` does."""
+    settings = Settings()  # fresh: render just rewrote nexo.env
+    rows = check_model_servers(settings, resolved_models(settings))
+    for row in rows:
+        ok = row.get("check", "ok") == "ok"
+        (log.info if ok else log.warning)(
+            "%s model %s: %s at %s%s",
+            "ok  " if ok else "FAIL",
+            row["role"],
+            row["model"],
+            row["base_url"],
+            "" if ok else f" ({row['check']})",
+        )
+    return all(row.get("check", "ok") == "ok" for row in rows)
+
+
+def _check(args: argparse.Namespace) -> int:
+    casting, lock = _context(args)
+    host = detect_host(casting)
+    render(casting, lock, Path.cwd(), host, _addons(args))
+    ok = _report(casting, lock, enabled_set(lock, _addons(args)), host)
+    if not args.no_models:
+        ok = _models_reachable() and ok
+    return 0 if ok else 1
+
+
+def _start_models(casting: Casting) -> int:
+    models = casting.spec.models
+    roles = "light" if models.remote is not None else "single"
+    script = Path.cwd() / "deploy/local/ollama-setup.sh"
+    return subprocess.run(
+        [str(script), models.local.profile, roles], check=False
+    ).returncode
+
+
+def _up(args: argparse.Namespace) -> int:
+    casting, lock = _context(args)
+    host = detect_host(casting)
+    on = enabled_set(lock, _addons(args))
+    ensure_secrets(Path.cwd() / ".env", Path.cwd(), on)
+    render(casting, lock, Path.cwd(), host, _addons(args))
+    if not _report(casting, lock, on, host):
+        return 1
+    if casting.spec.models.provider == "ollama" and not args.skip_models:
+        if code := _start_models(casting):
+            return code
+    if code := _compose(host, ["up", "-d"]):
+        return code
+    for name in sorted(on & UIS.keys()):
+        log.info("%s: %s", name, UIS[name])
+    return 0
+
+
+def _down(args: argparse.Namespace) -> int:
+    return _compose(_ensure_render(args), ["down", "--remove-orphans"])
+
+
+def _passthrough(args: argparse.Namespace) -> int:
+    return _compose(_ensure_render(args), args.compose_args)
+
+
+def run(args: argparse.Namespace) -> int:
+    """Run one `nexo setup` verb; setup problems are reported, not raised."""
+    try:
+        return args.verb_handler(args)
+    except SetupError as exc:
+        log.error("%s", exc)
+        return 2
+
+
+def add_parser(
+    sub: argparse._SubParsersAction,
+) -> None:
+    """Register `nexo setup` and its verbs."""
+    setup = sub.add_parser(
+        "setup", help="render and run the stack described by nexo.yaml"
+    )
+    setup.add_argument(
+        "-f", "--file", default="nexo.yaml", help="setup file (default nexo.yaml)"
+    )
+    setup.set_defaults(handler=run)
+    verbs = setup.add_subparsers(dest="verb", required=True)
+
+    def verb(name: str, handler, help_text: str, *, addons: bool = False):
+        parser = verbs.add_parser(name, help=help_text)
+        parser.set_defaults(verb_handler=handler)
+        if addons:
+            parser.add_argument(
+                "--addon",
+                action="append",
+                choices=ADDONS,
+                help="also enable for this run",
+            )
+        return parser
+
+    init = verb("init", _init, "write nexo.yaml from a preset in examples/setups")
+    init.add_argument("--preset")
+    init.add_argument("--force", action="store_true")
+    verb("secrets", _secrets, "fill missing secrets in .env for the enabled components")
+    verb("lock", _lock, "resolve nexo.yaml into nexo.lock").add_argument(
+        "--upgrade", action="store_true", help="move every pin to the current defaults"
+    )
+    verb("render", _render, "write .nexo/render/", addons=True)
+    verb(
+        "check", _check, "preflight and model server checks", addons=True
+    ).add_argument(
+        "--no-models", action="store_true", help="skip asking the model servers"
+    )
+    verb("up", _up, "start the stack (and Ollama's models)", addons=True).add_argument(
+        "--skip-models", action="store_true", help="do not run ollama-setup.sh"
+    )
+    verb("down", _down, "stop the stack; volumes are kept")
+    verb("compose", _passthrough, "run compose on the rendered stack").add_argument(
+        "compose_args", nargs=argparse.REMAINDER
+    )

@@ -1,0 +1,12 @@
+# The nexo CLI in a container: `make app ARGS="models --check"`. Not started by `make up`.
+# `nexo setup render` adds its env files and how it reaches host services (Ollama, the tunnel).
+services:
+  nexo:
+    build: ../..
+    profiles: ["app"]
+    volumes: ["nexo-data:/app/.data", "../../corpus:/corpus:ro"]  # documents to ingest
+    depends_on:
+      neo4j: { condition: service_healthy }
+
+volumes:
+  nexo-data:

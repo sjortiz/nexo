@@ -28,6 +28,7 @@ from nexo.llm import (
 from nexo.logging_setup import configure_logging
 from nexo.mcp_server import build_mcp_server
 from nexo.orchestration.graph import workflow_mermaid
+from nexo.setup.commands import add_parser as add_setup_parser
 from nexo.service import (
     build_investigator,
     chunk_store_from_settings,
@@ -261,11 +262,8 @@ def _mcp(args: argparse.Namespace) -> int:
     return 0
 
 
-def main(argv: list[str] | None = None) -> int:
-    """Parse the command line, run the chosen subcommand and return its exit code."""
-    parser = argparse.ArgumentParser(prog="nexo")
-    sub = parser.add_subparsers(dest="command", required=True)
-
+def _add_document_commands(sub: argparse._SubParsersAction) -> None:
+    """`ingest`, `ask`, `review` and `status`: documents in, answers out."""
     ingest = sub.add_parser(
         "ingest", help="chunk, embed and extract a text/Markdown document"
     )
@@ -302,6 +300,14 @@ def main(argv: list[str] | None = None) -> int:
     status.add_argument("thread_id")
     status.set_defaults(handler=_status)
 
+
+def main(argv: list[str] | None = None) -> int:
+    """Parse the command line, run the chosen subcommand and return its exit code."""
+    parser = argparse.ArgumentParser(prog="nexo")
+    sub = parser.add_subparsers(dest="command", required=True)
+
+    _add_document_commands(sub)
+
     evaluate = sub.add_parser(
         "eval", help="run the investigator over a JSONL golden set"
     )
@@ -337,6 +343,8 @@ def main(argv: list[str] | None = None) -> int:
     serve.add_argument("--host", default="127.0.0.1")
     serve.add_argument("--port", type=int, default=8765)
     serve.set_defaults(handler=_mcp)
+
+    add_setup_parser(sub)
 
     args = parser.parse_args(argv)
     # MCP over stdio uses stdout for the protocol: logs go to stderr there.

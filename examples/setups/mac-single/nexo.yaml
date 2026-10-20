@@ -1,0 +1,16 @@
+# One Apple Silicon Mac runs everything: Ollama's models, Neo4j, the collector and SigNoz.
+#   make env && make up        (nexo setup init --preset mac-single writes this file)
+apiVersion: nexo/v1alpha1
+kind: Setup
+metadata:
+  name: nexo
+spec:
+  models:
+    provider: ollama
+    local:
+      profile: m5-pro-24  # <chip>-<unified memory GB>: m1-pro-16, m5-pro-24, m1-max-64
+  addons:
+    langfuse: { enabled: false }  # LLM evaluation: datasets, experiments, scores (~3 GB)
+    jaeger: { enabled: false }
+    langsmith: { enabled: false }  # cloud: traces leave this machine (without content)
+    hostMetrics: { enabled: true }  # CPU, memory, disk and per-container stats in SigNoz
