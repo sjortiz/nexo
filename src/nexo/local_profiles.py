@@ -33,6 +33,9 @@ APPLE_RE = re.compile(
     r"^m(?P<generation>[1-9])(?:-(?P<variant>pro|max|ultra))?-(?P<memory>\d{1,3})$"
 )
 ACCELERATOR_RE = re.compile(r"^(?P<kind>gpu|cpu)-(?P<memory>\d{1,4})$")
+# Apple Silicon generations and unified-memory sizes Apple has shipped (M1 to M5).
+APPLE_GENERATIONS = range(1, 6)
+APPLE_MEMORY_GB = (8, 16, 18, 24, 32, 36, 48, 64, 96, 128, 192, 256, 512)
 
 AGENT_ROLES = ("agent", "extraction")
 LIGHT_ROLES = ("router", "judge", "embedding")
@@ -178,6 +181,16 @@ def parse_profile(name: str) -> HostProfile:
     normalized = name.strip().lower()
     if match := APPLE_RE.fullmatch(normalized):
         kind = "apple"
+        if int(match["generation"]) not in APPLE_GENERATIONS:
+            raise ProfileError(
+                f"invalid profile {name!r}: no Apple M{match['generation']} chip;"
+                f" use M{APPLE_GENERATIONS[0]} to M{APPLE_GENERATIONS[-1]}"
+            )
+        if int(match["memory"]) not in APPLE_MEMORY_GB:
+            raise ProfileError(
+                f"invalid profile {name!r}: Apple Silicon ships"
+                f" {', '.join(map(str, APPLE_MEMORY_GB))} GB, not {match['memory']}"
+            )
         chip = f"M{match['generation']}" + (
             f" {match['variant'].capitalize()}" if match["variant"] else ""
         )
