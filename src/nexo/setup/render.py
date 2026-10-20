@@ -288,6 +288,9 @@ def build_env(casting: Casting) -> dict[str, str]:
         "OTEL_LOGS_EXPORTER": spec.telemetry.logs,
     }
     models = spec.models
+    # Always set (blank when unused): a LOCAL_PROFILE left in .env would otherwise send
+    # every role to Ollama under vLLM, or REMOTE_PROFILE split a single machine.
+    env |= {"LOCAL_PROFILE": "", "REMOTE_PROFILE": ""}
     if models.provider == "ollama":
         env["LOCAL_PROFILE"] = models.local.profile
         env["LOCAL_BASE_URL"] = f"http://localhost:{models.local.port}/v1"

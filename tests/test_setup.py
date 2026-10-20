@@ -21,7 +21,14 @@ from nexo.setup.commands import model_lines
 from nexo.setup.components import COMPONENTS, MEMORY_GB, default_images
 from nexo.setup.envfile import ensure_secrets, read_env
 from nexo.setup.lock import lock
-from nexo.setup.render import PORTABLE_PRESET, RENDER_DIR, Host, portable_files, render
+from nexo.setup.render import (
+    PORTABLE_PRESET,
+    RENDER_DIR,
+    Host,
+    build_env,
+    portable_files,
+    render,
+)
 from nexo.setup.schema import SetupError, load_casting
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -443,3 +450,60 @@ def test_memory_failures_block_up_unless_forced(fake_up, failed, force, blocked)
     assert up(force=force) == (1 if blocked else 0)
     started = [c for c in seen if c[1:2] == ["compose"] and "up" in c]
     assert bool(started) is not blocked
+
+
+def test_rendered_env_overrides_stale_profiles_in_dot_env(workdir, tmp_path):
+    """A LOCAL_PROFILE left in .env does not send vLLM's roles to Ollama."""
+    stale = tmp_path / "stale.env"
+    stale.write_text("LOCAL_PROFILE=m5-pro-24\nREMOTE_PROFILE=m1-max-64\n")
+    for preset, agent_url in (
+        ("linux-vllm", "http://localhost:8000/v1"),
+        ("mac-single", "http://localhost:11434/v1"),
+    ):
+        rendered = tmp_path / f"{preset}.env"
+        env = build_env(load_casting(_setup(workdir, preset)))
+        rendered.write_text("".join(f"{k}={v}\n" for k, v in env.items()))
+        settings = Settings(_env_file=(stale, rendered))
+        assert settings.remote_profile is None, preset
+        assert settings.endpoint("agent").base_url == agent_url, preset
+
+
+@pytest.mark.parametrize(
+    "preset, machine, expected",
+    [
+        ("linux-cpu", ("macos", set()), {"host": False}),
+        ("linux-cpu", ("linux", set()), {"host": True}),
+        ("mac-single", ("macos", set()), {"host": True}),
+        ("linux-gpu", ("linux", set()), {"host": True, "gpu": False}),
+        ("linux-gpu", ("linux", {"rocm-smi"}), {"host": True, "gpu": True}),
+        ("linux-vllm", ("linux", set()), {"host": True, "gpu": False}),
+        ("linux-vllm", ("linux", {"nvidia-smi"}), {"host": True, "gpu": True}),
+    ],
+)
+def test_platform_findings(workdir, monkeypatch, preset, machine, expected):
+    """Linux presets on a Mac fail the host check; GPU presets need their GPU tooling."""
+    machine, tools = machine
+    monkeypatch.setattr(check, "this_os", lambda: machine)
+    monkeypatch.setattr(
+        check.shutil, "which", lambda name: name if name in tools else None
+    )
+    monkeypatch.setattr(check, "_run", lambda *_cmd: '{"nvidia":{}}')  # docker runtime
+    casting = load_casting(_setup(workdir, preset))
+    pinned = casting.spec.target.host
+    host = Host(
+        os=machine if pinned == "auto" else pinned,
+        engine="docker",
+        socket="/var/run/docker.sock",
+        hostname="box",
+    )
+    found = {f.name: f.ok for f in check.platform_findings(casting, host)}
+    assert found == expected
+
+
+def test_linux_presets_render_host_networking_even_on_a_mac(workdir, monkeypatch):
+    """target.host is pinned in the Linux presets, so the render does not depend on the Mac."""
+    for preset in ("linux-cpu", "linux-gpu", "linux-vllm"):
+        assert load_casting(_setup(workdir, preset)).spec.target.host == "linux"
+    monkeypatch.setattr(check, "this_os", lambda: "macos")
+    compose, _, _ = _render(workdir, _setup(workdir, "linux-cpu"), LINUX)
+    assert compose["services"]["nexo"]["network_mode"] == "host"
