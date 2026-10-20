@@ -3,7 +3,7 @@
 * [ADR-0001: Run the Strands agent inside a LangGraph @task](adr-0001-strands-agent-inside-langgraph-task.md) - The fixed workflow lives in LangGraph; open-ended reasoning lives in one Strands agent called from a checkpointed task.
 * [ADR-0002: Read-only Cypher through three independent layers](adr-0002-read-only-defense-in-depth.md) - Agent-authored Cypher is constrained by a guard, a READ transaction and a database role.
 * [ADR-0003: Durable checkpoints for human review](adr-0003-durable-checkpoints-for-review.md) - Human review uses interrupt/resume backed by SQLite or Postgres.
-* [ADR-0004: Chunk store behind an interface; pgvector for production](adr-0004-chunk-store-interface-and-pgvector.md) - A local store ships now; Aurora/RDS pgvector is the production target.
+* [ADR-0004: Chunk store behind an interface; pgvector for production](adr-0004-chunk-store-interface-and-pgvector.md) - Superseded by ADR-0018 for the production target; the interface stays.
 * [ADR-0005: Guided decoding plus evidence grounding for extraction](adr-0005-guided-decoding-and-evidence-grounding.md) - Guided JSON, Pydantic feedback retries, and quotes that must appear in the chunk.
 * [ADR-0006: Sensitivity classification and caller clearance](adr-0006-sensitivity-and-caller-clearance.md) - The caller's clearance, not the model, decides what evidence the agent can see.
 * [ADR-0007: Conservative entity resolution with recorded merges](adr-0007-entity-resolution.md) - Key, alias, then a model arbiter over blocked candidates; merges auditable and reversible.
@@ -17,3 +17,4 @@
 * [ADR-0015: SigNoz as the default observability backend](adr-0015-signoz-default-observability.md) - Self-hosted SigNoz for traces, metrics, logs and alerts; Langfuse, Jaeger and LangSmith as add-ons.
 * [ADR-0016: A declarative setup file](adr-0016-declarative-setup-file.md) - nexo.yaml rendered by nexo setup into the compose stack; make keeps its targets; docker-compose.yml is generated.
 * [ADR-0017: Secrets from a provider, not a file you copy](adr-0017-secrets-from-a-provider.md) - A private per-user file by default, keychain, SOPS or Vault opt-in; clusters mount secrets as files, never environment variables.
+* [ADR-0018: Chunk text and embeddings in Neo4j](adr-0018-chunks-in-neo4j.md) - Chunks on the graph's (:Chunk) nodes with vector and full-text indexes; review checkpoints per stack.
