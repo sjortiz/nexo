@@ -1,6 +1,7 @@
 # Bundle Update Log
 
 ## 2026-10-20
+* **Update**: One setup file, `nexo.yaml`, rendered by `nexo setup` (lock, preflight with a memory budget, presets for five setups); `make` keeps its targets and add-on flags; `docker-compose.yml` is generated from the mac-single preset; the GPU and Linux overrides are gone ([How local setup works](operations/local-setup.md), [ADR-0016](decisions/adr-0016-declarative-setup-file.md)).
 * **Update**: SigNoz is the default observability backend (traces, metrics, logs, alerts, host and container metrics); Langfuse becomes the `LANGFUSE=1` add-on for evaluation work; the Grafana LGTM add-on is removed ([SigNoz](references/signoz.md), [ADR-0015](decisions/adr-0015-signoz-default-observability.md) supersedes ADR-0014).
 * **Update**: Opt-in log export (`OTEL_LOGS_EXPORTER=otlp`) and a Grafana LGTM add-on (`make up LGTM=1`) for traces, stored metrics and logs; new [FAQ](operations/faq.md).
 * **Update**: Langfuse is the default trace backend, self-hosted by `make up`; Jaeger and LangSmith are opt-in add-ons (`make up JAEGER=1` / `LANGSMITH=1`); `make env` generates the secrets ([Langfuse](references/langfuse.md), [ADR-0014](decisions/adr-0014-langfuse-default-trace-backend.md) supersedes ADR-0011).

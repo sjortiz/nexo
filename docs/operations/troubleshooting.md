@@ -8,7 +8,7 @@ generated: { by: claude-code/claude-opus-5-5, at: 2026-10-19T20:14:37Z }
 stale_after: 2027-04-19T00:00:00Z
 sources:
   - id: compose
-    resource: ../../docker-compose.gpu.yml
+    resource: ../../deploy/compose/vllm.yaml
     title: vLLM compose file
   - id: llm
     resource: ../../src/nexo/llm.py

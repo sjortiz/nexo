@@ -18,8 +18,11 @@ sources:
     resource: ../../deploy/local/local.env.example
     title: Local Nexo environment
   - id: compose
-    resource: ../../docker-compose.yml
-    title: Docker Compose stack
+    resource: ../../src/nexo/setup/render.py
+    title: nexo setup renderer
+  - id: preset
+    resource: ../../examples/setups/mac-single/nexo.yaml
+    title: mac-single preset
   - id: ollama
     resource: ../references/ollama.md
     title: Ollama
@@ -38,7 +41,7 @@ Two independent choices:
 | Models | Ollama, native (Metal GPU) | Ollama, native (Metal GPU) |
 | Neo4j | container (`neo4j:5.26-community`) | Homebrew (`neo4j` 2026.09) |
 | Telemetry | collector (strips content) + SigNoz containers; Langfuse, Jaeger optional | none, or the collector and SigNoz containers |
-| Nexo | container (`--profile app`) or `uv sync` | `uv sync` |
+| Nexo | container (`make app`) or `uv sync` | `uv sync` |
 | Good for | matching the server setup; clean teardown | fewest moving parts; no VM |
 
 | | **One Mac** | **Two Macs** |
@@ -73,18 +76,21 @@ Sizes are Ollama library download sizes; KV cache and the OS need the rest. `qwe
 # Podman path
 
 1. `brew install ollama podman` and `podman machine init` (first time only), `podman machine start`.
-2. Models, per Mac (see "Two Macs" below for the second Mac):
-   `deploy/local/ollama-setup.sh m1-max-64` - pulls and preloads the profile's models and starts
-   Ollama with the right context length, keep-alive and KV-cache settings, bound to `127.0.0.1`.[^setup]
-3. `make env` (creates `.env` and generates `NEO4J_PASSWORD` and the SigNoz and Langfuse secrets), then set the
-   profile(s) in `.env`.[^env]
-4. `make up`, or `podman compose up -d neo4j otel-collector signoz` - Neo4j on
+2. `make env PRESET=mac-single` (or `mac-two-machines`, see "Two Macs" below): writes `nexo.yaml`
+   and creates `.env` with `NEO4J_PASSWORD` and the SigNoz secrets.[^env] Set
+   `models.local.profile` in `nexo.yaml` to this Mac's profile.[^preset]
+3. `make check`: the container engine, secrets and a memory budget for the models and containers
+   against this Mac and the Podman VM.
+4. `make up` - pulls and preloads the profile's models and starts Ollama with the right context
+   length, keep-alive and KV-cache settings, bound to `127.0.0.1`;[^setup] then Neo4j on
    `127.0.0.1:7687`, traces, metrics and logs in SigNoz at http://localhost:8080 (log in with `SIGNOZ_USER_EMAIL` /
    `SIGNOZ_USER_PASSWORD` from `.env`), raw metrics at http://localhost:8889/metrics. Infrastructure metrics
    cover the Podman VM, not the Mac. Add Langfuse (evaluation) or Jaeger with `make up LANGFUSE=1` /
-   `make up JAEGER=1` ([Observability](observability.md#backends)).
+   `make up JAEGER=1` for one run, or under `addons:` in `nexo.yaml` ([Observability](observability.md#backends)).
+   The default stack measured about 1.9 GB of containers plus 6.5 GB of models on a 24 GB M5 Pro;
+   with every add-on about 5.1 GB of containers, within the Podman VM's default 8 GiB.
 5. Run Nexo either natively (`uv sync`, then `nexo ...` in the activated `.venv`) or in a container:
-   `podman compose --profile app run --rm nexo ingest /corpus/memo.md` with documents in `./corpus`.
+   `make app ARGS="ingest /corpus/memo.md"` with documents in `./corpus`.
    The container's `LOCAL_BASE_URL`/`REMOTE_BASE_URL` already point at `host.containers.internal`.
 
 # Native path
@@ -92,10 +98,11 @@ Sizes are Ollama library download sizes; KV cache and the OS need the rest. `qwe
 1. `brew install ollama neo4j` (Neo4j 2026.09 Community, Java 21; Nexo's Neo4j tests pass on it).
 2. `neo4j-admin dbms set-initial-password <password>` then `brew services start neo4j`.
 3. Models: `deploy/local/ollama-setup.sh m1-max-64`.
-4. `cp deploy/local/local.env.example .env`, set the profile(s) and `NEO4J_PASSWORD`.
-5. Telemetry (optional): leave `OTEL_EXPORTER_OTLP_ENDPOINT` empty to rely on logs only, or run just
-   the collector and SigNoz containers (`make env`, then
-   `podman compose up -d otel-collector signoz`).
+4. `cp deploy/local/local.env.example .env`, set `LOCAL_PROFILE` (and `REMOTE_PROFILE`),
+   `NEO4J_URI` and `NEO4J_PASSWORD` there: without `nexo setup`, `.env` holds everything.
+5. Telemetry (optional): leave `OTEL_EXPORTER_OTLP_ENDPOINT` unset to rely on logs only, or run just
+   the collector and SigNoz containers: `make env && make render`, then
+   `podman compose -f .nexo/render/compose.yaml up -d otel-collector signoz`.
 6. `brew install uv && uv sync && source .venv/bin/activate`, then `nexo ...` (uv installs Python 3.12).
 
 # Two Macs
@@ -103,7 +110,7 @@ Sizes are Ollama library download sizes; KV cache and the OS need the rest. `qwe
 Applies to either path. Example: M1 Max 64 GB as the agent Mac, M5 Pro 24 GB running Nexo.
 
 ```
- M1 Max (REMOTE_PROFILE=m1-max-64)         M5 Pro (LOCAL_PROFILE=m5-pro-24)
+ M1 Max (models.remote: m1-max-64)         M5 Pro (models.local: m5-pro-24)
  ┌───────────────────────────┐   SSH       ┌──────────────────────────────────────────┐
  │ Ollama 127.0.0.1:11434    │◄─tunnel─────┤ localhost:11435 ─► agent, extraction    │
  │  agent + extraction model │             │ Ollama 127.0.0.1:11434                   │
@@ -113,15 +120,15 @@ Applies to either path. Example: M1 Max 64 GB as the agent Mac, M5 Pro 24 GB run
 ```
 
 1. M1 Max: `deploy/local/ollama-setup.sh m1-max-64 heavy`; enable Remote Login.
-2. M5 Pro: `deploy/local/ollama-setup.sh` (reads `LOCAL_PROFILE` and `REMOTE_PROFILE` from `.env` and
-   serves the `light` set).
-3. M5 Pro: `ssh -N -L 11435:127.0.0.1:11434 you@m1-max.local` and keep it running.
+2. M5 Pro: `make env PRESET=mac-two-machines` (profiles `m5-pro-24` and `m1-max-64`, tunnel port
+   11435), then `ssh -N -L 11435:127.0.0.1:11434 you@m1-max.local` and keep it running.
+3. M5 Pro: `make up` (serves the `light` set here), then `make check`.
 
 Never bind Ollama to `0.0.0.0` on a shared network: it has no authentication.
 
 # Verify
 
-`nexo models --check` confirms each role's server answers and serves its model
+`make check` (or `nexo models --check`) confirms each role's server answers and serves its model
 ([what failures mean](local-setup.md#when-it-does-not-work)). `NEXO_LIVE=1 pytest -m live -v` checks the real models: schema-valid JSON from the extraction and router
 models, embeddings that rank related text (English and Spanish) above unrelated text, and an agent model
 that calls its tools over the OpenAI protocol.[^live] `ollama ps` on each Mac should list the profile's
@@ -149,6 +156,7 @@ See [ADR-0012](../decisions/adr-0012-local-apple-silicon.md).
 [^profiles]: Hardware profile catalog
 [^setup]: Ollama setup script
 [^env]: Local Nexo environment
-[^compose]: Docker Compose stack
+[^compose]: nexo setup renderer
+[^preset]: mac-single preset
 [^ollama]: Ollama
 [^live]: Live model checks

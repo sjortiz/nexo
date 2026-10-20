@@ -55,11 +55,9 @@ bundle: architecture, components, operations, decisions and references.
 ## Run
 
 ```bash
-cp .env.example .env                                   # fill in the vLLM secrets
-make env                                               # generates Neo4j and SigNoz secrets
-make up                                                # Neo4j, OTel collector, SigNoz
-docker compose -f docker-compose.yml -f docker-compose.gpu.yml up -d   # vLLM: 4x80GB GPUs
 uv sync && source .venv/bin/activate                  # Python 3.12 + deps from uv.lock
+make env PRESET=linux-vllm                             # nexo.yaml + .env secrets; add HF_TOKEN to .env
+make up                                                # Neo4j, collector, SigNoz, vLLM (4x80GB GPUs)
 nexo ingest corpus/memo.md --doc-type memo --effective-date 2025-06-30
 nexo ask "How is Acme Holdings connected to Gamma Clinics?"   # prints thread_id + review packet
 nexo review <thread_id> --approve --reviewer you@corp
@@ -82,30 +80,33 @@ your documents with a citation per claim: [Use from Claude Code](docs/operations
 ## Run locally (macOS and Linux)
 
 Models run natively through Ollama, chosen by a hardware profile: `m1-max-64` / `m5-pro-24` on Apple
-Silicon, `gpu-24` (VRAM) or `cpu-64` on Linux. Services run in Podman or natively; either way on one
-machine or two (e.g. a Linux GPU box serving the agent for a Mac). The same steps as make targets:
-`make install env models up check`.
+Silicon, `gpu-24` (VRAM) or `cpu-64` on Linux. One file, `nexo.yaml`, describes the setup (models,
+add-ons, the container engine), foundry-style; `make` runs it through `nexo setup`
+([ADR-0016](docs/decisions/adr-0016-declarative-setup-file.md)).
 
 ```bash
-cp deploy/local/local.env.example .env       # set LOCAL_PROFILE (and REMOTE_PROFILE for two Macs)
-
 # One Mac
-deploy/local/ollama-setup.sh m1-max-64       # pulls and preloads that profile's models
+make env PRESET=mac-single                   # nexo.yaml (set models.local.profile) + .env secrets
+make up                                      # Ollama's models, Neo4j, collector, SigNoz
+make check                                   # preflight + each role's model and server
 
 # Two Macs: the remote Mac serves agent + extraction, this one router/embeddings/judge + Nexo
 deploy/local/ollama-setup.sh m1-max-64 heavy  # on the M1 Max
-deploy/local/ollama-setup.sh                  # on the M5 Pro (reads LOCAL_PROFILE/REMOTE_PROFILE)
+make env PRESET=mac-two-machines              # on the M5 Pro
 ssh -N -L 11435:127.0.0.1:11434 you@m1-max.local
+make up && make check
 
-make env up                                        # Podman path: secrets, Neo4j, collector, SigNoz
-nexo models --check                                # each role's model and server, checked
-NEXO_LIVE=1 pytest -m live -v                      # exercise the real models
+NEXO_LIVE=1 pytest -m live -v                 # exercise the real models
 ```
+
+Presets: `mac-single`, `mac-two-machines`, `linux-cpu`, `linux-gpu`, `linux-vllm`
+(`examples/setups/`). `docker-compose.yml` is generated from `mac-single` (`make compose-file`) for
+plain `podman compose up -d`.
 
 How it fits together (roles, the profile catalog, ports): [How local setup works](docs/operations/local-setup.md).
 Step by step: [Local on Apple Silicon](docs/operations/local-apple-silicon.md) and
-[Local on Linux](docs/operations/local-linux.md) (Podman needs `-f docker-compose.linux.yml` for the Nexo
-container there).
+[Local on Linux](docs/operations/local-linux.md) (`nexo setup` puts the Nexo container on the host
+network there).
 
 | Platform | Status |
 | --- | --- |
@@ -143,11 +144,10 @@ Opt-in add-ons, each its own collector pipeline behind the same content strippin
 | --- | --- | --- |
 | Langfuse | `make up LANGFUSE=1` | LLM evaluation and fine-tuning work (datasets, experiments, scores); UI on http://localhost:3000. |
 | Jaeger | `make up JAEGER=1` | Span UI on http://localhost:16686. |
-| LangSmith | `make up LANGSMITH=1` | Needs `LANGSMITH_API_KEY` and `LANGSMITH_PROJECT` in `.env`. |
+| LangSmith | `make up LANGSMITH=1` | Needs `LANGSMITH_API_KEY` in `.env`; the project is `addons.langsmith.project`. |
 
-Add-ons can be combined. Which to use when: [FAQ](docs/operations/faq.md). Without `make`: `OTEL_JAEGER=jaeger docker compose up -d neo4j otel-collector signoz jaeger`;
-`OTEL_LANGSMITH=langsmith` for LangSmith; `OTEL_LANGFUSE=langfuse` with `--profile langfuse` and the
-`langfuse-web langfuse-worker` services for Langfuse.
+Add-ons can be combined. `make up LANGFUSE=1` turns one on for one run; `addons:` in `nexo.yaml`
+keeps it on. Which to use when: [FAQ](docs/operations/faq.md).
 
 LangSmith also offers Studio for local graph debugging (`langgraph dev`) and evaluation tooling
 (datasets, experiments, `openevals` judges); see [the reference](docs/references/langsmith.md). No PHI

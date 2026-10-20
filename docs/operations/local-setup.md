@@ -1,13 +1,22 @@
 ---
 type: Deployment Model
 title: How local setup works
-description: The mechanism behind local runs - three independent choices, five model roles, one profile catalog read by both the setup script and Nexo, who listens where, and how to check it.
-resource: ../../src/nexo/local_profiles.py
-tags: [operations, local, ollama, profiles, podman]
+description: The mechanism behind local runs - one setup file (nexo.yaml) rendered by nexo setup, five model roles, one profile catalog read by both the setup script and Nexo, who listens where, and how to check it.
+resource: ../../src/nexo/setup/commands.py
+tags: [operations, local, ollama, profiles, podman, setup]
 status: draft
-generated: { by: claude-code/claude-opus-5-5, at: 2026-10-19T23:40:00Z }
-stale_after: 2027-01-19T00:00:00Z
+generated: { by: claude-code/claude-opus-5-5, at: 2026-10-20T16:00:00Z }
+stale_after: 2027-01-20T00:00:00Z
 sources:
+  - id: setup-cli
+    resource: ../../src/nexo/setup/commands.py
+    title: nexo setup
+  - id: schema
+    resource: ../../src/nexo/setup/schema.py
+    title: The setup file schema
+  - id: presets
+    resource: ../../examples/setups/mac-single/nexo.yaml
+    title: Preset for one Mac
   - id: profiles
     resource: ../../src/nexo/local_profiles.py
     title: Hardware profile catalog
@@ -19,25 +28,73 @@ sources:
     title: Ollama setup script
   - id: compose
     resource: ../../docker-compose.yml
-    title: Docker Compose stack
-  - id: override
-    resource: ../../docker-compose.linux.yml
-    title: Linux compose override
+    title: Generated compose file (mac-single preset)
   - id: models
     resource: ../../src/nexo/llm.py
     title: Model resolution and server check (nexo models)
+  - id: adr-0016
+    resource: ../decisions/adr-0016-declarative-setup-file.md
+    title: "ADR-0016: A declarative setup file"
 ---
 
-# Three independent choices
+# One setup file
 
-| Choice | Options | Decided by |
+`nexo.yaml` describes a deployment: where it runs, how models are served and which add-ons are on.
+`make env` writes it from a preset; `make up` runs it.[^setup-cli] The idea follows SigNoz's foundry:
+one declarative file, a lock and rendered plain files.[^adr-0016]
+
+```yaml
+apiVersion: nexo/v1alpha1
+kind: Setup
+spec:
+  target: { mode: compose, engine: auto, host: auto }   # podman or docker; macos or linux
+  models:
+    provider: ollama                                    # ollama | vllm | openai-compatible
+    local:  { profile: m5-pro-24 }                      # this machine's roles
+    remote: { profile: m1-max-64, port: 11435 }         # optional second machine (SSH tunnel)
+    roles:  { agent: { model: qwen3:30b-a3b-instruct-2507-q4_K_M } }   # explicit roles win
+  components:                                           # core: neo4j, collector, signoz
+    neo4j: { env: { NEO4J_server_memory_heap_max__size: 1G } }
+  addons:                                               # off unless enabled (hostMetrics: on)
+    langfuse: { enabled: true }
+    jaeger: { enabled: false }
+    langsmith: { enabled: false, project: nexo }
+    hostMetrics: { enabled: true }
+  telemetry: { logs: otlp }
+  patches:                                              # RFC 6902, applied last
+    - target: compose.yaml
+      operations: [{ op: add, path: /services/neo4j/mem_limit, value: 3g }]
+```
+
+Each component also takes `image`, `images` (per service), `env` and, for the collector, `config`
+(merged into its config file). Unknown keys, impossible combinations and invalid profiles are
+rejected with the field named.[^schema]
+
+| Setup | Preset (`make env PRESET=...`) |
+|---|---|
+| One Apple Silicon Mac | `mac-single` (the default on macOS) |
+| Two machines over an SSH tunnel | `mac-two-machines` |
+| Linux, CPU only | `linux-cpu` (the default on Linux) |
+| Linux, one GPU, Ollama | `linux-gpu` |
+| Linux, NVIDIA GPUs, vLLM | `linux-vllm` |
+
+Kubernetes comes after the compose target. Presets live in `examples/setups/`.[^presets]
+
+# What the targets do
+
+| Target | Runs | Effect |
 |---|---|---|
-| Which models | A hardware profile per machine: `m1-max-64`, `m5-pro-24`, `gpu-24`, `cpu-64` | `LOCAL_PROFILE` |
-| How many machines | One, or two (the second serves the heavy models) | `REMOTE_PROFILE` set or not |
-| How services run (Neo4j, telemetry, Nexo) | Podman containers or native installs | The commands you run; `.env` stays the same |
+| `make env` | `nexo setup init`, `nexo setup secrets` | `nexo.yaml` from a preset (kept if it exists); `.env` from the template with random secrets for the enabled components (existing values kept) |
+| `make lock` | `nexo setup lock` | `nexo.lock`: the components on, every service's image and each role's model. Pins stay when `nexo.yaml` changes; `UPGRADE=1` moves them to the current defaults |
+| `make render` | `nexo setup render` | `.nexo/render/`: `compose.yaml` (only the enabled services), `otel-collector.yaml` (the base plus each add-on's pipeline), `nexo.env` |
+| `make check` | `nexo setup check` | Preflight (engine, secrets, Ollama, memory budget, Podman VM limit), then each role's server and model |
+| `make up` | `nexo setup up` | Secrets, render, preflight, `ollama-setup.sh` for this machine's roles, `compose up -d` |
+| `make down` / `make app` | `nexo setup down` / `compose run nexo` | Stop (volumes kept) / the CLI in a container |
 
-Models always run natively in Ollama: containers on macOS cannot use the GPU. Step-by-step:
-[Local on Apple Silicon](local-apple-silicon.md), [Local on Linux](local-linux.md).
+`LANGFUSE=1`, `JAEGER=1` and `LANGSMITH=1` turn an add-on on for one run without editing
+`nexo.yaml`. `nexo.yaml`, `nexo.lock` and `.nexo/` are git-ignored. The committed
+`docker-compose.yml` is the `mac-single` preset rendered with repo-relative paths (`make
+compose-file`), for plain `podman compose up -d`; a test fails when it is stale.[^compose]
 
 # Five model roles
 
@@ -49,41 +106,41 @@ Models always run natively in Ollama: containers on macOS cannot use the GPU. St
 | judge | Generation scores in `nexo eval`; off where the tier has no room | this machine | this machine |
 | embedding | Chunk and query vectors | this machine | this machine |
 
+Models always run natively in Ollama: containers on macOS cannot use the GPU. Step-by-step:
+[Local on Apple Silicon](local-apple-silicon.md), [Local on Linux](local-linux.md).
+
 # One catalog, two readers
 
 ```
                     src/nexo/local_profiles.py
               profile -> memory tier -> models per role set
                  │                                   │
-   ollama-setup.sh PROFILE [ROLE_SET]          Nexo settings (.env)
+   ollama-setup.sh PROFILE [ROLE_SET]          Nexo settings
    on each model machine:                      on the machine running Nexo:
    - pulls and preloads the models             - model and server URL per role
    - sizes Ollama: context length,             - reasoning off for JSON roles on thinking models
      parallelism, keep-alive, KV cache         - longer timeouts, extraction concurrency
 ```
 
-Both read the same catalog,[^profiles] so they agree as long as the role sets match:
-
-| Layout | On the model machine(s) | `.env` where Nexo runs | Role sets |
-|---|---|---|---|
-| One machine | `ollama-setup.sh m1-max-64` | `LOCAL_PROFILE=m1-max-64` | `single` |
-| Two machines | remote: `ollama-setup.sh m1-max-64 heavy`; here: `ollama-setup.sh` | `LOCAL_PROFILE=m5-pro-24`, `REMOTE_PROFILE=m1-max-64` | remote `heavy`, here `light` |
-
-Without arguments the script reads `.env`: `light` when `REMOTE_PROFILE` is set, else `single`. If
-Ollama already runs as a service (systemd, the macOS app), the script cannot change its environment:
-it pulls through it and prints the settings to apply.[^setup] See what a profile resolves to with
-`python3 src/nexo/local_profiles.py plan m1-max-64 heavy`.
+Both read the same catalog,[^profiles] so they agree as long as the role sets match. `make up` runs
+the script with `single` (one machine) or `light` (two machines); on the remote machine run
+`ollama-setup.sh m1-max-64 heavy` yourself (`make check` prints it). If Ollama already runs as a
+service (systemd, the macOS app), the script pulls through it and prints the settings to
+apply.[^setup] See what a profile resolves to with `python3 src/nexo/local_profiles.py plan m1-max-64 heavy`.
 
 # How each setting is resolved
 
-For every role setting (`AGENT_MODEL`, `ROUTER_BASE_URL`, ...), the first match wins:[^config]
+For every setting, the first match wins:[^config]
 
-1. Set explicitly in the environment or `.env`.
-2. The profile, when `LOCAL_PROFILE` is set.
-3. The `VLLM_*` default (the GPU server setup).
+1. A real environment variable.
+2. `.nexo/render/nexo.env`, rendered from `nexo.yaml` (profiles, endpoints, log export, explicit roles).
+3. `.env` (secrets, personal overrides such as `AGENT_MODEL`).
+4. The profile, for role settings not set above.
+5. The `VLLM_*` default (the GPU server setup).
 
 This is per field: `AGENT_MODEL=my-model` keeps the profile's agent URL. Profiles also default
-`LLM_TIMEOUT_S` (300), `AGENT_TIMEOUT_S` (900) and `EXTRACTION_CONCURRENCY`, unless set.
+`LLM_TIMEOUT_S` (300), `AGENT_TIMEOUT_S` (900) and `EXTRACTION_CONCURRENCY`, unless set. Without
+`nexo setup` (native Neo4j, no containers), set `LOCAL_PROFILE` and the endpoints in `.env`.
 
 # Who listens where
 
@@ -98,17 +155,18 @@ Everything binds `127.0.0.1`; nothing is exposed on the network.
 | SigNoz UI (browser; Nexo does not call it) | `127.0.0.1:8080` | http://localhost:8080 | - | - |
 | Langfuse UI, add-on (browser) | `127.0.0.1:3000` | http://localhost:3000 | - | - |
 
-`.env` holds the native values; the compose files set the container values.[^compose] On Linux,
-rootless Podman cannot reach host loopback through `host.containers.internal`, so
-`docker-compose.linux.yml` puts the Nexo container on the host network.[^override] The remote machine
-is reached only through `ssh -N -L 11435:127.0.0.1:11434 you@remote`: Ollama has no authentication,
-SSH provides it.
+`nexo.env` holds the native values; the render gives the Nexo container its own. On Linux, rootless
+Podman cannot reach host loopback through `host.containers.internal`, so the render puts the Nexo
+container on the host network (with Docker on macOS it uses `host.docker.internal`). The remote
+machine is reached only through `ssh -N -L 11435:127.0.0.1:11434 you@remote`: Ollama has no
+authentication, SSH provides it.
 
 # Check
 
-1. `nexo models` prints the model and server each role resolved to (no secrets).
-2. `nexo models --check` (or `make check`) asks each server whether it serves that model, and sends the JSON roles
-   (extraction, router, judge) one tiny schema-constrained request; it exits 1 if either fails.[^models]
+1. `make check` runs the preflight, then `nexo models --check`: each server is asked whether it
+   serves its model, and the JSON roles (extraction, router, judge) get one tiny schema-constrained
+   request; it exits 1 if either fails.[^models]
+2. `nexo models` prints the model and server each role resolved to (no secrets).
 3. `ollama ps` on each model machine lists the resident models (100% GPU on a Mac).
 4. `NEXO_LIVE=1 pytest -m live -v` exercises the real models.
 
@@ -116,17 +174,22 @@ SSH provides it.
 
 | Symptom | Cause | Fix |
 |---|---|---|
-| `unreachable ... Connection refused` on 11434 | Ollama is not running | Run `ollama-setup.sh`, or start the service. |
+| `nexo.yaml: ...` error naming a field | A typo or an impossible combination | Fix that field; the presets show valid files. |
+| `FAIL secrets: set in .env: HF_TOKEN` | A key only you can provide | Add it to `.env`. |
+| `FAIL podman vm` | The enabled containers need more than the Podman VM has | `podman machine set --memory 10240`, or turn off an add-on. |
+| `unreachable ... Connection refused` on 11434 | Ollama is not running | `make up` (or `make models`), or start the service. |
 | The same on 11435 | The SSH tunnel is down | Re-run the `ssh -N -L ...` command. |
-| Works natively, unreachable from the Nexo container on Linux | The macOS URLs are in use | Add `-f docker-compose.linux.yml`. |
 | `model not served here` | Role sets do not match, the model was not pulled, or an explicit `*_MODEL` has a typo | Re-run the setup with the role set from the table; the output lists what the server has. |
 | `structured output failed` (e.g. `HTTP 501`) | The server cannot constrain output to a JSON schema; Ollama MLX builds (`-mlx`, `-nvfp4` and some default tags on Apple Silicon) cannot | Use a GGUF tag such as `qwen3.5:9b-q4_K_M`; the profiles pin these. |
 | Checks pass, but long chunks or later sections are ignored | Ollama's 4096-token default context | Apply the printed `OLLAMA_CONTEXT_LENGTH` to the service and restart it. |
 | Changed the embedding model; search results are poor | Old vectors from another model | Re-ingest every document. |
 
+[^setup-cli]: nexo setup
+[^schema]: The setup file schema
+[^presets]: Preset for one Mac
 [^profiles]: Hardware profile catalog
 [^config]: Settings and profile resolution
 [^setup]: Ollama setup script
-[^compose]: Docker Compose stack
-[^override]: Linux compose override
+[^compose]: Generated compose file (mac-single preset)
 [^models]: Model resolution and server check (nexo models)
+[^adr-0016]: "ADR-0016: A declarative setup file"

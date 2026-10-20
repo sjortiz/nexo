@@ -18,13 +18,13 @@ sources:
     resource: https://docs.vllm.ai/en/latest/features/structured_outputs.html
     title: vLLM structured outputs
   - id: compose
-    resource: ../../docker-compose.gpu.yml
+    resource: ../../deploy/compose/vllm.yaml
     title: vLLM compose file
 ---
 
 # Role in Nexo
 
-vLLM serves the models in the GPU deployment (`docker-compose.gpu.yml`): Llama 3.3 70B for chat
+vLLM serves the models in the GPU deployment (the `linux-vllm` preset): Llama 3.3 70B for chat
 and BAAI/bge-m3 for embeddings, behind an OpenAI-compatible API that LangChain and Strands both speak.[^docs]
 On Macs and smaller machines, [Ollama](ollama.md) takes its place with the same API.
 
@@ -38,7 +38,8 @@ On Macs and smaller machines, [Ollama](ollama.md) takes its place with the same 
 | Continuous batching | Ingestion sends chunks in parallel (`EXTRACTION_CONCURRENCY`) for throughput. |
 | Pooling runner for embedding models | A second vLLM instance serves bge-m3. |
 
-The compose file requires an explicit `VLLM_IMAGE_TAG` so the image is always pinned.[^compose]
+The fragment pins the image (`vllm/vllm-openai:v0.31.0`); `nexo setup` sets the model and GPU count
+from `models.vllm` in `nexo.yaml` and records the image in `nexo.lock`.[^compose]
 GPU passthrough is not exercised by this project's tests ([Local on Linux](../operations/local-linux.md)).
 
 [^docs]: vLLM documentation

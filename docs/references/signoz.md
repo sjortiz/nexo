@@ -57,7 +57,7 @@ casting), then pinned and renamed. Nexo does not run foundry; to upgrade, re-gen
 The collector's `host_metrics` receiver reads CPU, load, memory, paging and disk from the container's
 `/proc` (which reports the host's) and root filesystem usage from a read-only `/hostfs` mount; rootless
 Podman cannot read the host's mount table, so `root_path` is not used. `docker_stats` reads
-per-container CPU, memory, network and I/O from the container engine's socket. `make up` passes the
+per-container CPU, memory, network and I/O from the container engine's socket. `nexo setup` renders the
 engine's socket path (Podman's rootless socket on macOS). The collector runs as root in its container,
 with SELinux labeling off, to read it.
 
