@@ -72,7 +72,7 @@ def _addons(args: argparse.Namespace) -> frozenset[str]:
 
 
 def store_for(casting: Casting) -> SecretStore:
-    """The secrets provider the setup file chose (the OS keychain by default)."""
+    """The secrets provider the setup file chose (~/.config/nexo/config by default)."""
     return store_from_options(secrets_options(casting))
 
 

@@ -145,15 +145,19 @@ The collector also deletes content attributes and events before export, as a sec
 
 Set with `spec.secrets.provider` in `nexo.yaml`. None of them copies a secrets file between machines.[^adr-0017]
 
-| | `keychain` (default) | `env` (opt out) | `sops` (opt in) | `vault` (opt in) |
-|---|---|---|---|---|
-| Stored in | The OS keychain (macOS Keychain, Linux Secret Service); `~/.config/nexo/config` where none is set up | Your environment or `.env`, filled by whatever manages secrets | A SOPS-encrypted file in the checkout (age, PGP or cloud KMS keys) | HashiCorp Vault or OpenBao (KV v2) |
-| `make env` generates | Yes | No: it names what is missing | Yes, encrypted | Yes |
-| Several checkouts, one machine | Share the secrets | Share what the environment gives them | Share the file | Share the secret |
-| Several machines | Each machine's own keychain, its own stack | Each gets them from your secret manager | The encrypted file travels with the repo; keys stay with people | One Vault for all |
-| Kubernetes | - | Kubernetes Secrets, External Secrets Operator | KSOPS, Flux or Argo CD decrypt it | Vault Agent or External Secrets |
-| Needs | Nothing | Something that injects them | `sops` and a `.sops.yaml` creation rule | `VAULT_ADDR`, `VAULT_TOKEN` |
-| Choose it when | One machine (the usual case) | CI, a cluster, or a secret manager you already run | A team sharing one setup through git | You already run Vault or OpenBao |
+| | `file` (default) | `file` with a mounted `path` | `keychain` (opt in) | `sops` (opt in) | `vault` (opt in) |
+|---|---|---|---|---|---|
+| Stored in | `~/.config/nexo/config`: a `[stack]` section, owner-only | A file or per-key directory your platform mounts (Kubernetes Secret volume, Secrets Store CSI driver, a file CI writes) | The OS keychain (macOS Keychain, Linux Secret Service) | A SOPS-encrypted file in the checkout (age, PGP or cloud KMS keys) | HashiCorp Vault or OpenBao (KV v2) |
+| `make env` generates | Yes | No: read-only; it names what is missing | Yes | Yes, encrypted | Yes |
+| Several checkouts, one machine | Share the file | Share the mount | Share the entries | Share the file | Share the secret |
+| Several machines | Each machine makes its own; nothing is copied | Each mounts from your secret manager | Each machine's own keychain | The encrypted file travels with the repo; keys stay with people | One Vault for all |
+| Reaches Nexo as | In-process reads | In-process reads, never environment variables | In-process reads | In-process reads | In-process reads |
+| Needs | Nothing | A mount | A desktop keychain | `sops` and a `.sops.yaml` creation rule | `VAULT_ADDR`, `VAULT_TOKEN` |
+| Choose it when | One machine (the usual case) | A cluster or CI | You prefer the OS keychain | A team sharing one setup through git | You already run Vault or OpenBao |
+
+On a cluster, mount secrets as files and point `secrets.file.path` (or `NEXO_SECRETS_FILE`) at them;
+never inject them as environment variables (`secretKeyRef`, `envFrom`). On your own machine `nexo setup`
+passes them to compose through the environment, which stays on that machine.
 
 [^profiles]: Hardware profile catalog (models and sizes per tier)
 [^components]: Components, secrets and measured memory

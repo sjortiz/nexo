@@ -64,7 +64,7 @@ def stale_volume_hint(
     ]
     where = " ".join(volumes) or "<its data volume>"
     return (
-        f"{service} refused the password from your secrets (the keychain by default): its"
+        f"{service} refused the password from your secrets (~/.config/nexo/config): its"
         " data volume was created with other secrets. Put the old value back, or delete the"
         f" volume (its data goes): {engine} volume rm {where}"
     )

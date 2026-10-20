@@ -150,12 +150,13 @@ For every setting, the first match wins:[^config]
 # Where secrets live
 
 Generated secrets (Neo4j, SigNoz and Langfuse passwords and keys) never sit in a file you copy
-between machines.[^adr-0017] `spec.secrets.provider` in `nexo.yaml` picks the store: the OS keychain by
-default (`~/.config/nexo/config`, owner-only, where no keychain is set up), `env` to opt out (the
-environment or `.env`; Kubernetes Secrets, CI), or `sops` / `vault` to opt in. Every checkout of a
-stack on a machine shares its secrets, so one stack per machine works from any checkout; `nexo
-setup` hands them to compose through the environment. Read one with `uv run keyring get nexo/nexo
-SIGNOZ_USER_PASSWORD`. Secrets found in an older `.env` move into the store on the next `make env`.
+between machines.[^adr-0017] By default they live in `~/.config/nexo/config` (a `[stack]`
+section, owner-only), which every checkout of the stack on this machine shares, so one stack per
+machine works from any checkout. `spec.secrets.provider` opts in to the OS keychain, SOPS or Vault; on
+a cluster, `file` with a `path` reads what the platform mounts, read-only and never as environment
+variables. Locally, `nexo setup` hands the values to compose through the environment. The SigNoz and
+Langfuse logins are in `~/.config/nexo/config` under `[nexo]`. Secrets found in an older `.env` move into the store on the next
+`make env`.
 
 This is per field: `AGENT_MODEL=my-model` keeps the profile's agent URL. Profiles also default
 `LLM_TIMEOUT_S` (300), `AGENT_TIMEOUT_S` (900) and `EXTRACTION_CONCURRENCY`, unless set. Without
@@ -194,8 +195,8 @@ authentication, SSH provides it.
 | Symptom | Cause | Fix |
 |---|---|---|
 | `nexo.yaml: ...` error naming a field | A typo or an impossible combination | Fix that field; the presets show valid files. |
-| `FAIL secrets: ...; set: HF_TOKEN` | A key only you can provide, or (provider `env`) a secret nobody provides | Add it to `.env` or the environment. |
-| `FAIL secrets: keychain ...` or `vault ...: HTTP 403` | The provider cannot be read (locked keychain, wrong token, no `sops` key) | Unlock it or fix its credentials; the message names the provider. |
+| `FAIL secrets: ...; set: HF_TOKEN` | A key only you can provide, or a read-only mount that lacks a secret | Add it to `.env`, or to the mounted secret. |
+| `FAIL secrets: secrets file ... not found`, `keychain ...` or `vault ...: HTTP 403` | The provider cannot be read (no mount, a locked keychain, a wrong token, no `sops` key) | Mount it, unlock it or fix its credentials; the message names the provider. |
 | `FAIL neo4j: Neo4j refused the password` | The `neo4j-data` volume was made with other secrets | Put the old password back in the store, or delete the named volume (its data goes). |
 | `FAIL profile: ... is for 64 GB; this machine has 24 GB` | The profile names more memory than the machine has | Set the profile for this machine; `FORCE=1` to go ahead anyway. |
 | `FAIL host: rendered for linux; this machine runs macos` | A Linux preset on a Mac (or the reverse) | Use a preset for this OS, or set `target.host`; `FORCE=1` to render anyway. |

@@ -45,7 +45,7 @@ SigNoz v0.146.0, from `deploy/signoz/compose.yml`:[^local]
 | `signoz-migrator`, `signoz-clickhouse-scripts` | one-shot jobs | Schema migrations; histogramQuantile UDF install |
 
 Only the UI is published, on `127.0.0.1:8080`. Log in with `SIGNOZ_USER_EMAIL` (default
-`admin@nexo.local`) and `SIGNOZ_USER_PASSWORD` from the secrets provider (`uv run keyring get nexo/nexo SIGNOZ_USER_PASSWORD`);
+`admin@nexo.local`) and `SIGNOZ_USER_PASSWORD` from the secrets provider (`~/.config/nexo/config` under `[nexo]` by default);
 `make env` generates that password, the JWT secret and the Postgres password there. SigNoz's stats reporting is off. The license is MIT outside
 `ee/` and `cmd/enterprise/`.
 

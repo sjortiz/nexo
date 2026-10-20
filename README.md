@@ -56,7 +56,7 @@ bundle: architecture, components, operations, decisions and references.
 
 ```bash
 uv sync && source .venv/bin/activate                  # Python 3.12 + deps from uv.lock
-make env PRESET=linux-vllm                             # nexo.yaml + secrets in the keychain; HF_TOKEN in .env
+make env PRESET=linux-vllm                             # nexo.yaml + secrets in ~/.config/nexo; HF_TOKEN in .env
 make up                                                # Neo4j, collector, SigNoz, vLLM (4x80GB GPUs)
 nexo ingest corpus/memo.md --doc-type memo --effective-date 2025-06-30
 nexo ask "How is Acme Holdings connected to Gamma Clinics?"   # prints thread_id + review packet
@@ -86,7 +86,7 @@ add-ons, the container engine), foundry-style; `make` runs it through `nexo setu
 
 ```bash
 # One Mac
-make env PRESET=mac-single                   # nexo.yaml (set models.local.profile) + keychain secrets
+make env PRESET=mac-single                   # nexo.yaml (set models.local.profile) + secrets
 make up                                      # Ollama's models, Neo4j, collector, SigNoz
 make check                                   # preflight + each role's model and server
 

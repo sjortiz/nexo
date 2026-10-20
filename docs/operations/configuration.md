@@ -16,7 +16,8 @@ sources:
 ---
 
 Settings load from the environment, then the secrets provider for the generated secrets
-(`NEO4J_PASSWORD`, `VLLM_API_KEY`, `EMBEDDING_API_KEY`; the OS keychain by default, see ADR-0017),
+(`NEO4J_PASSWORD`, `VLLM_API_KEY`, `EMBEDDING_API_KEY`; `~/.config/nexo/config` by default, read
+in-process, see ADR-0017),
 then `.nexo/render/nexo.env` (rendered from `nexo.yaml` by `nexo setup`), then `.env` (names are
 case-insensitive). A test fails if a setting is missing from
 this page.[^config] Template: `.env.example`.[^env]

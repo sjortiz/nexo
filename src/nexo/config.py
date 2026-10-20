@@ -44,7 +44,7 @@ STORED_SECRETS = ("NEO4J_PASSWORD", "VLLM_API_KEY", "EMBEDDING_API_KEY")
 
 
 class _SecretStoreSource(PydanticBaseSettingsSource):
-    """Generated secrets from the provider nexo.env names (the OS keychain by default)."""
+    """Generated secrets, read in-process from the provider nexo.env names (a file by default)."""
 
     def get_field_value(self, field: Any, field_name: str) -> tuple[Any, str, bool]:
         return None, field_name, False
@@ -71,7 +71,7 @@ class Settings(BaseSettings):
     """All runtime settings, read from the environment, the secrets provider or `.env`."""
 
     # First match wins: the environment, generated secrets from the provider `nexo setup`
-    # chose (keychain by default), .nexo/render/nexo.env (rendered from nexo.yaml), .env.
+    # chose (~/.config/nexo/config by default), .nexo/render/nexo.env, then .env.
     model_config = SettingsConfigDict(
         env_file=(".env", RENDERED_ENV),
         env_file_encoding="utf-8",
