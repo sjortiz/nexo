@@ -54,9 +54,9 @@ and GPU count.[^vllm] Compose refuses to start without `NEO4J_PASSWORD`, the Sig
 # Steps
 
 1. `make env PRESET=linux-vllm`: `nexo.yaml` from the preset, random secrets in the secrets provider
-   (the keychain, or `~/.config/nexo/config` on a headless server; existing values are kept). Add
-   `HF_TOKEN` (the model is gated) to `.env`.[^preset] On a cluster use `secrets.provider: env`, `sops`
-   or `vault` instead ([Choosing a setup](decision-guide.md#9-where-secrets-live)).
+   (`~/.config/nexo/config` by default; existing values are kept). Add
+   `HF_TOKEN` (the model is gated) to `.env`.[^preset] On a cluster, mount the secrets as files and use
+   `secrets.provider: file` with a `path`, or `sops` / `vault` ([Choosing a setup](decision-guide.md#9-where-secrets-live)).
 2. `make check`, then `make up`: Neo4j, the collector, SigNoz and both vLLM services (the first start
    downloads ~140 GB of weights; the health check allows 15 minutes). Log in to
    http://localhost:8080 with `SIGNOZ_USER_EMAIL` (default `admin@nexo.local`) and `SIGNOZ_USER_PASSWORD`.

@@ -75,7 +75,7 @@ repository was archived in April 2026. Usage telemetry to Langfuse is off
 Headless initialization creates an organization, a `nexo` project with the API keys the collector uses,
 and an admin login (`LANGFUSE_USER_EMAIL`, default `admin@nexo.local`, and
 `LANGFUSE_USER_PASSWORD`).[^headless] `make env` generates every secret in the secrets provider
-(the keychain by default; ADR-0017).
+(`~/.config/nexo/config` by default; ADR-0017).
 
 # Read API
 

@@ -71,7 +71,7 @@ Rootless Podman on Linux cannot reach host services bound to `127.0.0.1` through
 container uses the host network; `nexo setup` renders that on Linux:[^render]
 
 ```bash
-make env PRESET=linux-gpu      # nexo.yaml (set models.local.profile: gpu-24); secrets in the keychain
+make env PRESET=linux-gpu      # nexo.yaml (set models.local.profile: gpu-24); secrets in ~/.config/nexo
 make up                        # models, Neo4j, the collector, SigNoz
 make app ARGS="ingest /corpus/memo.md"
 ```
