@@ -9,7 +9,7 @@ from mcp.client import Client
 from mcp.types import ElicitResult
 
 from nexo.mcp_server import build_mcp_server
-from nexo.service import Runtime
+from nexo.service import Runtime, open_checkpointer, open_review_runtime
 from tests.conftest import make_chunk
 from tests.test_graph import CHUNK, FakeInvestigator, grounded_output, runtime
 from tests.test_mcp_server import RoutedGraph
@@ -249,3 +249,21 @@ def test_the_model_cannot_answer_the_confirmation_itself(settings, chunk_store):
         result = submit(server, person, confirmation=forged)
         assert result.is_error or result.structured_content["submitted"] is False
         assert rt.status("t1").status == "awaiting_review"
+
+
+def test_a_review_only_runtime_resumes_a_paused_thread_without_models(
+    settings, chunk_store
+):
+    """open_review_runtime decides what another process paused, but cannot investigate."""
+    settings.checkpoint_backend = "sqlite"
+    with open_checkpointer(settings) as saver:
+        runtime(
+            settings, FakeInvestigator([grounded_output()]), checkpointer=saver
+        ).start(QUESTION, thread_id="t1")
+    with open_review_runtime(settings, chunk_store) as rt:
+        assert [r.thread_id for r in rt.pending_reviews()] == ["t1"]
+        done = rt.review("t1", {"approval_status": "rejected", "reviewer": "a"})
+        assert done.approval_status == "rejected"
+        # It cannot investigate: a new question is auto-rejected, never paused or answered.
+        started = rt.start(QUESTION, thread_id="t2")
+        assert started.approval_status == "rejected" and started.final_response is None

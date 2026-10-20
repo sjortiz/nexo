@@ -365,6 +365,7 @@ def test_stdout_carries_only_json_rpc_and_logs_go_to_stderr(tmp_path):
         "EMBEDDING_PROVIDER": "fake",
         "VECTOR_STORE_PATH": str(tmp_path / "v.json"),
         "NEO4J_URI": "bolt://127.0.0.1:1",
+        "NEXO_DATA_DIR": str(tmp_path / "data"),  # never the user's review queue
         "LOG_LEVEL": "DEBUG",
         "OTEL_EXPORTER_OTLP_ENDPOINT": "",
         "PATH": str(Path(sys.executable).parent),
@@ -390,7 +391,8 @@ def test_stdout_carries_only_json_rpc_and_logs_go_to_stderr(tmp_path):
     assert "serving MCP over stdio" in proc.stderr
 
 
-def test_nexo_mcp_speaks_clean_stdio(settings, tmp_path, stored):
+@pytest.mark.parametrize("review", [True, False])
+def test_nexo_mcp_speaks_clean_stdio(settings, tmp_path, stored, review):
     """Launch `nexo mcp` as a subprocess: logging must not touch stdout, or the handshake breaks."""
     env = {
         "EMBEDDING_PROVIDER": "fake",
@@ -398,6 +400,8 @@ def test_nexo_mcp_speaks_clean_stdio(settings, tmp_path, stored):
         "CHUNK_STORE": "local",
         "VECTOR_STORE_PATH": str(settings.vector_store_path),
         "NEO4J_URI": "bolt://127.0.0.1:1",
+        "MCP_REVIEW_TOOLS": str(review).lower(),
+        "CHECKPOINT_SQLITE_PATH": str(tmp_path / "checkpoints.sqlite"),
         "LOG_LEVEL": "DEBUG",
         "OTEL_EXPORTER_OTLP_ENDPOINT": "",
         "PATH": str(Path(sys.executable).parent),
@@ -416,7 +420,8 @@ def test_nexo_mcp_speaks_clean_stdio(settings, tmp_path, stored):
             return tools, hits
 
     tools, hits = asyncio.run(run())
-    assert tools == TOOLS
+    review_tools = {"nexo_pending_reviews", "nexo_get_review", "nexo_submit_review"}
+    assert tools == (TOOLS | review_tools if review else TOOLS)
     assert [h["chunk_id"] for h in data(hits)] == [stored[0].chunk_id]
 
 
