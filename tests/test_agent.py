@@ -809,6 +809,25 @@ def test_system_prompt_says_absence_from_the_graph_is_not_evidence(
     assert "search_chunks" in system
 
 
+def test_system_prompt_sends_role_questions_to_entity_neighbours(settings, chunk_store):
+    """Roles, owners and suppliers of one entity go to entity_neighbours, not freehand Cypher."""
+    client = ScriptedClient([_completion({"content": "No data."}, "stop")])
+    investigator = Investigator(
+        model=OpenAIModel(client=client, model_id="m", stream=False),
+        graph=FakeGraph(),
+        chunks=chunk_store,
+        settings=settings,
+    )
+    investigator.investigate(
+        "Who is the chief executive of Beta Labs?",
+        scope=InvestigationScope(strategy="graph"),
+    )
+    system = " ".join(client.requests[0]["messages"][0]["content"].split())
+    steer = system[system.index("roles, owners, suppliers") :]
+    assert "entity_neighbours" in steer[:200]
+    assert "do not write Cypher or guess relationship types" in steer[:300]
+
+
 # --- answering without exhausting the turns ----------------------------------
 
 
