@@ -569,6 +569,11 @@ _PROCEDURE_CALL = re.compile(
     r"\bCALL\s+(?![({])(?!db\.(?:labels|relationshipTypes|propertyKeys)\s*\()",
     re.IGNORECASE,
 )
+# Chunk text lives on (:Chunk) nodes with CHUNK_STORE=neo4j; it is served only by
+# the chunk tools, through the redactor. Reading it by name is rejected (computed
+# keys still need database-side RBAC).
+_CHUNK_TEXT_PROPERTY = re.compile(r"\.\s*`?(?:text|search_text|embedding)\b")
+_CHUNK_TEXT_SUBSCRIPT = re.compile(r"\[\s*(['\"])(?:text|search_text|embedding)\1\s*\]")
 _STRING_LITERAL = re.compile(r"'(?:[^'\\]|\\.)*'|\"(?:[^\"\\]|\\.)*\"")
 _COMMENT = re.compile(r"//[^\n]*|/\*.*?\*/", re.DOTALL)
 
@@ -578,7 +583,7 @@ class UnsafeCypherError(ValueError):
 
 
 def validate_read_only_cypher(cypher: str, *, max_chars: int = 4000) -> str:
-    """Reject anything that is not a single read query.
+    """Reject anything that is not a single read query, or that reads chunk text.
 
     Defence in depth only - the authoritative controls are the READ
     transaction and the database role.
@@ -598,5 +603,9 @@ def validate_read_only_cypher(cypher: str, *, max_chars: int = 4000) -> str:
     if _PROCEDURE_CALL.search(code):
         raise UnsafeCypherError(
             "procedure calls are not allowed (subqueries and db.labels() etc. are)"
+        )
+    if _CHUNK_TEXT_PROPERTY.search(code) or _CHUNK_TEXT_SUBSCRIPT.search(query):
+        raise UnsafeCypherError(
+            "chunk text is not readable through Cypher; read it with the chunk tools"
         )
     return query

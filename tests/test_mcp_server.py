@@ -17,6 +17,7 @@ from neo4j.exceptions import ServiceUnavailable
 
 from pydantic import SecretStr
 from nexo.agents.redaction import ChunkRedactor
+from nexo.agents.tools import redact_above_clearance
 from nexo.telemetry import SESSION_ID, query_attributes
 from nexo.mcp_server import build_mcp_server
 from nexo.storage.graph_store import ReadResult
@@ -279,6 +280,63 @@ def test_search_masks_the_query_so_it_cannot_probe(settings, tmp_path, contact):
     assert [h["chunk_id"] for h in cleared] == [contact[0].chunk_id]
 
 
+PHONE_TEXT = "Escrow agent for Delta Partners, phone (415) 555-0134."
+
+
+@pytest.fixture(name="fragments")
+def fixture_fragments(settings, tmp_path, request, contact):
+    """A store of the given mode holding the email chunk and a phone chunk, both maskable."""
+    phone = make_chunk(
+        "escrow",
+        0,
+        PHONE_TEXT,
+        Sensitivity.PII,
+        declared_sensitivity=Sensitivity.INTERNAL,
+    )
+    store = LocalChunkStore(
+        build_embeddings(settings), tmp_path / "fragments.json", mode=request.param
+    )
+    store.upsert([contact[0], phone], [CONTACT, PHONE_TEXT])
+    return store, contact[0], phone
+
+
+@pytest.mark.parametrize("fragments", ["keyword", "hybrid", "vector"], indirect=True)
+@pytest.mark.parametrize(
+    "query",
+    [
+        "0134",
+        "555-0134",
+        "415",
+        "(415) 555",
+        "jane",
+        "roe",
+        "Delta 0134",
+        "Jean Rowe",
+        "email",
+    ],
+)
+def test_search_does_not_match_fragments_of_a_masked_value(settings, fragments, query):
+    """A query that matches a masked chunk only through its masked-out words finds nothing."""
+    store, _, _ = fragments
+    assert data(call(_masking(settings, store), "nexo_search", {"query": query})) == []
+
+
+@pytest.mark.parametrize("fragments", ["keyword", "hybrid", "vector"], indirect=True)
+def test_search_still_finds_a_masked_chunk_by_its_other_words(settings, fragments):
+    """Other words find the masked chunk; a cleared caller can search the value itself."""
+    store, email, phone = fragments
+    server = _masking(settings, store)
+    [hit] = data(call(server, "nexo_search", {"query": "Delta Partners", "k": 1}))
+    assert hit["chunk_id"] == phone.chunk_id and hit["snippet"].endswith("[PHONE].")
+    [hit] = data(call(server, "nexo_search", {"query": "Investor contact", "k": 1}))
+    assert hit["chunk_id"] == email.chunk_id and hit["snippet"].endswith("[EMAIL]")
+    cleared = _masking(settings, store, "pii")
+    hits = data(call(cleared, "nexo_search", {"query": "0134", "k": 1}))
+    assert [(h["chunk_id"], h["snippet"]) for h in hits] == [
+        (phone.chunk_id, PHONE_TEXT)
+    ]
+
+
 @pytest.mark.parametrize("clearance", ["pii", "phi"])
 def test_read_tools_show_the_original_to_a_sufficient_clearance(
     settings, chunk_store, contact, clearance
@@ -313,6 +371,89 @@ def test_read_tools_use_the_runtimes_redactor(settings, chunk_store, contact):
     )
     out = data(call(server, "nexo_get_chunks", {"chunk_ids": [pii.chunk_id]}))
     assert out["masked"] == [pii.chunk_id] and "[EMAIL]" in out["chunks"][0]["text"]
+
+
+CHUNK_NODE = {
+    "chunk_id": "chk_" + "3" * 16,
+    "text": CONTACT,
+    "search_text": CONTACT,
+    "embedding": [0.1, 0.2],
+    "sensitivity": "pii",
+}
+
+
+@pytest.mark.parametrize("clearance", ["internal", "phi"])
+def test_graph_query_never_returns_chunk_text(settings, chunk_store, clearance):
+    """Chunk nodes are ranked by their level, and their text never leaves through Cypher."""
+    entity = {"key": "Person:jane", "name": "Jane", "sensitivity_rank": 1}
+    graph = RoutedGraph(
+        {
+            "RETURN": [
+                {
+                    "c": CHUNK_NODE,
+                    "m": (entity, "MENTIONED_IN", CHUNK_NODE),
+                    "mention": {"surface": EMAIL, "resolution": "exact"},
+                    "public": {**CHUNK_NODE, "sensitivity": "public"},
+                    "odd": {"name": "x", "sensitivity": "secret"},
+                }
+            ]
+        }
+    )
+    server = build_mcp_server(
+        graph=graph,
+        chunks=chunk_store,
+        settings=settings.model_copy(update={"mcp_clearance": clearance}),
+    )
+    out = data(
+        call(
+            server,
+            "nexo_graph_query",
+            {"cypher": "MATCH (e)-[m:MENTIONED_IN]->(c:Chunk) RETURN c, m LIMIT 1"},
+        )
+    )
+    [row] = out["rows"]
+    assert row["public"] == {
+        "chunk_id": CHUNK_NODE["chunk_id"],
+        "sensitivity": "public",
+    }
+    assert row["m"][0] == entity and row["m"][1] == "MENTIONED_IN"
+    redacted = {"redacted": "above caller clearance"}
+    if clearance == "internal":
+        assert row["c"] == row["m"][2] == row["mention"] == row["odd"] == redacted
+    else:
+        assert row["c"] == row["m"][2] == row["public"] | {"sensitivity": "pii"}
+        # A level that cannot be read counts as phi, like an unranked mention.
+        assert row["mention"]["surface"] == EMAIL and row["odd"]["name"] == "x"
+    assert CONTACT not in json.dumps(out) and "0.1" not in json.dumps(out)
+    if clearance == "internal":
+        assert EMAIL not in json.dumps(out)
+
+
+def test_relationship_tuples_from_the_driver_are_redacted_too():
+    """The driver returns a relationship as a (start, type, end) tuple; its nodes are checked."""
+    entity = {"key": "Person:jane", "sensitivity_rank": 1}
+    row = {"m": (entity, "MENTIONED_IN", CHUNK_NODE)}
+    assert redact_above_clearance(row, Sensitivity.INTERNAL.rank) == {
+        "m": [entity, "MENTIONED_IN", {"redacted": "above caller clearance"}]
+    }
+
+
+@pytest.mark.parametrize(
+    "cypher",
+    [
+        "MATCH (c:Chunk) RETURN c.text AS t LIMIT 1",
+        "MATCH (c) RETURN c . search_text LIMIT 1",
+        "MATCH (c) RETURN c.`embedding` LIMIT 1",
+        "MATCH (c) RETURN c['text'] LIMIT 1",
+    ],
+)
+def test_graph_query_rejects_reading_chunk_text_by_name(settings, chunk_store, cypher):
+    """Scalar reads of chunk text are refused before they reach the graph."""
+    graph = RoutedGraph()
+    server = build_mcp_server(graph=graph, chunks=chunk_store, settings=settings)
+    result = call(server, "nexo_graph_query", {"cypher": cypher})
+    assert result.is_error and "chunk text" in result.content[0].text
+    assert not graph.calls
 
 
 def test_find_entities_is_parameterized_and_redacts(settings, chunk_store):
