@@ -10,6 +10,9 @@ sources:
   - id: cli
     resource: ../../src/nexo/cli.py
     title: CLI
+  - id: ui
+    resource: ../../src/nexo/review_ui.py
+    title: Demo review page
   - id: state
     resource: ../../src/nexo/orchestration/state.py
     title: ReviewDecision
@@ -39,6 +42,14 @@ below their clearance ([ADR-0019](../decisions/adr-0019-review-surfaces.md)).
 
 5. **Confirm** the result shows `status: completed` and the expected `approval_status`.
 
+# Demo review page
+
+`make review-ui` (or `nexo review-ui`) serves a local page that lists paused questions and takes the
+decision with Approve and Reject buttons.[^ui] It is for demos: it has no authentication, so anyone who
+can reach the port can decide, and it is not part of `make up`. It binds `127.0.0.1` only and refuses any
+other host. The reviewer is `NEXO_USER`, read-only; passages are read at the default clearance and
+withheld ones say so. Use review over MCP for real work ([ADR-0019](../decisions/adr-0019-review-surfaces.md)).
+
 # Rules
 
 - `--acknowledge-findings` is required to approve when any finding is `block`. Without it the run stays
@@ -51,3 +62,4 @@ below their clearance ([ADR-0019](../decisions/adr-0019-review-surfaces.md)).
 
 [^cli]: CLI
 [^state]: ReviewDecision
+[^ui]: Demo review page
