@@ -1,4 +1,4 @@
-"""The investigator's three tools, bound to one investigation's context.
+"""The investigator's tools, bound to one investigation's context.
 
 Tools are built per investigation (closures over `InvestigationContext`) so
 budget, clearance and the evidence ledger are per request and thread safe.
@@ -136,10 +136,82 @@ def redact_above_clearance(value: Any, clearance_rank: int) -> Any:
     return value
 
 
+# Entity-to-Entity hops only: lexical edges (MENTIONED_IN, NEXT_CHUNK, ...) end at
+# Chunk or Document nodes. Hop and path counts are validated ints, inlined
+# because Cypher takes no parameters there.
+_PATHS = """\
+MATCH (a:Entity {{key: $from_key}}), (b:Entity {{key: $to_key}})
+OPTIONAL MATCH p = SHORTEST {paths} (a)(()-[]-(:Entity)){{1,{hops}}}(b)
+RETURN [n IN nodes(p) | n {{.key, .name, .type, .sensitivity_rank}}] AS nodes,
+       [r IN relationships(p) | r {{from: startNode(r).key, relation: type(r), to: endNode(r).key,
+           .predicate, .certainty, .valid_at, .evidence, .chunk_ids,
+           sensitivity_rank: coalesce(r.sensitivity_rank, 3)}}] AS hops"""
+
+_NEIGHBOURS = """\
+MATCH (e:Entity {key: $key})
+OPTIONAL MATCH (e)-[r]-(n:Entity)
+WITH e, r, n ORDER BY size(coalesce(r.chunk_ids, [])) DESC LIMIT $limit
+RETURN e {.key, .name, .type, .sensitivity_rank} AS entity,
+       r {relation: type(r), outgoing: startNode(r) = e, .predicate, .certainty,
+          .valid_at, .evidence, .chunk_ids, sensitivity_rank: coalesce(r.sensitivity_rank, 3)} AS edge,
+       n {.key, .name, .type, .sensitivity_rank} AS neighbour"""
+
+_UNKNOWN_KEY = {
+    "error": "unknown entity key; look entities up by name and alias with "
+    "query_knowledge_graph, or search_chunks for the text"
+}
+
+_BUDGET_EXHAUSTED = json.dumps(
+    {"error": "tool budget exhausted; write your answer from the evidence gathered"}
+)
+
+
+def _is_redacted(value: Any) -> bool:
+    """True if value holds anything redact_above_clearance replaced."""
+    if isinstance(value, dict):
+        return "redacted" in value or any(_is_redacted(v) for v in value.values())
+    if isinstance(value, list):
+        return any(_is_redacted(v) for v in value)
+    return False
+
+
+def visible_paths(rows: list[dict[str, Any]], clearance_rank: int) -> dict[str, Any]:
+    """The found paths within clearance; one through anything above it would reveal it exists."""
+    found = [redact_above_clearance(row, clearance_rank) for row in rows if row["hops"]]
+    visible = [p for p in found if not _is_redacted(p)]
+    return {
+        "path_count": len(visible),
+        "withheld": len(found) - len(visible),
+        "paths": visible,
+    }
+
+
+def visible_neighbours(
+    rows: list[dict[str, Any]], clearance_rank: int
+) -> dict[str, Any] | None:
+    """The entity's edges within clearance; None if it is unknown or above clearance."""
+    rows = redact_above_clearance(rows, clearance_rank)
+    # Above clearance reads as unknown so the entity's existence stays hidden.
+    if not rows or _is_redacted(rows[0]["entity"]):
+        return None
+    found = [
+        {"edge": row["edge"], "neighbour": row["neighbour"]}
+        for row in rows
+        if row["edge"] is not None
+    ]
+    visible = [e for e in found if not _is_redacted(e)]
+    return {
+        "entity": rows[0]["entity"],
+        "edge_count": len(visible),
+        "withheld": len(found) - len(visible),
+        "edges": visible,
+    }
+
+
 def _dump(payload: dict[str, Any], max_chars: int) -> str:
     """Serialise, dropping trailing rows/chunks (never cutting JSON) to fit the budget."""
     text = json.dumps(payload, default=str, ensure_ascii=False)
-    for key in ("rows", "chunks"):
+    for key in ("rows", "chunks", "paths", "edges"):
         items = payload.get(key)
         while len(text) > max_chars and isinstance(items, list) and items:
             items.pop()
@@ -152,6 +224,59 @@ def _dump(payload: dict[str, Any], max_chars: int) -> str:
     return text
 
 
+@dataclass(frozen=True)
+class _Call:
+    """One tool call in progress: its investigation, tool name and start time."""
+
+    ctx: InvestigationContext
+    name: str
+    started: float = field(default_factory=time.perf_counter)
+
+    def fail(self, detail: str, payload: dict[str, Any]) -> str:
+        """Record a failed call and return its error payload."""
+        return _finish(
+            self.ctx, _summary(self.name, self.started, False, detail), payload
+        )
+
+    def reply(self, payload: dict[str, Any], detail: str, max_chars: int) -> str:
+        """Record the chunk ids in payload as discovered and return it to the model."""
+        found: set[str] = set()
+        collect_chunk_ids(payload, found)
+        self.ctx.record_discovered(found)
+        payload["chunk_ids_found"] = sorted(found)
+        trace.get_current_span().set_attribute("nexo.graph.chunk_ids_found", len(found))
+        summary = _summary(self.name, self.started, True, detail)
+        return _finish(self.ctx, summary, payload, max_chars)
+
+
+def _read_graph(
+    graph: GraphReader,
+    call: _Call,
+    cypher: str,
+    parameters: dict[str, Any] | None = None,
+) -> ReadResult | str:
+    """Run a read query; expected failures are recorded and returned as JSON."""
+    # Strands' `execute_tool <name>` span is current here; the Neo4j CLIENT
+    # span is a child created by GraphStore.
+    span = trace.get_current_span()
+    try:
+        return graph.run_read_query(cypher, parameters)
+    except (ServiceUnavailable, SessionExpired):
+        span.set_attribute("error.type", "graph_unavailable")
+        return call.fail(
+            "graph unavailable",
+            {
+                "error": "knowledge graph unavailable; do not retry, report what you have"
+            },
+        )
+    except Neo4jError as exc:  # syntax errors, timeouts, access-mode violations
+        span.set_attribute("error.type", exc.code or "neo4j_error")
+        return call.fail(
+            exc.code or "neo4j error",
+            {"error": exc.message or str(exc), "code": exc.code},
+        )
+
+
 def build_investigation_tools(
     *,
     graph: GraphReader,
@@ -160,13 +285,14 @@ def build_investigation_tools(
     settings: Settings,
     redactor: ChunkRedactor | None = None,
 ) -> list[Any]:
-    """Build the graph query, chunk fetch and chunk search tools for this investigation.
+    """Build the graph read, chunk fetch and chunk search tools for this investigation.
 
     Without a redactor, chunks above the caller's clearance are withheld whole.
     """
     redactor = redactor or ChunkRedactor(NoopDetector())
     return [
         _query_tool(graph, ctx, settings),
+        *_lookup_tools(graph, ctx, settings),
         _fetch_tool(chunks, ctx, settings, redactor),
         _search_tool(chunks, ctx, settings, redactor),
     ]
@@ -183,7 +309,8 @@ def _query_tool(
     def query_knowledge_graph(cypher_query: str) -> str:
         """Run one read-only Cypher query against the Neo4j knowledge graph.
 
-        Use it to trace multi-hop relationships. Bound variable-length paths
+        Use it for questions find_paths and entity_neighbours do not cover,
+        such as looking entities up by name. Bound variable-length paths
         (for example -[*1..3]-) and always LIMIT results. Return the chunk_id or
         chunk_ids properties of the nodes and relationships you care about so
         their source text can be fetched. The result lists every chunk id it saw
@@ -195,72 +322,112 @@ def _query_tool(
                 procedure calls are rejected.
         """
         if not ctx.reserve_call():
-            return json.dumps(
-                {
-                    "error": "tool budget exhausted; write your answer from the evidence gathered"
-                }
-            )
-        started = time.perf_counter()
-        # Strands' `execute_tool query_knowledge_graph` span is current here; the
-        # Neo4j CLIENT span is a child created by GraphStore.
-        span = trace.get_current_span()
+            return _BUDGET_EXHAUSTED
+        call = _Call(ctx, "query_knowledge_graph")
         try:
             query = validate_read_only_cypher(cypher_query)
-            result = graph.run_read_query(query)
         except UnsafeCypherError as exc:
-            span.set_attribute("error.type", "unsafe_cypher")
-            return _finish(
-                ctx,
-                _summary("query_knowledge_graph", started, False, str(exc)),
+            trace.get_current_span().set_attribute("error.type", "unsafe_cypher")
+            return call.fail(
+                str(exc),
                 {"error": str(exc), "hint": "rewrite as a single read-only query"},
             )
-        except (ServiceUnavailable, SessionExpired):
-            span.set_attribute("error.type", "graph_unavailable")
-            return _finish(
-                ctx,
-                _summary("query_knowledge_graph", started, False, "graph unavailable"),
-                {
-                    "error": "knowledge graph unavailable; do not retry, report what you have"
-                },
-            )
-        except Neo4jError as exc:  # syntax errors, timeouts, access-mode violations
-            span.set_attribute("error.type", exc.code or "neo4j_error")
-            return _finish(
-                ctx,
-                _summary(
-                    "query_knowledge_graph", started, False, exc.code or "neo4j error"
-                ),
-                {"error": exc.message or str(exc), "code": exc.code},
-            )
+        result = _read_graph(graph, call, query)
+        if isinstance(result, str):
+            return result
         rows = redact_above_clearance(result.rows, clearance.rank)
-        found: set[str] = set()
-        collect_chunk_ids(rows, found)
-        ctx.record_discovered(found)
-        span.set_attributes(
-            {
-                "nexo.graph.rows": len(rows),
-                "nexo.graph.truncated": result.truncated,
-                "nexo.graph.chunk_ids_found": len(found),
-            }
+        trace.get_current_span().set_attributes(
+            {"nexo.graph.rows": len(rows), "nexo.graph.truncated": result.truncated}
         )
-        payload = {
+        payload: dict[str, Any] = {
             "row_count": len(rows),
             "truncated": result.truncated,
             "rows": rows,
-            "chunk_ids_found": sorted(found),
         }
         if not rows:
             payload["hint"] = (
                 "no rows: try another name or alias, or search_chunks for the text"
             )
-        return _finish(
-            ctx,
-            _summary("query_knowledge_graph", started, True, f"{len(rows)} rows"),
-            payload,
-            max_chars,
-        )
+        return call.reply(payload, f"{len(rows)} rows", max_chars)
 
     return query_knowledge_graph
+
+
+def _lookup_tools(
+    graph: GraphReader, ctx: InvestigationContext, settings: Settings
+) -> list[Any]:
+    """The fixed path and neighbour lookups, so small models need no Cypher."""
+    clearance = ctx.scope.chunk_filter.max_sensitivity
+    max_chars = settings.tool_result_max_chars
+
+    @tool
+    def find_paths(
+        from_key: str, to_key: str, max_hops: int = 3, max_paths: int = 5
+    ) -> str:
+        """Find the shortest chains of relationships connecting two entities.
+
+        Hops follow relationships in either direction; each hop reports its
+        real direction (from -> relation -> to) and its chunk_ids.
+
+        Args:
+            from_key: Entity key, e.g. "Organization:acme holdings".
+            to_key: Entity key of the other end.
+            max_hops: Longest path to consider, 1 to 4.
+            max_paths: How many paths to return, shortest first, 1 to 10.
+        """
+        if not ctx.reserve_call():
+            return _BUDGET_EXHAUSTED
+        call = _Call(ctx, "find_paths")
+        if from_key == to_key:
+            return call.fail(
+                "same entity", {"error": "from_key and to_key are the same entity"}
+            )
+        hops, paths = min(max(max_hops, 1), 4), min(max(max_paths, 1), 10)
+        result = _read_graph(
+            graph,
+            call,
+            _PATHS.format(paths=paths, hops=hops),
+            {"from_key": from_key, "to_key": to_key},
+        )
+        if isinstance(result, str):
+            return result
+        if not result.rows:  # an endpoint key matched no entity
+            return call.fail("unknown key", _UNKNOWN_KEY)
+        payload = visible_paths(result.rows, clearance.rank)
+        if not payload["paths"]:
+            payload["hint"] = "no path in the graph: search_chunks for the text"
+        return call.reply(payload, f"{payload['path_count']} paths", max_chars)
+
+    @tool
+    def entity_neighbours(entity_key: str, limit: int = 25) -> str:
+        """List one entity's direct relationships to other entities.
+
+        Edges are in both directions ("outgoing" says which); RELATED_TO edges
+        keep the original wording in "predicate". Best-supported edges first.
+
+        Args:
+            entity_key: Entity key, e.g. "Organization:acme holdings".
+            limit: Most edges to return, 1 to 100.
+        """
+        if not ctx.reserve_call():
+            return _BUDGET_EXHAUSTED
+        call = _Call(ctx, "entity_neighbours")
+        result = _read_graph(
+            graph,
+            call,
+            _NEIGHBOURS,
+            {"key": entity_key, "limit": min(max(limit, 1), 100)},
+        )
+        if isinstance(result, str):
+            return result
+        payload = visible_neighbours(result.rows, clearance.rank)
+        if payload is None:
+            return call.fail("unknown key", _UNKNOWN_KEY)
+        if not payload["edges"]:
+            payload["hint"] = "no edges in the graph: search_chunks for the text"
+        return call.reply(payload, f"{payload['edge_count']} edges", max_chars)
+
+    return [find_paths, entity_neighbours]
 
 
 def _fetch_tool(
@@ -285,11 +452,7 @@ def _fetch_tool(
             chunk_ids: Chunk ids (format chk_ followed by 16 hex characters) from graph results.
         """
         if not ctx.reserve_call():
-            return json.dumps(
-                {
-                    "error": "tool budget exhausted; write your answer from the evidence gathered"
-                }
-            )
+            return _BUDGET_EXHAUSTED
         started = time.perf_counter()
         requested = list(dict.fromkeys(chunk_ids))
         well_formed = [c for c in requested if CHUNK_ID_RE.fullmatch(c)]
@@ -368,11 +531,7 @@ def _search_tool(
             k: How many passages to return (at most the per-call chunk limit).
         """
         if not ctx.reserve_call():
-            return json.dumps(
-                {
-                    "error": "tool budget exhausted; write your answer from the evidence gathered"
-                }
-            )
+            return _BUDGET_EXHAUSTED
         started = time.perf_counter()
         limit = max(1, min(k, settings.agent_max_chunks_per_call))
         # Strands' `execute_tool search_chunks` span is current here.

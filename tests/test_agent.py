@@ -23,17 +23,32 @@ from nexo.telemetry import apply_genai_env
 from tests.conftest import FakeGraph, make_chunk
 
 
-def _tools(settings, graph, chunk_store, *, clearance=Sensitivity.INTERNAL, budget=10):
-    """Build the investigation context and its graph-query and chunk-fetch tools."""
+def _named_tools(
+    settings, graph, chunk_store, *, clearance=Sensitivity.INTERNAL, budget=10
+):
+    """Build the investigation context and its tools, keyed by tool name."""
     ctx = InvestigationContext(
         request_id="r1",
         max_tool_calls=budget,
         scope=InvestigationScope(chunk_filter=ChunkFilter(max_sensitivity=clearance)),
     )
-    query, fetch, search = build_investigation_tools(
+    tools = build_investigation_tools(
         graph=graph, chunks=chunk_store, ctx=ctx, settings=settings
     )
-    return ctx, query, fetch, search
+    return ctx, {t.tool_name: t for t in tools}
+
+
+def _tools(settings, graph, chunk_store, *, clearance=Sensitivity.INTERNAL, budget=10):
+    """Build the investigation context and its query, fetch and search tools."""
+    ctx, tools = _named_tools(
+        settings, graph, chunk_store, clearance=clearance, budget=budget
+    )
+    return (
+        ctx,
+        tools["query_knowledge_graph"],
+        tools["fetch_vector_chunks"],
+        tools["search_chunks"],
+    )
 
 
 def test_query_tool_collects_chunk_ids_and_redacts_above_clearance(
@@ -88,6 +103,141 @@ def test_query_tool_returns_neo4j_errors_as_feedback(settings, chunk_store):
         settings, FakeGraph(error=ServiceUnavailable("down")), chunk_store
     )
     assert "unavailable" in json.loads(query("MATCH (n) RETURN n"))["error"]
+
+
+C1, C2, C3 = ("chk_" + c * 16 for c in "123")
+
+
+def _node(key, rank=1):
+    """An entity map as the path and neighbour queries project it."""
+    return {
+        "key": key,
+        "name": key.split(":")[1],
+        "type": "Organization",
+        "sensitivity_rank": rank,
+    }
+
+
+def _hop(start, end, chunk_id, rank=1):
+    """A relationship map as the path query projects it."""
+    return {
+        "from": start,
+        "relation": "OWNS",
+        "to": end,
+        "chunk_ids": [chunk_id],
+        "sensitivity_rank": rank,
+    }
+
+
+def test_find_paths_withholds_paths_through_anything_above_clearance(
+    settings, chunk_store
+):
+    """Paths touching a node or hop above clearance are dropped and their chunk ids hidden."""
+    a, b, c = "Organization:a", "Organization:b", "Organization:c"
+    graph = FakeGraph(
+        rows=[
+            {"nodes": [_node(a), _node(c)], "hops": [_hop(a, c, C1)]},
+            {
+                "nodes": [_node(a), _node(b, 3), _node(c)],
+                "hops": [_hop(a, b, C2), _hop(b, c, C2)],
+            },
+            {
+                "nodes": [_node(a), _node(b), _node(c)],
+                "hops": [_hop(a, b, C3, 3), _hop(b, c, C1)],
+            },
+        ]
+    )
+    ctx, tools = _named_tools(settings, graph, chunk_store)
+    out = json.loads(tools["find_paths"](a, c, max_hops=99, max_paths=0))
+    assert [p["hops"] for p in out["paths"]] == [[_hop(a, c, C1)]]
+    assert out["withheld"] == 2 and out["chunk_ids_found"] == [C1]
+    assert ctx.evidence.discovered == {C1} and ctx.calls[0].ok
+    assert "hint" not in out and out["tool_calls_left"] == 9
+    # Keys travel as parameters; hop and path counts are clamped before inlining.
+    assert graph.parameters == [{"from_key": a, "to_key": c}]
+    assert "SHORTEST 1 " in graph.queries[0] and "{1,4}" in graph.queries[0]
+
+
+def test_find_paths_reports_unknown_keys_no_path_and_same_entity(settings, chunk_store):
+    """Missing endpoints, a pair with no path and identical keys each get a clear answer."""
+    ctx, tools = _named_tools(settings, FakeGraph(), chunk_store)
+    assert (
+        "unknown entity key" in json.loads(tools["find_paths"]("X:a", "X:b"))["error"]
+    )
+    assert not ctx.calls[0].ok
+
+    graph = FakeGraph(rows=[{"nodes": None, "hops": None}])  # both exist, no path
+    _, tools = _named_tools(settings, graph, chunk_store)
+    out = json.loads(tools["find_paths"]("X:a", "X:b", max_hops=0))
+    assert out["paths"] == [] and out["withheld"] == 0 and "{1,1}" in graph.queries[0]
+    assert "search_chunks" in out["hint"]
+
+    graph = FakeGraph()
+    _, tools = _named_tools(settings, graph, chunk_store)
+    assert "same entity" in json.loads(tools["find_paths"]("X:a", "X:a"))["error"]
+    assert not graph.queries
+
+
+def test_entity_neighbours_hides_entities_and_edges_above_clearance(
+    settings, chunk_store
+):
+    """An entity above clearance reads as unknown; edges to hidden neighbours are withheld."""
+    acme = _node("Organization:acme")
+    edge = {
+        "relation": "OWNS",
+        "outgoing": True,
+        "chunk_ids": [C1],
+        "sensitivity_rank": 1,
+    }
+    graph = FakeGraph(
+        rows=[
+            {"entity": acme, "edge": edge, "neighbour": _node("Organization:beta")},
+            {
+                "entity": acme,
+                "edge": {**edge, "chunk_ids": [C2]},
+                "neighbour": _node("Person:x", 3),
+            },
+            {
+                "entity": acme,
+                "edge": {**edge, "chunk_ids": [C3], "sensitivity_rank": 3},
+                "neighbour": _node("Organization:gamma"),
+            },
+        ]
+    )
+    ctx, tools = _named_tools(settings, graph, chunk_store)
+    out = json.loads(tools["entity_neighbours"]("Organization:acme", limit=500))
+    assert [e["neighbour"]["key"] for e in out["edges"]] == ["Organization:beta"]
+    assert out["withheld"] == 2 and out["chunk_ids_found"] == [C1]
+    assert ctx.evidence.discovered == {C1}
+    assert graph.parameters == [{"key": "Organization:acme", "limit": 100}]
+
+    hidden = FakeGraph(
+        rows=[{"entity": _node("Person:x", 3), "edge": None, "neighbour": None}]
+    )
+    _, tools = _named_tools(settings, hidden, chunk_store)
+    assert (
+        "unknown entity key"
+        in json.loads(tools["entity_neighbours"]("Person:x"))["error"]
+    )
+
+    lonely = FakeGraph(rows=[{"entity": acme, "edge": None, "neighbour": None}])
+    _, tools = _named_tools(settings, lonely, chunk_store)
+    out = json.loads(tools["entity_neighbours"]("Organization:acme", limit=0))
+    assert out["edges"] == [] and out["withheld"] == 0
+    assert "search_chunks" in out["hint"]
+    assert lonely.parameters[0]["limit"] == 1
+
+
+def test_lookup_tools_return_neo4j_errors_and_share_the_budget(settings, chunk_store):
+    """The fixed-query tools report Neo4j failures as feedback and draw on the same budget."""
+    down = FakeGraph(error=ServiceUnavailable("down"))
+    _, tools = _named_tools(settings, down, chunk_store)
+    assert "unavailable" in json.loads(tools["find_paths"]("X:a", "X:b"))["error"]
+    assert "unavailable" in json.loads(tools["entity_neighbours"]("X:a"))["error"]
+
+    _, tools = _named_tools(settings, FakeGraph(), chunk_store, budget=1)
+    tools["entity_neighbours"]("X:a")
+    assert "budget" in json.loads(tools["find_paths"]("X:a", "X:b"))["error"]
 
 
 def test_fetch_tool_enforces_clearance_validates_ids_and_budget(settings, chunk_store):
@@ -338,6 +488,8 @@ def test_strands_agent_crawls_graph_then_vectors(settings, chunk_store):
     # Tool specs reached vLLM, and the graph result (with the chunk id) was fed back to the model.
     assert {t["function"]["name"] for t in client.requests[0]["tools"]} == {
         "query_knowledge_graph",
+        "find_paths",
+        "entity_neighbours",
         "fetch_vector_chunks",
         "search_chunks",
     }
