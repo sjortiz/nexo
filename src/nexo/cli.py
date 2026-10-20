@@ -30,6 +30,7 @@ from nexo.llm import (
 from nexo.logging_setup import configure_logging
 from nexo.mcp_server import build_mcp_server
 from nexo.orchestration.graph import workflow_mermaid
+from nexo.review_inbox import InboxAdapter, build_server
 from nexo.setup.commands import add_parser as add_setup_parser
 from nexo.service import (
     build_investigator,
@@ -44,7 +45,12 @@ from nexo.storage.ontology import Ontology
 from nexo.storage.schemas import DocumentMetadata, Sensitivity, Triple
 from nexo.storage.sensitive_data import NoopDetector
 from nexo.storage.vector_store import ChunkFilter, LocalChunkStore
-from nexo.telemetry import setup_telemetry, shutdown_telemetry, traced_span
+from nexo.telemetry import (
+    caller_attributes,
+    setup_telemetry,
+    shutdown_telemetry,
+    traced_span,
+)
 
 log = logging.getLogger("nexo.cli")
 
@@ -361,6 +367,37 @@ def _mcp(args: argparse.Namespace) -> int:
     return 0
 
 
+def _review_inbox(args: argparse.Namespace) -> int:
+    """Serve the Agent Inbox adapter: paused questions reviewed in LangChain's Agent Inbox."""
+
+    settings = get_settings()
+    port = args.port or settings.review_inbox_port
+    inbox_port = args.inbox_port or settings.agent_inbox_port
+    clearance = settings.mcp_clearance or settings.default_clearance
+    with open_runtime(settings) as runtime:
+        adapter = InboxAdapter(
+            runtime,
+            reviewer=caller_attributes(settings, None)["user.id"],
+            clearance=clearance,
+        )
+        server = build_server(adapter, port=port, inbox_port=inbox_port)
+        log.info(
+            "Agent Inbox adapter on http://127.0.0.1:%s for http://127.0.0.1:%s "
+            "(reviewer %s, clearance %s)",
+            port,
+            inbox_port,
+            adapter.reviewer,
+            clearance,
+        )
+        try:
+            server.serve_forever()
+        except KeyboardInterrupt:
+            pass
+        finally:
+            server.server_close()
+    return 0
+
+
 def _add_document_commands(sub: argparse._SubParsersAction) -> None:
     """`ingest`, `ask`, `review` and `status`: documents in, answers out."""
     ingest = sub.add_parser(
@@ -445,6 +482,15 @@ def main(argv: list[str] | None = None) -> int:
     serve.add_argument("--host", default="127.0.0.1")
     serve.add_argument("--port", type=int, default=8765)
     serve.set_defaults(handler=_mcp)
+
+    inbox = sub.add_parser(
+        "review-inbox", help="serve the Agent Inbox adapter (opt-in review page)"
+    )
+    inbox.add_argument("--port", type=int, help="adapter port (REVIEW_INBOX_PORT)")
+    inbox.add_argument(
+        "--inbox-port", type=int, help="the inbox's port, the only allowed origin"
+    )
+    inbox.set_defaults(handler=_review_inbox)
 
     add_setup_parser(sub)
     _add_chunk_commands(sub)

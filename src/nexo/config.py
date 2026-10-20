@@ -246,6 +246,10 @@ class Settings(BaseSettings):
     query_hash_key: SecretStr | None = None
     trace_query_text: bool = False
 
+    # --- Agent Inbox add-on (nexo review-inbox; both bind 127.0.0.1) ----------------
+    review_inbox_port: int = Field(default=2024, ge=1, le=65535)  # the adapter
+    agent_inbox_port: int = Field(default=3030, ge=1, le=65535)  # the inbox's own page
+
     # --- Logging -----------------------------------------------------------------
     log_level: str = "INFO"
     log_format: Literal["text", "json"] = "text"
