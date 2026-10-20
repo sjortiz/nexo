@@ -1,6 +1,6 @@
 """Module B - the Strands relationship-tracing micro-agent.
 
-The agent gets a goal, the graph data model and three tools; it decides on
+The agent gets a goal, the graph data model and its tools; it decides on
 its own which queries to run, how many hops to follow and when the evidence
 is sufficient. There is no hard-coded workflow: the Strands event loop
 (model -> tool calls -> tool results -> model ...) runs until the model stops
