@@ -1,8 +1,9 @@
-# Add-on (addons.hostMetrics): the machine the containers run on and each container, like
-# New Relic's infrastructure agent. The container's /proc reports machine-wide numbers;
-# filesystems come from the read-only /hostfs mount.
+# Add-on (addons.hostMetrics, on by default): the machine the containers run on (the Podman
+# VM on macOS) and each container, like New Relic's infrastructure agent.
 receivers:
-  hostmetrics:
+  # /proc in a container reports the host's CPU, load, memory and disks; the host's root
+  # filesystem is the /hostfs mount. Per-container network comes from docker_stats.
+  host_metrics:
     collection_interval: 30s
     scrapers:
       cpu: {}
@@ -15,16 +16,17 @@ receivers:
   docker_stats:
     endpoint: unix:///var/run/docker.sock
     collection_interval: 30s
+    timeout: 25s  # Podman's stats API takes seconds per container; the 5s default cancels them
 
 processors:
-  # Names the infrastructure data (host.name from OTEL_RESOURCE_ATTRIBUTES).
-  resourcedetection:
-    detectors: [env, system]
+  # Names the infrastructure data like New Relic's infrastructure agent does.
+  resource_detection:
+    detectors: [env, system]  # env: host.name from nexo setup (OTEL_RESOURCE_ATTRIBUTES)
     system: { hostname_sources: [os] }
 
 service:
   pipelines:
     metrics/infra:
-      receivers: [hostmetrics, docker_stats]
-      processors: [resourcedetection, batch]
-      exporters: [otlp/signoz]
+      receivers: [host_metrics, docker_stats]
+      processors: [resource_detection, batch]
+      exporters: [otlp_grpc/signoz]

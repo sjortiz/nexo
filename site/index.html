@@ -255,8 +255,7 @@
       <h2 id="quickstart-title">Run it</h2>
       <p class="section-lede">From a clean machine to a reviewed answer, on one Mac or Linux box with local models. The
         model download is 8 to 33 GB depending on your machine. Other layouts are below the steps. The repository's
-        Makefile has the same steps as targets: <code>make install env models up check</code>; <code>make</code> lists
-        them all.</p>
+        Makefile runs each step: <code>make install env up check</code>; <code>make</code> lists every target.</p>
       <ol class="run-steps">
         <li>
           <h3>Install the prerequisites</h3>
@@ -274,33 +273,31 @@ podman machine init && podman machine start
 uv sync && source .venv/bin/activate     # Python 3.12 and the locked dependencies</code></pre>
         </li>
         <li>
-          <h3>Name your machine and configure</h3>
-          <p>Your profile is the chip and memory on a Mac (<code>m1-max-64</code>, <code>m5-pro-24</code>), or
-            <code>gpu-&lt;VRAM GB&gt;</code> / <code>cpu-&lt;RAM GB&gt;</code> on Linux. The first command shows the
-            models it picks; <code>make env</code> creates <code>.env</code> and generates the Neo4j password and the
-            Langfuse logins.</p>
-<pre><code>python3 src/nexo/local_profiles.py plan m1-max-64
-make env
-# in .env: LOCAL_PROFILE=m1-max-64</code></pre>
+          <h3>Describe your setup</h3>
+          <p>One file, <code>nexo.yaml</code>, says how models are served and what runs beside Nexo. Start from a
+            preset (<code>mac-single</code>, <code>mac-two-machines</code>, <code>linux-cpu</code>,
+            <code>linux-gpu</code>, <code>linux-vllm</code>) and set your profile: the chip and memory on a Mac
+            (<code>m1-max-64</code>, <code>m5-pro-24</code>), or <code>gpu-&lt;VRAM GB&gt;</code> /
+            <code>cpu-&lt;RAM GB&gt;</code> on Linux. <code>make env</code> also creates <code>.env</code> with
+            generated passwords.</p>
+<pre><code>make env PRESET=mac-single
+python3 src/nexo/local_profiles.py plan m5-pro-24   # the models a profile picks
+# in nexo.yaml: models.local.profile: m5-pro-24</code></pre>
         </li>
         <li>
-          <h3>Start the models</h3>
-          <p>Reads the profile from <code>.env</code>, pulls and preloads its models, and starts Ollama with the right
-            context length. If Ollama already runs as an app or service, it prints the settings to apply instead.</p>
-<pre><code>deploy/local/ollama-setup.sh</code></pre>
-        </li>
-        <li>
-          <h3>Start Neo4j and tracing</h3>
-          <p>Neo4j on <code>localhost:7687</code>; traces in Langfuse at <code>http://localhost:3000</code>. Log in with
-            <code>LANGFUSE_USER_EMAIL</code> and <code>LANGFUSE_USER_PASSWORD</code> from <code>.env</code>. Jaeger is
-            an add-on: <code>make up JAEGER=1</code>.</p>
-<pre><code>podman compose up -d neo4j otel-collector langfuse-web langfuse-worker</code></pre>
+          <h3>Start everything</h3>
+          <p>Pulls and starts the profile's models in Ollama, then Neo4j, the collector and SigNoz, which shows
+            traces, metrics and logs at <code>http://localhost:8080</code> (log in with
+            <code>SIGNOZ_USER_EMAIL</code> and <code>SIGNOZ_USER_PASSWORD</code> from <code>.env</code>). Langfuse,
+            Jaeger and LangSmith are add-ons: turn one on in <code>nexo.yaml</code>, or for one run with
+            <code>make up LANGFUSE=1</code>.</p>
+<pre><code>make up</code></pre>
         </li>
         <li>
           <h3>Check</h3>
-          <p>Every role should say <code>ok</code>. Otherwise the output names the server that did not answer or the
-            model it is missing.</p>
-<pre><code>nexo models --check</code></pre>
+          <p>The preflight (container engine, secrets, memory) and every model role should say <code>ok</code>.
+            Otherwise the output names the server that did not answer or the model it is missing.</p>
+<pre><code>make check</code></pre>
         </li>
         <li>
           <h3>Ingest and ask</h3>
@@ -326,24 +323,26 @@ nexo review &lt;thread_id&gt; --approve --reviewer you@example.com</code></pre>
             repository on both. On a Mac, enable Remote Login on the big one.</p>
 <pre><code># on the big machine
 deploy/local/ollama-setup.sh m1-max-64 heavy
-# here: .env has LOCAL_PROFILE=m5-pro-24 and REMOTE_PROFILE=m1-max-64
+# here
+make env PRESET=mac-two-machines
 ssh -N -L 11435:127.0.0.1:11434 you@m1-max.local   # keep it running
-deploy/local/ollama-setup.sh                        # serves the light set
+make up
 nexo models --check</code></pre>
         </details>
         <details class="card">
           <summary>Linux notes</summary>
-          <p>The Ollama installer runs it as a systemd service, so apply the settings the setup script prints. The Nexo
-            container needs the Linux override to reach host services.</p>
-<pre><code>sudo systemctl edit ollama      # add the printed OLLAMA_* lines under [Service]
+          <p>The Ollama installer runs it as a systemd service, so apply the settings <code>make up</code> prints.
+            The Nexo container shares the host network to reach Ollama; <code>nexo setup</code> sets that up.</p>
+<pre><code>make env PRESET=linux-gpu      # or linux-cpu, or linux-vllm for vLLM on NVIDIA GPUs
+sudo systemctl edit ollama      # add the printed OLLAMA_* lines under [Service]
 sudo systemctl restart ollama
-podman compose -f docker-compose.yml -f docker-compose.linux.yml --profile app run --rm nexo models --check</code></pre>
+make up</code></pre>
         </details>
         <details class="card">
           <summary>Without containers</summary>
-          <p>Install Neo4j natively instead of step 5. Tracing is optional: leave
-            <code>OTEL_EXPORTER_OTLP_ENDPOINT</code> empty in <code>.env</code>, or start only the collector and
-            Langfuse containers.</p>
+          <p>Install Neo4j natively and skip <code>make up</code>; set <code>LOCAL_PROFILE</code>,
+            <code>NEO4J_URI</code> and <code>NEO4J_PASSWORD</code> in <code>.env</code> and start the models with
+            <code>make models</code>. Tracing is optional: leave <code>OTEL_EXPORTER_OTLP_ENDPOINT</code> unset.</p>
 <pre><code>brew install neo4j
 neo4j-admin dbms set-initial-password &lt;password&gt;
 brew services start neo4j</code></pre>
@@ -352,7 +351,7 @@ brew services start neo4j</code></pre>
           <summary>Nexo in a container</summary>
           <p>Files in <code>./corpus</code> are mounted at <code>/corpus</code>; the container reaches Ollama on the
             host.</p>
-<pre><code>podman compose --profile app run --rm nexo ingest /corpus/memo.md --doc-type memo</code></pre>
+<pre><code>make app ARGS="ingest /corpus/memo.md --doc-type memo"</code></pre>
         </details>
       </div>
       <p class="more">Next: the <a href="walkthrough.html">step-by-step walkthrough</a> builds a graph from two documents

@@ -17,7 +17,7 @@ from nexo.setup.check import memory_budget
 from nexo.setup.components import COMPONENTS, MEMORY_GB, default_images
 from nexo.setup.envfile import ensure_secrets, read_env
 from nexo.setup.lock import lock
-from nexo.setup.render import RENDER_DIR, Host, render
+from nexo.setup.render import PORTABLE_PRESET, RENDER_DIR, Host, portable_files, render
 from nexo.setup.schema import SetupError, load_casting
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -285,28 +285,40 @@ def test_settings_read_the_rendered_env_after_dot_env(workdir, monkeypatch):
 ENGINE = next((e for e in ("docker", "podman") if shutil.which(e)), None)
 
 
+def _compose_accepts(compose_file: Path, env_dir: Path) -> None:
+    """The engine's compose validates the file, with a value for every key the stack reads."""
+    keys = {k for c in COMPONENTS.values() for k in (*c.secrets, *c.required)}
+    env = env_dir / ".env"
+    env.write_text("".join(f"{k}=x\n" for k in sorted(keys)))
+    command = [ENGINE, "compose", "-f", str(compose_file), "--env-file", str(env)]
+    result = subprocess.run(
+        command + ["config", "-q"],
+        check=False,
+        timeout=60,
+        text=True,
+        capture_output=True,
+    )
+    if result.returncode:
+        pytest.fail(result.stderr)
+
+
 @pytest.mark.skipif(ENGINE is None, reason="no container engine")
 @pytest.mark.parametrize("preset", sorted(p.name for p in PRESETS.iterdir()))
 def test_rendered_compose_files_are_valid_compose(workdir, preset):
     """The engine's own compose accepts every preset's render (with every add-on on)."""
     path = _setup(workdir, preset)
     _render(workdir, path, addons={"langfuse", "jaeger", "langsmith"})
-    keys = {k for c in COMPONENTS.values() for k in (*c.secrets, *c.required)}
-    (workdir / ".env").write_text("".join(f"{k}=x\n" for k in keys))
-    result = subprocess.run(
-        [
-            ENGINE,
-            "compose",
-            "-f",
-            str(workdir / RENDER_DIR / "compose.yaml"),
-            "--env-file",
-            str(workdir / ".env"),
-            "config",
-            "-q",
-        ],
-        capture_output=True,
-        text=True,
-        timeout=60,
-        check=False,
-    )
-    assert result.returncode == 0, result.stderr
+    _compose_accepts(workdir / RENDER_DIR / "compose.yaml", workdir)
+
+
+def test_committed_compose_file_is_current(tmp_path):
+    """docker-compose.yml and deploy/rendered/ match `make compose-file`; plain compose takes it."""
+    files = portable_files(load_casting(ROOT / PORTABLE_PRESET), ROOT)
+    for relative, text in files.items():
+        stale = f"{relative} is stale: make compose-file"
+        assert (ROOT / relative).read_text() == text, stale
+    committed = (ROOT / "docker-compose.yml").read_text()
+    assert str(ROOT) not in committed
+    assert "${CONTAINER_SOCKET:-/var/run/docker.sock}" in committed
+    if ENGINE is not None:
+        _compose_accepts(ROOT / "docker-compose.yml", tmp_path)

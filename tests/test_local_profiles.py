@@ -13,11 +13,12 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 import pytest
-import yaml
 from pydantic import ValidationError
 
 from nexo import local_profiles as lp
 from nexo.config import Settings
+from nexo.setup.render import build_env
+from nexo.setup.schema import load_casting
 
 ROOT = Path(__file__).resolve().parent.parent
 SCRIPT = ROOT / "deploy" / "local" / "ollama-setup.sh"
@@ -246,10 +247,15 @@ def test_bad_profile_settings_fail_fast(kwargs):
 # --- templates, script and docs ------------------------------------------------------
 
 
-def test_local_env_template_resolves_to_a_single_mac():
-    """deploy/local/local.env.example resolves to a single-Mac profile on local Ollama."""
-    settings = Settings(_env_file=ROOT / "deploy" / "local" / "local.env.example")
-    assert settings.local_profile == "m1-max-64" and settings.remote_profile is None
+def test_template_and_mac_preset_resolve_to_a_single_mac(tmp_path):
+    """The env template plus what the mac-single preset renders give one Mac on local Ollama."""
+    casting = load_casting(ROOT / "examples/setups/mac-single/nexo.yaml")
+    rendered = tmp_path / "nexo.env"
+    rendered.write_text("".join(f"{k}={v}\n" for k, v in build_env(casting).items()))
+    settings = Settings(
+        _env_file=(ROOT / "deploy" / "local" / "local.env.example", rendered)
+    )
+    assert settings.local_profile == "m5-pro-24" and settings.remote_profile is None
     assert settings.endpoint("agent").base_url == "http://localhost:11434/v1"
 
 
@@ -396,24 +402,3 @@ def test_docs_list_every_catalog_model_and_tier():
         ), f"tier {tier} GB missing from the playbook"
     for model in lp.MODEL_SIZES_GB:
         assert f"`{model}`" in page, f"{model} missing from the playbook"
-
-
-def test_make_env_generates_every_secret_the_local_stack_requires():
-    """`make env` fills each required variable of the local stack; GPU secrets stay apart."""
-    # Compose checks ${VAR:?} for every service in the files it loads (includes too),
-    # so a required variable that `make env` does not generate blocks `make up`.
-    required = re.compile(r"\$\{(\w+):\?")
-    base = ROOT / "docker-compose.yml"
-    files = [
-        base,
-        *(ROOT / f for f in yaml.safe_load(base.read_text()).get("include", [])),
-    ]
-    local = set().union(*(required.findall(f.read_text()) for f in files))
-    script = (ROOT / "deploy/local/env-secrets.sh").read_text()
-    generated = set(re.findall(r"^ensure (\w+) ", script, re.MULTILINE))
-    assert {"SIGNOZ_USER_PASSWORD", "LANGFUSE_SECRET_KEY"} <= local <= generated, (
-        local - generated
-    )
-    gpu = set(required.findall((ROOT / "docker-compose.gpu.yml").read_text()))
-    assert gpu == {"VLLM_IMAGE_TAG", "VLLM_API_KEY", "HF_TOKEN", "EMBEDDING_API_KEY"}
-    assert not gpu & local

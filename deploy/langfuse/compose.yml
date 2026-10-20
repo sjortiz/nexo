@@ -1,5 +1,5 @@
-# Self-hosted Langfuse (LLM evaluation), an add-on included by docker-compose.yml: its services
-# run only with the "langfuse" profile (make up LANGFUSE=1).
+# Self-hosted Langfuse (LLM evaluation), an add-on of `nexo setup` (addons.langfuse in nexo.yaml,
+# or make up LANGFUSE=1 for one run).
 # Based on Langfuse's own docker-compose.yml, with SeaweedFS for S3 storage
 # (MinIO's community repository was archived in April 2026). Secrets come from
 # .env (`make env` generates them); only the web UI (3000) and blob storage
@@ -42,13 +42,11 @@ x-langfuse-depends-on: &langfuse-depends-on
 
 services:
   langfuse-worker:
-    profiles: ["langfuse"]
     image: ghcr.io/langfuse/langfuse-worker:4.64.0
     depends_on: *langfuse-depends-on
     environment: *langfuse-env
 
   langfuse-web:
-    profiles: ["langfuse"]
     image: ghcr.io/langfuse/langfuse:4.64.0
     depends_on: *langfuse-depends-on
     ports: ["127.0.0.1:3000:3000"]
@@ -70,7 +68,6 @@ services:
       LANGFUSE_INIT_USER_PASSWORD: ${LANGFUSE_USER_PASSWORD:?run make env}
 
   langfuse-clickhouse:
-    profiles: ["langfuse"]
     image: docker.io/clickhouse/clickhouse-server:25.12
     user: "101:101"
     environment:
@@ -87,7 +84,6 @@ services:
       retries: 10
 
   langfuse-storage:
-    profiles: ["langfuse"]
     image: docker.io/chrislusf/seaweedfs:4.48
     # S3 on 8333 with the credentials below; creates the "langfuse" bucket once it is up.
     entrypoint: sh
@@ -107,7 +103,6 @@ services:
       retries: 20
 
   langfuse-redis:
-    profiles: ["langfuse"]
     image: docker.io/library/redis:7
     command: --requirepass ${LANGFUSE_REDIS_PASSWORD:?run make env} --maxmemory-policy noeviction
     volumes: [langfuse-redis-data:/data]
@@ -118,7 +113,6 @@ services:
       retries: 10
 
   langfuse-postgres:
-    profiles: ["langfuse"]
     image: docker.io/library/postgres:17
     environment:
       POSTGRES_USER: postgres

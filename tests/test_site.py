@@ -9,7 +9,6 @@ from html.parser import HTMLParser
 from pathlib import Path
 
 import pytest
-import yaml
 
 from nexo import cli
 from nexo import local_profiles as lp
@@ -184,45 +183,15 @@ def test_dark_mode_and_license_are_declared(any_page):
     assert f'{REPO_BLOB}LICENSE">MIT License' in text
 
 
-def _compose_services(name: str) -> set[str]:
-    """Services a compose file defines, including those of files it includes."""
-    assert (ROOT / name).is_file(), name
-    config = yaml.safe_load((ROOT / name).read_text())
-    services = set(config["services"])
-    for included in config.get("include", []):
-        services |= _compose_services(included)
-    return services
-
-
-def _compose(command: list[str]) -> tuple[list[str], str, list[str]]:
-    """Files (-f), verb (up/run) and the words after the verb of a `podman compose` command."""
-    files, verb_at = [], None
-    for i, word in enumerate(command[2:], start=2):
-        if command[i - 1] == "-f":
-            files.append(word)
-        elif word in ("up", "run"):
-            verb_at = i
-            break
-    assert verb_at, command
-    return files or ["docker-compose.yml"], command[verb_at], command[verb_at + 1 :]
-
-
 def _nexo_argv(commands: list[list[str]]) -> list[list[str]]:
-    """Arguments of every nexo invocation: direct, or inside `compose run ... nexo`."""
-    argv = [c[1:] for c in commands if c[0] == "nexo"]
-    for command in commands:
-        if command[:2] == ["podman", "compose"]:
-            _, verb, rest = _compose(command)
-            words = [w for w in rest if not w.startswith("-")]
-            if verb == "run" and words[0] == "nexo":
-                argv.append(rest[rest.index("nexo") + 1 :])
-    return argv
+    """Arguments of every direct nexo invocation."""
+    return [c[1:] for c in commands if c[0] == "nexo"]
 
 
 def test_quickstart_cli_flags_exist(page, capsys):
     """Every nexo subcommand and flag in the quickstart exists in the CLI help."""
     argv = _nexo_argv(_commands(page))
-    assert {a[0] for a in argv} >= {"ingest", "ask", "review", "models"}
+    assert {a[0] for a in argv} >= {"ingest", "ask", "review"}
     for args in argv:
         with pytest.raises(SystemExit):
             cli.main([args[0], "--help"])
@@ -231,24 +200,29 @@ def test_quickstart_cli_flags_exist(page, capsys):
             assert flag in help_text, f"{flag} is not an option of nexo {args[0]}"
 
 
-def test_quickstart_files_settings_and_services_exist(page):
-    """Quickstart paths, env keys, compose files and compose services all exist."""
+def test_quickstart_files_targets_and_presets_exist(page):
+    """Quickstart paths, make targets, presets and the template's secrets all exist."""
     commands = _commands(page)
     for command in commands:
         for word in command:
             if word.startswith(("deploy/", "docs/", "src/")):
                 assert (ROOT / word).exists(), word
+    makefile = (ROOT / "Makefile").read_text()
+    targets = set(re.findall(r"^([a-z0-9-]+):", makefile, re.MULTILINE))
+    make = [c for c in commands if c[0] == "make"]
+    assert {"env", "up", "check"} <= {w for c in make for w in c[1:]}
+    for command in make:
+        for word in command[1:]:
+            name, _, value = word.partition("=")
+            if not value:
+                assert name in targets, f"make {name} is not a target"
+            elif name == "PRESET":
+                assert (ROOT / "examples/setups" / value / "nexo.yaml").exists(), value
+            else:
+                assert re.search(rf"^{name}\s*\?=", makefile, re.MULTILINE), name
     env_example = (ROOT / "deploy/local/local.env.example").read_text()
-    for key in ("LOCAL_PROFILE", "NEO4J_PASSWORD", "OTEL_EXPORTER_OTLP_ENDPOINT"):
+    for key in ("NEO4J_PASSWORD", "SIGNOZ_USER_PASSWORD"):
         assert re.search(rf"^{key}=", env_example, re.MULTILINE), key
-    compose = [c for c in commands if c[:2] == ["podman", "compose"]]
-    assert {_compose(c)[1] for c in compose} == {"up", "run"}
-    for command in compose:
-        files, verb, rest = _compose(command)
-        services = set().union(*(_compose_services(name) for name in files))
-        named = [w for w in rest if not w.startswith("-")]
-        targets = named if verb == "up" else named[:1]
-        assert targets and set(targets) <= services, set(targets) - services
 
 
 def test_quickstart_profiles_and_role_sets_are_valid(page):
