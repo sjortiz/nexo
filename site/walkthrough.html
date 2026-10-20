@@ -577,7 +577,7 @@ rejected  MATCH (o:Organization) DETACH DELETE o
 rejected  CALL dbms.components()
           procedure calls are not allowed (subqueries and db.labels() etc. are)</samp></pre></div>
 <div class="prose"><h2 id="10-investigate-with-an-agent">10. Investigate with an agent</h2>
-<p>The investigator is a Strands agent with two tools: <code>query_knowledge_graph</code> (read-only Cypher) and <code>fetch_vector_chunks</code> (the exact text behind a chunk id). It decides what to follow. It may only cite chunks it actually fetched, and it stops at a turn and token budget.</p></div>
+<p>The investigator is a Strands agent with five tools: <code>query_knowledge_graph</code> (read-only Cypher), <code>find_paths</code> and <code>entity_neighbours</code> (fixed lookups by entity key), <code>search_chunks</code> (text search) and <code>fetch_vector_chunks</code> (the exact text behind a chunk id). It decides what to follow. It may only cite chunks it actually fetched, and it stops at a turn and token budget.</p></div>
 <div class="cell"><pre class="code"><code>chunk_store = LocalChunkStore(build_embeddings(settings), settings.vector_store_path)
 investigator = Investigator(
     model=build_strands_model(settings),

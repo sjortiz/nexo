@@ -1,6 +1,7 @@
 # Bundle Update Log
 
 ## 2026-10-20
+* **Update**: The investigator has [find_paths and entity_neighbours](components/graph-lookup-tools.md): fixed path and neighbour lookups by entity key, so small models no longer write that Cypher; paths and edges above the caller's clearance are withheld, and unranked edges count as PHI ([Investigator agent](components/investigator-agent.md)).
 * **Creation**: [Review in Agent Inbox](operations/agent-inbox.md): an opt-in `agentInbox` add-on (`AGENT_INBOX=1`, `make review-inbox`) renders LangChain's archived, MIT-licensed Agent Inbox from a pinned commit and an adapter that sends every decision to `Runtime.review` ([ADR-0019](decisions/adr-0019-review-surfaces.md)).
 * **Creation**: A [demo review page](operations/human-review.md#demo-review-page) (`make review-ui`): no authentication, loopback only, off unless started.
 * **Update**: Review over MCP: `nexo_pending_reviews`, `nexo_get_review` and `nexo_submit_review` on `nexo mcp` (`MCP_REVIEW_TOOLS`, on by default); the write asks the person to confirm by elicitation and refuses clients that cannot ([MCP server](components/mcp-server.md#review-tools), [ADR-0019](decisions/adr-0019-review-surfaces.md)).
