@@ -1,4 +1,4 @@
-"""The investigator's two tools, bound to one investigation's context.
+"""The investigator's three tools, bound to one investigation's context.
 
 Tools are built per investigation (closures over `InvestigationContext`) so
 budget, clearance and the evidence ledger are per request and thread safe.
@@ -27,6 +27,7 @@ from nexo.storage.graph_store import (
     validate_read_only_cypher,
 )
 from nexo.storage.schemas import CHUNK_ID_RE, ChunkRecord
+from nexo.storage.vector_store import ChunkFilter
 
 
 class GraphReader(Protocol):  # pylint: disable=too-few-public-methods  # protocol
@@ -39,10 +40,15 @@ class GraphReader(Protocol):  # pylint: disable=too-few-public-methods  # protoc
 
 
 class ChunkReader(Protocol):  # pylint: disable=too-few-public-methods  # protocol
-    """Chunk lookup the fetch tool needs."""
+    """Chunk lookup and text search the chunk tools need."""
 
     def get_by_ids(self, chunk_ids: Sequence[str]) -> list[ChunkRecord]:
         """Return the stored chunks for these ids; unknown ids are skipped."""
+
+    def search(
+        self, query: str, k: int, chunk_filter: ChunkFilter
+    ) -> list[ChunkRecord]:
+        """Return the top-k chunks the filter allows."""
 
 
 @dataclass
@@ -146,7 +152,18 @@ def build_investigation_tools(
     ctx: InvestigationContext,
     settings: Settings,
 ) -> list[Any]:
-    """Build the graph query and chunk fetch tools bound to this investigation."""
+    """Build the graph query, chunk fetch and chunk search tools for this investigation."""
+    return [
+        _query_tool(graph, ctx, settings),
+        _fetch_tool(chunks, ctx, settings),
+        _search_tool(chunks, ctx, settings),
+    ]
+
+
+def _query_tool(
+    graph: GraphReader, ctx: InvestigationContext, settings: Settings
+) -> Any:
+    """The graph query tool."""
     clearance = ctx.scope.chunk_filter.max_sensitivity
     max_chars = settings.tool_result_max_chars
 
@@ -227,6 +244,15 @@ def build_investigation_tools(
             max_chars,
         )
 
+    return query_knowledge_graph
+
+
+def _fetch_tool(
+    chunks: ChunkReader, ctx: InvestigationContext, settings: Settings
+) -> Any:
+    """The chunk fetch tool."""
+    max_chars = settings.tool_result_max_chars
+
     @tool
     def fetch_vector_chunks(chunk_ids: list[str]) -> str:
         """Fetch the exact source text for chunk ids found in the knowledge graph.
@@ -267,23 +293,7 @@ def build_investigation_tools(
             if not ctx.scope.chunk_filter.allows(record):
                 withheld.append(record.chunk_id)
                 continue
-            returned.append(
-                {
-                    "chunk_id": record.chunk_id,
-                    "source": " > ".join(
-                        [
-                            p
-                            for p in [
-                                record.title or record.source_id,
-                                *record.section_path,
-                            ]
-                            if p
-                        ]
-                    ),
-                    "effective_date": record.effective_date,
-                    "text": record.text,
-                }
-            )
+            returned.append(_chunk_view(record))
         payload = {
             "chunks": returned,
             "withheld": withheld,
@@ -311,7 +321,88 @@ def build_investigation_tools(
         )
         return text
 
-    return [query_knowledge_graph, fetch_vector_chunks]
+    return fetch_vector_chunks
+
+
+def _search_tool(
+    chunks: ChunkReader, ctx: InvestigationContext, settings: Settings
+) -> Any:
+    """The chunk text search tool."""
+    max_chars = settings.tool_result_max_chars
+
+    @tool
+    def search_chunks(query: str, k: int = 5) -> str:
+        """Search the source document text for passages that match a query.
+
+        Use it when the graph has no matching entity or path: extraction can miss
+        entities and relationships that the text states. Search with the names and
+        key words from the question (hybrid keyword and semantic ranking). Results
+        are evidence like fetched chunks: cite them as [chunk:<chunk_id>]. Only
+        passages inside the caller's clearance and scope are searched.
+
+        Args:
+            query: Entity names and key words, for example "Delta Devices".
+            k: How many passages to return (at most the per-call chunk limit).
+        """
+        if not ctx.reserve_call():
+            return json.dumps(
+                {
+                    "error": "tool budget exhausted; write your answer from the evidence gathered"
+                }
+            )
+        started = time.perf_counter()
+        limit = max(1, min(k, settings.agent_max_chunks_per_call))
+        # Strands' `execute_tool search_chunks` span is current here.
+        span = trace.get_current_span()
+        try:
+            records = chunks.search(query, limit, ctx.scope.chunk_filter)
+        # Any store failure (down, corrupt) goes back to the agent; the trace keeps it.
+        except Exception as exc:  # pylint: disable=broad-exception-caught
+            span.record_exception(exc)
+            span.set_attribute("error.type", type(exc).__name__)
+            return _finish(
+                ctx,
+                _summary("search_chunks", started, False, type(exc).__name__),
+                {"error": "vector store unavailable; report what you have"},
+            )
+        # The store filters before ranking; check again so the ledger never
+        # records text the caller may not see.
+        allowed = [r for r in records if ctx.scope.chunk_filter.allows(r)]
+        payload = {
+            "query": query,
+            "chunks": [_chunk_view(r) for r in allowed],
+        }
+        text = _finish(
+            ctx,
+            _summary("search_chunks", started, True, f"{len(allowed)} chunks"),
+            payload,
+            max_chars,
+        )
+        sensitivity = {r.chunk_id: r.sensitivity.value for r in allowed}
+        ctx.record_fetched(
+            {c["chunk_id"]: sensitivity[c["chunk_id"]] for c in payload["chunks"]},
+            [],
+        )
+        span.set_attributes(
+            {
+                "nexo.chunks.requested": limit,
+                "nexo.chunks.returned": len(payload["chunks"]),
+            }
+        )
+        return text
+
+    return search_chunks
+
+
+def _chunk_view(record: ChunkRecord) -> dict[str, Any]:
+    """What the model sees of a chunk: id, source path, date and exact text."""
+    parts = [record.title or record.source_id, *record.section_path]
+    return {
+        "chunk_id": record.chunk_id,
+        "source": " > ".join(p for p in parts if p),
+        "effective_date": record.effective_date,
+        "text": record.text,
+    }
 
 
 def _summary(name: str, started: float, ok: bool, detail: str) -> ToolCallSummary:
