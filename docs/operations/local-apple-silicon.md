@@ -37,7 +37,7 @@ Two independent choices:
 |---|---|---|
 | Models | Ollama, native (Metal GPU) | Ollama, native (Metal GPU) |
 | Neo4j | container (`neo4j:5.26-community`) | Homebrew (`neo4j` 2026.09) |
-| Telemetry | collector (strips content) + Jaeger containers | optional Jaeger binary, or none |
+| Telemetry | collector (strips content) + Langfuse containers; Jaeger optional | none, or the collector and Langfuse containers |
 | Nexo | container (`--profile app`) or `uv sync` | `uv sync` |
 | Good for | matching the server setup; clean teardown | fewest moving parts; no VM |
 
@@ -76,9 +76,12 @@ Sizes are Ollama library download sizes; KV cache and the OS need the rest. `qwe
 2. Models, per Mac (see "Two Macs" below for the second Mac):
    `deploy/local/ollama-setup.sh m1-max-64` - pulls and preloads the profile's models and starts
    Ollama with the right context length, keep-alive and KV-cache settings, bound to `127.0.0.1`.[^setup]
-3. `cp deploy/local/local.env.example .env`, set the profile(s) and `NEO4J_PASSWORD`.[^env]
-4. `podman compose up -d neo4j otel-collector jaeger` - Neo4j on `127.0.0.1:7687`, traces at
-   http://localhost:16686, metrics at http://localhost:8889/metrics.
+3. `make env` (creates `.env` and generates `NEO4J_PASSWORD` and the Langfuse secrets), then set the
+   profile(s) in `.env`.[^env]
+4. `make up`, or `podman compose up -d neo4j otel-collector langfuse-web langfuse-worker` - Neo4j on
+   `127.0.0.1:7687`, traces in Langfuse at http://localhost:3000 (log in with `LANGFUSE_USER_EMAIL` /
+   `LANGFUSE_USER_PASSWORD` from `.env`), metrics at http://localhost:8889/metrics. Add Jaeger with
+   `make up JAEGER=1` ([Observability](observability.md#backends)).
 5. Run Nexo either natively (`uv sync`, then `nexo ...` in the activated `.venv`) or in a container:
    `podman compose --profile app run --rm nexo ingest /corpus/memo.md` with documents in `./corpus`.
    The container's `LOCAL_BASE_URL`/`REMOTE_BASE_URL` already point at `host.containers.internal`.
@@ -89,11 +92,9 @@ Sizes are Ollama library download sizes; KV cache and the OS need the rest. `qwe
 2. `neo4j-admin dbms set-initial-password <password>` then `brew services start neo4j`.
 3. Models: `deploy/local/ollama-setup.sh m1-max-64`.
 4. `cp deploy/local/local.env.example .env`, set the profile(s) and `NEO4J_PASSWORD`.
-5. Telemetry (optional): download the Jaeger v2 `darwin-arm64` release binary and run `./jaeger`; it
-   accepts OTLP on `localhost:4318` and serves the UI on http://localhost:16686. Without the collector
-   there is no second content filter, so keep
-   `OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT=no_content`. Or unset
-   `OTEL_EXPORTER_OTLP_ENDPOINT` to rely on logs only.
+5. Telemetry (optional): leave `OTEL_EXPORTER_OTLP_ENDPOINT` empty to rely on logs only, or run just
+   the collector and Langfuse containers (`make env`, then
+   `podman compose up -d otel-collector langfuse-web langfuse-worker`).
 6. `brew install uv && uv sync && source .venv/bin/activate`, then `nexo ...` (uv installs Python 3.12).
 
 # Two Macs

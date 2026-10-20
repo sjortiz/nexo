@@ -184,6 +184,16 @@ def test_dark_mode_and_license_are_declared(any_page):
     assert f'{REPO_BLOB}LICENSE">MIT License' in text
 
 
+def _compose_services(name: str) -> set[str]:
+    """Services a compose file defines, including those of files it includes."""
+    assert (ROOT / name).is_file(), name
+    config = yaml.safe_load((ROOT / name).read_text())
+    services = set(config["services"])
+    for included in config.get("include", []):
+        services |= _compose_services(included)
+    return services
+
+
 def _compose(command: list[str]) -> tuple[list[str], str, list[str]]:
     """Files (-f), verb (up/run) and the words after the verb of a `podman compose` command."""
     files, verb_at = [], None
@@ -235,10 +245,7 @@ def test_quickstart_files_settings_and_services_exist(page):
     assert {_compose(c)[1] for c in compose} == {"up", "run"}
     for command in compose:
         files, verb, rest = _compose(command)
-        services = set()
-        for name in files:
-            assert (ROOT / name).is_file(), name
-            services |= set(yaml.safe_load((ROOT / name).read_text())["services"])
+        services = set().union(*(_compose_services(name) for name in files))
         named = [w for w in rest if not w.startswith("-")]
         targets = named if verb == "up" else named[:1]
         assert targets and set(targets) <= services, set(targets) - services

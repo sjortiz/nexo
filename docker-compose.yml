@@ -1,12 +1,17 @@
 # Local/integration stack. Service names match the in-cluster defaults in
 # config.py, so the same .env works here and in Kubernetes.
-#   docker compose up -d neo4j otel-collector jaeger         # services; models run in Ollama
+#   docker compose up -d neo4j otel-collector langfuse-web langfuse-worker   # make up
+#   OTEL_JAEGER=jaeger docker compose up -d ... jaeger      # + Jaeger (make up JAEGER=1)
+#   OTEL_LANGSMITH=langsmith docker compose up -d ...       # + LangSmith (make up LANGSMITH=1)
 #   docker compose --profile app run --rm nexo ingest /corpus/memo.md --doc-type memo
 #   docker compose -f docker-compose.yml -f docker-compose.gpu.yml up -d   # + vLLM on GPUs
 #
 # With Ollama, set LOCAL_PROFILE (and REMOTE_PROFILE for two machines) in .env;
 # the nexo container reaches the host through host.containers.internal (macOS)
 # or the host network (Linux: docker-compose.linux.yml). See docs/operations/local-setup.md.
+
+include:
+  - deploy/langfuse/compose.yml  # Langfuse: LLM traces, costs and evaluations
 
 services:
   neo4j:
@@ -24,13 +29,25 @@ services:
 
   otel-collector:
     image: otel/opentelemetry-collector-contrib:0.111.0
-    command: ["--config=/etc/otelcol/config.yaml"]
-    volumes: ["./deploy/otel-collector.yaml:/etc/otelcol/config.yaml:ro"]
+    # Add-ons merge their own pipelines into the main config; "none" is an empty file.
+    command:
+      - --config=/etc/otelcol/config.yaml
+      - --config=/etc/otelcol/addons/${OTEL_JAEGER:-none}.yaml
+      - --config=/etc/otelcol/addons/${OTEL_LANGSMITH:-none}.yaml
+    volumes:
+      - ./deploy/otel-collector.yaml:/etc/otelcol/config.yaml:ro
+      - ./deploy/otel-addons:/etc/otelcol/addons:ro
     ports: ["127.0.0.1:4318:4318", "127.0.0.1:8889:8889"]  # OTLP in, Prometheus metrics out
-    depends_on: [jaeger]
+    environment:
+      # The Langfuse project's API keys, provisioned by deploy/langfuse/compose.yml.
+      LANGFUSE_PUBLIC_KEY: ${LANGFUSE_PUBLIC_KEY:?run make env}
+      LANGFUSE_SECRET_KEY: ${LANGFUSE_SECRET_KEY:?run make env}
+      LANGSMITH_API_KEY: ${LANGSMITH_API_KEY:-}
+      LANGSMITH_PROJECT: ${LANGSMITH_PROJECT:-nexo}
 
-  jaeger:
+  jaeger:  # add-on: make up JAEGER=1
     image: jaegertracing/all-in-one:1.62.0
+    profiles: ["jaeger"]
     ports: ["127.0.0.1:16686:16686"]
 
   nexo:

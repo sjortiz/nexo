@@ -20,6 +20,12 @@ sources:
   - id: collector
     resource: ../../deploy/otel-collector.yaml
     title: Collector configuration
+  - id: addons
+    resource: ../../deploy/otel-addons/
+    title: Collector add-on pipelines
+  - id: langfuse
+    resource: ../references/langfuse.md
+    title: Langfuse
 ---
 
 # Trace shape
@@ -75,12 +81,29 @@ evaluation rows are logged with a structured `result` field.[^logging]
 
 # Backends
 
-- Jaeger (local): http://localhost:16686.
-- LangSmith: add the `otlphttp/langsmith` exporter in the collector; see
-  [ADR-0011](../decisions/adr-0011-langsmith-adoption.md). Do not also enable `LANGSMITH_TRACING` in
-  the application, or traces are duplicated.
+The application exports OTLP to the collector; the collector chooses the backends
+([ADR-0014](../decisions/adr-0014-langfuse-default-trace-backend.md)).
+
+| Backend | How | Where |
+|---|---|---|
+| Langfuse (default) | `make up`; OTLP/HTTP to `/api/public/otel`, Basic auth with the `nexo` project keys, `x-langfuse-ingestion-version: 4`[^collector] | http://localhost:3000; log in with `LANGFUSE_USER_EMAIL` / `LANGFUSE_USER_PASSWORD` from `.env` |
+| Jaeger (add-on) | `make up JAEGER=1`; pipeline `traces/jaeger`[^addons] | http://localhost:16686 |
+| LangSmith (add-on) | `make up LANGSMITH=1` with `LANGSMITH_API_KEY` and `LANGSMITH_PROJECT` in `.env`; pipeline `traces/langsmith` | LangSmith project |
+| Prometheus metrics | always | http://127.0.0.1:8889/metrics |
+
+Add-ons can be combined. Each one runs the same content-stripping processors as the main pipeline; a
+disabled add-on loads `deploy/otel-addons/none.yaml`. Do not enable `LANGSMITH_TRACING` in the
+application, or traces are duplicated.
+
+In Langfuse, GenAI spans appear as GENERATION observations (model, token usage), embeddings as
+EMBEDDING and the rest as SPAN. Langfuse v4's read API is `/api/public/v2/observations`.[^langfuse]
+
+Without containers, leave `OTEL_EXPORTER_OTLP_ENDPOINT` empty (logs only), or run just the collector
+and Langfuse containers.
 
 [^telemetry]: Telemetry setup
 [^logging]: Logging setup
 [^semconv]: OpenTelemetry GenAI semantic conventions
 [^collector]: Collector configuration
+[^addons]: Collector add-on pipelines
+[^langfuse]: Langfuse

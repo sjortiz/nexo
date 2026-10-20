@@ -1,0 +1,15 @@
+# Add-on: also send traces to LangSmith (make up LANGSMITH=1; set LANGSMITH_API_KEY and
+# LANGSMITH_PROJECT). Content is stripped first; no PHI without a BAA or self-hosting.
+exporters:
+  otlphttp/langsmith:
+    endpoint: https://api.smith.langchain.com/otel
+    headers:
+      x-api-key: ${env:LANGSMITH_API_KEY}
+      Langsmith-Project: ${env:LANGSMITH_PROJECT}
+
+service:
+  pipelines:
+    traces/langsmith:
+      receivers: [otlp]
+      processors: [attributes/strip-content, filter/strip-content-events, batch]
+      exporters: [otlphttp/langsmith]

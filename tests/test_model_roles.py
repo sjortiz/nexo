@@ -56,12 +56,17 @@ def test_role_overrides_come_from_environment(monkeypatch):
 
 
 ROOT = Path(__file__).resolve().parent.parent
+# Keys the compose stack reads (and passes to the collector or Langfuse), not Settings.
+COMPOSE_FILES = [
+    "docker-compose.yml",
+    "docker-compose.gpu.yml",
+    "deploy/langfuse/compose.yml",
+]
 PASSTHROUGH = {
-    "VLLM_IMAGE_TAG",
-    "HF_TOKEN",
-    "LANGSMITH_API_KEY",
-    "LANGSMITH_PROJECT",
-}  # read by compose/collector
+    name
+    for compose_file in COMPOSE_FILES
+    for name in re.findall(r"\$\{(\w+)", (ROOT / compose_file).read_text())
+}
 
 
 def _env_keys(path: Path) -> set[str]:

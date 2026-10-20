@@ -1,0 +1,134 @@
+# Self-hosted Langfuse (LLM observability), included by docker-compose.yml.
+# Based on Langfuse's own docker-compose.yml, with SeaweedFS for S3 storage
+# (MinIO's community repository was archived in April 2026). Secrets come from
+# .env (`make env` generates them); only the web UI (3000) and blob storage
+# (9090) are published, on 127.0.0.1. Usage telemetry to Langfuse is off.
+
+x-langfuse-env: &langfuse-env
+  NEXTAUTH_URL: http://localhost:3000
+  DATABASE_URL: postgresql://postgres:${LANGFUSE_POSTGRES_PASSWORD:?run make env}@langfuse-postgres:5432/postgres
+  SALT: ${LANGFUSE_SALT:?run make env}
+  ENCRYPTION_KEY: ${LANGFUSE_ENCRYPTION_KEY:?run make env}
+  TELEMETRY_ENABLED: "false"
+  CLICKHOUSE_MIGRATION_URL: clickhouse://langfuse-clickhouse:9000
+  CLICKHOUSE_URL: http://langfuse-clickhouse:8123
+  CLICKHOUSE_USER: clickhouse
+  CLICKHOUSE_PASSWORD: ${LANGFUSE_CLICKHOUSE_PASSWORD:?run make env}
+  CLICKHOUSE_CLUSTER_ENABLED: "false"
+  LANGFUSE_S3_EVENT_UPLOAD_BUCKET: langfuse
+  LANGFUSE_S3_EVENT_UPLOAD_REGION: auto
+  LANGFUSE_S3_EVENT_UPLOAD_ACCESS_KEY_ID: langfuse
+  LANGFUSE_S3_EVENT_UPLOAD_SECRET_ACCESS_KEY: ${LANGFUSE_S3_SECRET:?run make env}
+  LANGFUSE_S3_EVENT_UPLOAD_ENDPOINT: http://langfuse-storage:8333
+  LANGFUSE_S3_EVENT_UPLOAD_FORCE_PATH_STYLE: "true"
+  LANGFUSE_S3_EVENT_UPLOAD_PREFIX: events/
+  LANGFUSE_S3_MEDIA_UPLOAD_BUCKET: langfuse
+  LANGFUSE_S3_MEDIA_UPLOAD_REGION: auto
+  LANGFUSE_S3_MEDIA_UPLOAD_ACCESS_KEY_ID: langfuse
+  LANGFUSE_S3_MEDIA_UPLOAD_SECRET_ACCESS_KEY: ${LANGFUSE_S3_SECRET:?run make env}
+  LANGFUSE_S3_MEDIA_UPLOAD_ENDPOINT: http://langfuse-storage:8333
+  LANGFUSE_S3_MEDIA_UPLOAD_FORCE_PATH_STYLE: "true"
+  LANGFUSE_S3_MEDIA_UPLOAD_PREFIX: media/
+  REDIS_HOST: langfuse-redis
+  REDIS_PORT: "6379"
+  REDIS_AUTH: ${LANGFUSE_REDIS_PASSWORD:?run make env}
+
+x-langfuse-depends-on: &langfuse-depends-on
+  langfuse-postgres: { condition: service_healthy }
+  langfuse-storage: { condition: service_healthy }
+  langfuse-redis: { condition: service_healthy }
+  langfuse-clickhouse: { condition: service_healthy }
+
+services:
+  langfuse-worker:
+    image: ghcr.io/langfuse/langfuse-worker:4.64.0
+    depends_on: *langfuse-depends-on
+    environment: *langfuse-env
+
+  langfuse-web:
+    image: ghcr.io/langfuse/langfuse:4.64.0
+    depends_on: *langfuse-depends-on
+    ports: ["127.0.0.1:3000:3000"]
+    environment:
+      <<: *langfuse-env
+      NEXTAUTH_SECRET: ${LANGFUSE_NEXTAUTH_SECRET:?run make env}
+      LANGFUSE_S3_MEDIA_UPLOAD_ENDPOINT: http://localhost:9090
+      LANGFUSE_S3_MEDIA_UPLOAD_INTERNAL_ENDPOINT: http://langfuse-storage:8333
+      # Headless setup: an organization, a "nexo" project with these API keys
+      # (the collector authenticates with them) and a login for the UI.
+      LANGFUSE_INIT_ORG_ID: nexo
+      LANGFUSE_INIT_ORG_NAME: Nexo
+      LANGFUSE_INIT_PROJECT_ID: nexo
+      LANGFUSE_INIT_PROJECT_NAME: nexo
+      LANGFUSE_INIT_PROJECT_PUBLIC_KEY: ${LANGFUSE_PUBLIC_KEY:?run make env}
+      LANGFUSE_INIT_PROJECT_SECRET_KEY: ${LANGFUSE_SECRET_KEY:?run make env}
+      LANGFUSE_INIT_USER_EMAIL: ${LANGFUSE_USER_EMAIL:-admin@nexo.local}
+      LANGFUSE_INIT_USER_NAME: Nexo admin
+      LANGFUSE_INIT_USER_PASSWORD: ${LANGFUSE_USER_PASSWORD:?run make env}
+
+  langfuse-clickhouse:
+    image: docker.io/clickhouse/clickhouse-server:25.12
+    user: "101:101"
+    environment:
+      CLICKHOUSE_DB: default
+      CLICKHOUSE_USER: clickhouse
+      CLICKHOUSE_PASSWORD: ${LANGFUSE_CLICKHOUSE_PASSWORD:?run make env}
+    volumes:
+      - langfuse-clickhouse-data:/var/lib/clickhouse
+      - langfuse-clickhouse-logs:/var/log/clickhouse-server
+    healthcheck:
+      test: wget --no-verbose --tries=1 --spider http://localhost:8123/ping || exit 1
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  langfuse-storage:
+    image: docker.io/chrislusf/seaweedfs:4.48
+    # S3 on 8333 with the credentials below; creates the "langfuse" bucket once it is up.
+    entrypoint: sh
+    command: >-
+      -c 'weed server -dir=/data -s3 -s3.port=8333 &
+      until echo "s3.bucket.create -name langfuse" | weed shell 2>/dev/null | grep -qv error;
+      do sleep 1; done; wait'
+    environment:
+      AWS_ACCESS_KEY_ID: langfuse
+      AWS_SECRET_ACCESS_KEY: ${LANGFUSE_S3_SECRET:?run make env}
+    ports: ["127.0.0.1:9090:8333"]
+    volumes: [langfuse-storage-data:/data]
+    healthcheck:
+      test: ["CMD-SHELL", "echo s3.bucket.list | weed shell 2>/dev/null | grep -q langfuse"]
+      interval: 3s
+      timeout: 10s
+      retries: 20
+
+  langfuse-redis:
+    image: docker.io/library/redis:7
+    command: --requirepass ${LANGFUSE_REDIS_PASSWORD:?run make env} --maxmemory-policy noeviction
+    volumes: [langfuse-redis-data:/data]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 3s
+      timeout: 10s
+      retries: 10
+
+  langfuse-postgres:
+    image: docker.io/library/postgres:17
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${LANGFUSE_POSTGRES_PASSWORD:?run make env}
+      POSTGRES_DB: postgres
+      TZ: UTC
+      PGTZ: UTC
+    volumes: [langfuse-postgres-data:/var/lib/postgresql/data]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 3s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  langfuse-postgres-data:
+  langfuse-clickhouse-data:
+  langfuse-clickhouse-logs:
+  langfuse-storage-data:
+  langfuse-redis-data:

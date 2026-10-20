@@ -14,6 +14,10 @@ else
 COMPOSE_APP ?= $(COMPOSE) --profile app
 endif
 
+# Opt-in observability add-ons for `make up`: JAEGER=1, LANGSMITH=1.
+JAEGER    ?=
+LANGSMITH ?=
+ADDONS    = OTEL_JAEGER=$(if $(JAEGER),jaeger,none) OTEL_LANGSMITH=$(if $(LANGSMITH),langsmith,none)
 PROFILE  ?=
 ROLES    ?=
 FILE     ?=
@@ -40,19 +44,20 @@ install: ## Install Python, Nexo and the dev tools into .venv with uv (from uv.l
 install-notebook: ## Also install Jupyter, for the walkthrough notebook
 	uv sync --extra notebook
 
-env: ## Create .env from the local template (keeps an existing one)
-	@if [ -f .env ]; then echo ".env exists; leaving it as is"; else cp deploy/local/local.env.example .env && echo "created .env: set LOCAL_PROFILE and NEO4J_PASSWORD"; fi
+env: ## Create .env from the local template and fill missing secrets (keeps existing values)
+	@if [ -f .env ]; then echo ".env exists; keeping its values"; else cp deploy/local/local.env.example .env && echo "created .env: set LOCAL_PROFILE"; fi
+	@deploy/local/env-secrets.sh .env
 
 models: ## Pull and start the profile's models in Ollama (PROFILE=m1-max-64 ROLES=heavy; default: .env)
 	deploy/local/ollama-setup.sh $(PROFILE) $(ROLES)
 
 ##@ Run
 
-up: ## Start Neo4j, the OpenTelemetry collector and Jaeger
-	$(COMPOSE) up -d neo4j otel-collector jaeger
+up: ## Start Neo4j, the collector and Langfuse (add-ons: JAEGER=1, LANGSMITH=1)
+	$(ADDONS) $(COMPOSE) up -d neo4j otel-collector langfuse-web langfuse-worker $(if $(JAEGER),jaeger)
 
 down: ## Stop them (data volumes are kept)
-	$(COMPOSE) down
+	$(COMPOSE) --profile jaeger down
 
 check: ## Check each model role's server and model (nexo models --check)
 	$(RUN)nexo models --check

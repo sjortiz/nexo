@@ -55,8 +55,9 @@ bundle: architecture, components, operations, decisions and references.
 ## Run
 
 ```bash
-cp .env.example .env                                   # fill in secrets
-docker compose up -d neo4j otel-collector jaeger
+cp .env.example .env                                   # fill in the vLLM secrets
+make env                                               # generates Neo4j and Langfuse secrets
+make up                                                # Neo4j, OTel collector, Langfuse
 docker compose -f docker-compose.yml -f docker-compose.gpu.yml up -d   # vLLM: 4x80GB GPUs
 uv sync && source .venv/bin/activate                  # Python 3.12 + deps from uv.lock
 nexo ingest corpus/memo.md --doc-type memo --effective-date 2025-06-30
@@ -64,7 +65,8 @@ nexo ask "How is Acme Holdings connected to Gamma Clinics?"   # prints thread_id
 nexo review <thread_id> --approve --reviewer you@corp
 ```
 
-Traces: http://localhost:16686 (Jaeger); metrics: http://localhost:8889/metrics. Telemetry follows the
+Traces: http://localhost:3000 (Langfuse; log in with `LANGFUSE_USER_EMAIL` / `LANGFUSE_USER_PASSWORD` from
+`.env`); metrics: http://localhost:8889/metrics. Telemetry follows the
 [OpenTelemetry GenAI conventions](docs/references/opentelemetry-genai-conventions.md) with message content off by default
 ([Observability](docs/operations/observability.md)). Logs go to stdout with trace ids (`LOG_FORMAT=json` for log
 pipelines). Relation ontology example: `deploy/ontology.example.json`. Neo4j Enterprise least-privilege reader:
@@ -95,7 +97,7 @@ deploy/local/ollama-setup.sh m1-max-64 heavy  # on the M1 Max
 deploy/local/ollama-setup.sh                  # on the M5 Pro (reads LOCAL_PROFILE/REMOTE_PROFILE)
 ssh -N -L 11435:127.0.0.1:11434 you@m1-max.local
 
-podman compose up -d neo4j otel-collector jaeger   # Podman path (or: brew install neo4j)
+make env up                                        # Podman path: secrets, Neo4j, collector, Langfuse
 nexo models --check                                # each role's model and server, checked
 NEXO_LIVE=1 pytest -m live -v                      # exercise the real models
 ```
@@ -129,20 +131,25 @@ make test-live     # the real models, once they run
 - `SENSITIVE_DATA_PROVIDER=comprehend_medical` sends chunk text to Amazon Comprehend Medical; enable only where that
   flow is approved. Entity `proposed_codes` are LLM output until verified against a terminology service.
 
-## Where LangSmith fits
+## Observability
 
-Nexo emits vendor-neutral OpenTelemetry, so LangSmith plugs in as a backend rather than a second instrumentation
-([ADR-0011](docs/decisions/adr-0011-langsmith-adoption.md), proposed):
+Nexo emits vendor-neutral OpenTelemetry. The collector strips message content and sends traces to a
+self-hosted [Langfuse](docs/references/langfuse.md) (http://localhost:3000), which shows LLM calls as
+generations with token usage ([ADR-0014](docs/decisions/adr-0014-langfuse-default-trace-backend.md)).
+Two opt-in add-ons, each its own collector pipeline behind the same content stripping:
 
-| Use LangSmith for | Keep in Nexo |
-| --- | --- |
-| Trace UI: a second OTLP exporter in the collector (`deploy/otel-collector.yaml`), behind its content-stripping processors | Instrumentation (OTel GenAI conventions), content-capture policy |
-| Evaluation: datasets, experiments, `openevals` judges, pairwise comparisons | Domain metrics as custom evaluators (triple precision/recall/capture rate, context precision/recall) |
-| Studio for local graph debugging (`langgraph dev`) | The 3-node workflow and the compliance review gate (graph state is the system of record) |
-| Later: reviewer decisions as feedback / annotation queues feeding datasets | Prompts in git; `Runtime` instead of Agent Server (self-hosting needs Enterprise) |
+| Add-on | Start | Notes |
+| --- | --- | --- |
+| Jaeger | `make up JAEGER=1` | Span UI on http://localhost:16686. |
+| LangSmith | `make up LANGSMITH=1` | Needs `LANGSMITH_API_KEY` and `LANGSMITH_PROJECT` in `.env`. |
 
-No PHI in LangSmith until a BAA is signed or LangSmith is self-hosted. Leave `LANGSMITH_TRACING` unset in the app to
-avoid duplicate traces.
+Both can be combined. Without `make`: `OTEL_JAEGER=jaeger docker compose up -d neo4j otel-collector
+langfuse-web langfuse-worker jaeger`, and `OTEL_LANGSMITH=langsmith` for LangSmith.
+
+LangSmith also offers Studio for local graph debugging (`langgraph dev`) and evaluation tooling
+(datasets, experiments, `openevals` judges); see [the reference](docs/references/langsmith.md). No PHI
+in LangSmith until a BAA is signed or LangSmith is self-hosted. Leave `LANGSMITH_TRACING` unset in the
+app: the collector exports, so app-side tracing would duplicate traces.
 
 ## Sources
 
@@ -171,6 +178,8 @@ RAG on AWS:
 Observability, evaluation and documentation:
 - [OpenTelemetry GenAI semantic conventions](https://github.com/open-telemetry/semantic-conventions-genai) and
   [OpenTelemetry Python GenAI instrumentations](https://github.com/open-telemetry/opentelemetry-python-genai)
+- [Langfuse self-hosting](https://langfuse.com/self-hosting) - default trace backend, with
+  [SeaweedFS](https://github.com/seaweedfs/seaweedfs) for its S3 storage
 - [LangSmith documentation](https://docs.langchain.com/langsmith)
 - [Model Context Protocol](https://modelcontextprotocol.io/) and its [Python SDK](https://github.com/modelcontextprotocol/python-sdk)
 - [Ollama](https://github.com/ollama/ollama) and its [model library](https://ollama.com/library)

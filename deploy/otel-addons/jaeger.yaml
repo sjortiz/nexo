@@ -1,0 +1,13 @@
+# Add-on: also send traces to Jaeger (make up JAEGER=1). Its own pipeline, with the
+# same content-stripping processors as the main one.
+exporters:
+  otlp/jaeger:
+    endpoint: jaeger:4317
+    tls: { insecure: true }
+
+service:
+  pipelines:
+    traces/jaeger:
+      receivers: [otlp]
+      processors: [attributes/strip-content, filter/strip-content-events, batch]
+      exporters: [otlp/jaeger]

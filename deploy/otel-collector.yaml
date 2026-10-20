@@ -1,3 +1,10 @@
+extensions:
+  # Langfuse authenticates OTLP with Basic auth: public key and secret key.
+  basicauth/langfuse:
+    client_auth:
+      username: ${env:LANGFUSE_PUBLIC_KEY}
+      password: ${env:LANGFUSE_SECRET_KEY}
+
 receivers:
   otlp:
     protocols:
@@ -28,25 +35,23 @@ processors:
         - 'name == "gen_ai.client.inference.operation.details"'
 
 exporters:
-  otlp/jaeger:
-    endpoint: jaeger:4317
-    tls: { insecure: true }
+  # Self-hosted Langfuse (deploy/langfuse/compose.yml); the exporter adds /v1/traces.
+  otlphttp/langfuse:
+    endpoint: http://langfuse-web:3000/api/public/otel
+    auth: { authenticator: basicauth/langfuse }
+    headers:
+      x-langfuse-ingestion-version: "4"  # without it, traces can take minutes to appear
   prometheus:
     endpoint: 0.0.0.0:8889
-  # LangSmith (ADR-0011): uncomment and add to the traces pipeline. Keep the
-  # strip-content processors in front of it; no PHI without a BAA or self-hosting.
-  # otlphttp/langsmith:
-  #   endpoint: https://api.smith.langchain.com/otel
-  #   headers:
-  #     x-api-key: ${env:LANGSMITH_API_KEY}
-  #     Langsmith-Project: ${env:LANGSMITH_PROJECT}
 
+# Jaeger and LangSmith are add-ons with their own pipelines: deploy/otel-addons/.
 service:
+  extensions: [basicauth/langfuse]
   pipelines:
     traces:
       receivers: [otlp]
       processors: [attributes/strip-content, filter/strip-content-events, batch]
-      exporters: [otlp/jaeger]
+      exporters: [otlphttp/langfuse]
     metrics:
       receivers: [otlp]
       processors: [batch]

@@ -277,10 +277,11 @@ uv sync && source .venv/bin/activate     # Python 3.12 and the locked dependenci
           <h3>Name your machine and configure</h3>
           <p>Your profile is the chip and memory on a Mac (<code>m1-max-64</code>, <code>m5-pro-24</code>), or
             <code>gpu-&lt;VRAM GB&gt;</code> / <code>cpu-&lt;RAM GB&gt;</code> on Linux. The first command shows the
-            models it picks.</p>
+            models it picks; <code>make env</code> creates <code>.env</code> and generates the Neo4j password and the
+            Langfuse logins.</p>
 <pre><code>python3 src/nexo/local_profiles.py plan m1-max-64
-cp deploy/local/local.env.example .env
-# in .env: LOCAL_PROFILE=m1-max-64 and a NEO4J_PASSWORD of your choice</code></pre>
+make env
+# in .env: LOCAL_PROFILE=m1-max-64</code></pre>
         </li>
         <li>
           <h3>Start the models</h3>
@@ -290,8 +291,10 @@ cp deploy/local/local.env.example .env
         </li>
         <li>
           <h3>Start Neo4j and tracing</h3>
-          <p>Neo4j on <code>localhost:7687</code>; traces at <code>http://localhost:16686</code>.</p>
-<pre><code>podman compose up -d neo4j otel-collector jaeger</code></pre>
+          <p>Neo4j on <code>localhost:7687</code>; traces in Langfuse at <code>http://localhost:3000</code>. Log in with
+            <code>LANGFUSE_USER_EMAIL</code> and <code>LANGFUSE_USER_PASSWORD</code> from <code>.env</code>. Jaeger is
+            an add-on: <code>make up JAEGER=1</code>.</p>
+<pre><code>podman compose up -d neo4j otel-collector langfuse-web langfuse-worker</code></pre>
         </li>
         <li>
           <h3>Check</h3>
@@ -338,8 +341,9 @@ podman compose -f docker-compose.yml -f docker-compose.linux.yml --profile app r
         </details>
         <details class="card">
           <summary>Without containers</summary>
-          <p>Install Neo4j natively instead of step 5. Tracing is optional: run the Jaeger binary, or remove
-            <code>OTEL_EXPORTER_OTLP_ENDPOINT</code> from <code>.env</code>.</p>
+          <p>Install Neo4j natively instead of step 5. Tracing is optional: leave
+            <code>OTEL_EXPORTER_OTLP_ENDPOINT</code> empty in <code>.env</code>, or start only the collector and
+            Langfuse containers.</p>
 <pre><code>brew install neo4j
 neo4j-admin dbms set-initial-password &lt;password&gt;
 brew services start neo4j</code></pre>
@@ -371,7 +375,7 @@ brew services start neo4j</code></pre>
           Set <code>LOCAL_PROFILE</code>.</p></article>
         <article class="card"><h3>One machine or two</h3><p>Add <code>REMOTE_PROFILE</code> and a second machine serves the
           heavy models (agent, extraction) through an SSH tunnel. The rest stays local.</p></article>
-        <article class="card"><h3>Podman or native</h3><p>Neo4j, tracing and Nexo run as containers or as plain installs.
+        <article class="card"><h3>Podman or native</h3><p>Neo4j and Nexo run as containers or as plain installs; tracing runs in containers or stays off.
           The models stay native either way, so they can use the GPU.</p></article>
       </div>
 

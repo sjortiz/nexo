@@ -13,6 +13,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 import pytest
+import yaml
 from pydantic import ValidationError
 
 from nexo import local_profiles as lp
@@ -397,17 +398,20 @@ def test_docs_list_every_catalog_model_and_tier():
         assert f"`{model}`" in page, f"{model} missing from the playbook"
 
 
-def test_local_compose_needs_only_local_secrets():
-    """docker-compose.yml requires only NEO4J_PASSWORD; GPU secrets live in the GPU file."""
-    # Compose checks ${VAR:?} for every service in the files it loads, so GPU-only
-    # secrets in docker-compose.yml would block `compose up neo4j` on a laptop.
+def test_make_env_generates_every_secret_the_local_stack_requires():
+    """`make env` fills each required variable of the local stack; GPU secrets stay apart."""
+    # Compose checks ${VAR:?} for every service in the files it loads (includes too),
+    # so a required variable that `make env` does not generate blocks `make up`.
     required = re.compile(r"\$\{(\w+):\?")
-    local = set(required.findall((ROOT / "docker-compose.yml").read_text()))
+    base = ROOT / "docker-compose.yml"
+    files = [
+        base,
+        *(ROOT / f for f in yaml.safe_load(base.read_text()).get("include", [])),
+    ]
+    local = set().union(*(required.findall(f.read_text()) for f in files))
+    script = (ROOT / "deploy/local/env-secrets.sh").read_text()
+    generated = set(re.findall(r"^ensure (\w+) ", script, re.MULTILINE))
+    assert "LANGFUSE_SECRET_KEY" in local and local <= generated, local - generated
     gpu = set(required.findall((ROOT / "docker-compose.gpu.yml").read_text()))
-    assert local == {"NEO4J_PASSWORD"}
     assert gpu == {"VLLM_IMAGE_TAG", "VLLM_API_KEY", "HF_TOKEN", "EMBEDDING_API_KEY"}
-    assert re.search(
-        r"^NEO4J_PASSWORD=",
-        (ROOT / "deploy/local/local.env.example").read_text(),
-        re.MULTILINE,
-    )
+    assert not gpu & local

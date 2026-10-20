@@ -1,7 +1,7 @@
 ---
 type: Reference
 title: LangSmith
-description: LangChain's observability, evaluation and deployment platform - what each part offers and where it overlaps Nexo.
+description: LangChain's observability, evaluation and deployment platform - what each part offers, where it overlaps Nexo, and its role as an opt-in trace add-on.
 resource: https://docs.langchain.com/langsmith
 tags: [reference, observability, evaluation, langsmith]
 status: draft
@@ -38,7 +38,7 @@ sources:
 
 | Part | What it gives | Overlap with Nexo |
 |---|---|---|
-| Observability | Trace UI; ingests OpenTelemetry at `https://api.smith.langchain.com/otel` (headers `x-api-key`, `Langsmith-Project`) and maps `gen_ai.*` attributes.[^otel] | Nexo already emits OTel; LangSmith can be one more collector exporter. |
+| Observability | Trace UI; ingests OpenTelemetry at `https://api.smith.langchain.com/otel` (headers `x-api-key`, `Langsmith-Project`) and maps `gen_ai.*` attributes.[^otel] | Opt-in add-on: `make up LANGSMITH=1` adds a `traces/langsmith` collector pipeline behind the content stripping. Langfuse is the default backend. |
 | Evaluation | Datasets, `evaluate()` / `aevaluate()`, custom code evaluators, `evaluate_comparative` for pairwise, experiment comparison UI.[^eval][^pairwise] `openevals` ships LLM-as-judge prompts (groundedness, helpfulness, retrieval relevance) usable with a vLLM judge.[^openevals] | Replaces the hand-written eval loop, reporting and generic judges in `evaluation.py`. |
 | Feedback and annotation queues | `create_feedback` on runs; review queues that add examples to datasets.[^queues] | Complements, not replaces, the compliance interrupt: approvals can be copied as feedback. |
 | Prompt Hub | Versioned prompts pulled at runtime. | Nexo keeps prompts in git (reviewed, no runtime dependency). |
@@ -52,7 +52,8 @@ and GDPR but does not document a BAA; confirm one before sending PHI. Masking ha
 (`LANGSMITH_HIDE_INPUTS`, `LANGSMITH_HIDE_OUTPUTS`, anonymizers) or, for OTLP, in a collector
 redaction processor.[^privacy][^redaction] Self-hosted LangSmith is an Enterprise add-on.
 
-How Nexo uses it: [ADR-0011](../decisions/adr-0011-langsmith-adoption.md).
+How Nexo uses it: an opt-in trace add-on ([ADR-0014](../decisions/adr-0014-langfuse-default-trace-backend.md));
+evaluation and Studio options are discussed in [ADR-0011](../decisions/adr-0011-langsmith-adoption.md).
 
 [^otel]: Trace with OpenTelemetry
 [^eval]: Evaluation with code evaluators

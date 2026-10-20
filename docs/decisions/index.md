@@ -10,6 +10,7 @@
 * [ADR-0008: Relation ontology and a lexical graph in Neo4j](adr-0008-ontology-and-lexical-graph.md) - Canonical relations with a RELATED_TO fallback; Document/Chunk structure in the graph.
 * [ADR-0009: OpenTelemetry GenAI conventions, official instrumentation, content off](adr-0009-opentelemetry-genai-conventions.md) - Standard spans and metrics; no message content in telemetry by default.
 * [ADR-0010: Deferred graph enrichment](adr-0010-deferred-graph-enrichment.md) - Techniques from the guides postponed, with the trigger for each.
-* [ADR-0011: Where LangSmith fits](adr-0011-langsmith-adoption.md) - Proposed: trace backend and evaluation platform; workflow, review gate and prompts stay in Nexo.
+* [ADR-0011: Where LangSmith fits](adr-0011-langsmith-adoption.md) - Superseded by ADR-0014: trace backend and evaluation platform; workflow, review gate and prompts stay in Nexo.
 * [ADR-0012: Ollama for local runs, with model roles split across Macs](adr-0012-local-apple-silicon.md) - Native models on Apple Silicon; each role can point at its own host and model.
 * [ADR-0013: Read-only MCP tools plus a phased Claude skill](adr-0013-read-only-mcp-and-skill.md) - Retrieval over MCP, one clearance per server, a checked skill for Claude.
+* [ADR-0014: Langfuse as the default trace backend](adr-0014-langfuse-default-trace-backend.md) - Self-hosted Langfuse by default; Jaeger and LangSmith as opt-in collector add-ons.

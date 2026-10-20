@@ -1,6 +1,7 @@
 # Bundle Update Log
 
 ## 2026-10-20
+* **Update**: Langfuse is the default trace backend, self-hosted by `make up`; Jaeger and LangSmith are opt-in add-ons (`make up JAEGER=1` / `LANGSMITH=1`); `make env` generates the secrets ([Langfuse](references/langfuse.md), [ADR-0014](decisions/adr-0014-langfuse-default-trace-backend.md) supersedes ADR-0011).
 * **Update**: Python and dependencies install with uv (`uv sync`, `uv.lock`, `.python-version`); CI, the Dockerfile, `.mcp.json` and the playbooks use it.
 * **Update**: Code follows pylint's defaults and black's formatting (ruff removed); `make lint` runs both ([Testing](operations/testing.md)).
 * **Update**: A `Makefile` covers setup, models, services, tests, the walkthrough and the site; CI runs its targets ([Testing](operations/testing.md)).

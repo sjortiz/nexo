@@ -4,7 +4,7 @@ title: "ADR-0011: Where LangSmith fits"
 description: Use LangSmith as a trace backend and evaluation platform instead of growing custom tooling; keep the workflow, review gate and prompts in Nexo; no PHI until a BAA or self-hosting.
 tags: [adr, langsmith, observability, evaluation]
 status: draft
-decision_status: proposed
+decision_status: superseded
 generated: { by: claude-code/claude-opus-5-5, at: 2026-10-19T20:14:37Z }
 stale_after: 2027-01-19T00:00:00Z
 sources:
@@ -14,6 +14,8 @@ sources:
 ---
 
 # Context
+
+Superseded by [ADR-0014](adr-0014-langfuse-default-trace-backend.md): Langfuse is the default trace backend; LangSmith is an opt-in add-on.
 
 Nexo grew its own evaluation loop and LLM judges, and could grow its own trace UI, feedback store and
 review API. LangSmith already provides these. The data may include PII/PHI, and LangSmith's
