@@ -1,7 +1,7 @@
 # Bundle Update Log
 
 ## 2026-10-20
-* **Update**: Citations written without `chk_` (`[chunk:714c2e550aacdb8f]`) count when the hash names exactly one chunk the agent read in that run; unknown or ambiguous hashes stay uncited, and the prompt shows the full id format ([Investigator agent](components/investigator-agent.md#output)).
+* **Update**: Citations written without `chk_` (`[chunk:714c2e550aacdb8f]`) count when the hash is the whole 16 hex characters and `chk_` plus it is a chunk the agent read in that run; shortened or unknown hashes stay uncited, and the prompts ask for the whole id, including its `chk_` prefix ([Investigator agent](components/investigator-agent.md#output)).
 * **Update**: `make up` copies a checkout's old `.data/checkpoints.sqlite` to `<data dir>/<stack>/` when the stack has none, so reviews paused before the move survive the upgrade; an existing file is never overwritten ([ADR-0018](decisions/adr-0018-chunks-in-neo4j.md)).
 * **Update**: CLI logs go to stderr; stdout carries only the command's JSON (`nexo ask ... | jq`), and `nexo eval` / `eval-extraction` write one JSON object per line ([Observability](operations/observability.md#logs)).
 * **Update**: `spec.ports` in `nexo.yaml` sets the host ports the stack publishes; `nexo.env`, the lock, the Neo4j login probe and the printed links follow, and `check` names whoever holds a port already, so a second stack can run beside the first.

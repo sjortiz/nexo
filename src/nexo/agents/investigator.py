@@ -79,32 +79,34 @@ result says how many tool calls are left; write the answer before they run out.
 
 Answer format: a direct answer first, then the supporting chain of relationships. Cite every \
 factual sentence with [chunk:<chunk_id>], using only chunk ids whose text you received. Write \
-the whole id, chk_ included: [chunk:chk_3f1a9c0e5b7d2468]."""
+the whole id, including its chk_ prefix."""
 
 log = logging.getLogger(__name__)
 
 AGENT_NAME = "relationship-investigator"
 
 _CITATION_BLOCK = re.compile(r"\[chunk:([^\]]+)\]")
-# A chunk id without its chk_ prefix, whole or cut short; small models write these.
-_BARE_HASH = re.compile(r"[0-9a-f]{8,16}")
+# A whole chunk id without its chk_ prefix; small models write these.
+_BARE_HASH = re.compile(r"[0-9a-f]{16}")
 
 
 def extract_citations(answer: str, read: Iterable[str] = ()) -> list[str]:
     """Return the unique chunk ids cited as [chunk:...], in order.
 
     Well-formed ids count as written; compliance checks them against the ledger.
-    A bare hash counts only when it starts exactly one id in `read` (the chunks
-    this run received); an unknown or ambiguous one stays uncited, never guessed.
+    A bare 16-hex hash counts only when chk_ plus it is an id in `read` (the chunks
+    this run received); any other bare hash stays uncited, never guessed.
     """
-    read = list(read)
+    read = set(read)
     ids: list[str] = []
     for block in _CITATION_BLOCK.findall(answer):
         for candidate in re.split(r"[,\s]+", block):
             candidate = candidate.removeprefix("chunk:")
             if _BARE_HASH.fullmatch(candidate):
-                matches = [c for c in read if c.startswith(f"chk_{candidate}")]
-                candidate = matches[0] if len(matches) == 1 else ""
+                if f"chk_{candidate}" not in read:
+                    log.debug("dropped bare citation %s: no chunk read", candidate)
+                    continue
+                candidate = f"chk_{candidate}"
             if CHUNK_ID_RE.fullmatch(candidate) and candidate not in ids:
                 ids.append(candidate)
     return ids
@@ -290,16 +292,16 @@ def _follow_up(answer: str, ctx: InvestigationContext) -> tuple[str, str] | None
         return (
             "the missing final answer",
             "You ended without writing a final answer. Write it now from the evidence "
-            "you already have, citing each fact as [chunk:<chunk_id>]. If that evidence "
-            "does not answer the question, say what you could not find. Do not call any "
-            "more tools.",
+            "you already have, citing each fact as [chunk:<chunk_id>] with the whole id, "
+            "including its chk_ prefix. If that evidence does not answer the question, "
+            "say what you could not find. Do not call any more tools.",
         )
     if ctx.evidence.fetched and not extract_citations(answer, ctx.evidence.fetched):
         return (
             "citations",
             "Your answer has no citations. Rewrite it, citing each fact as "
-            "[chunk:<chunk_id>] using only chunks you fetched or were given. "
-            "Do not call any more tools.",
+            "[chunk:<chunk_id>] with the whole id, including its chk_ prefix, using only "
+            "chunks you fetched or were given. Do not call any more tools.",
         )
     return None
 
