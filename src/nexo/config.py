@@ -214,7 +214,7 @@ class Settings(BaseSettings):
     checkpoint_postgres_uri: SecretStr | None = None
     # Which answers wait for a person (ADR-0003, amended): always; on-findings, where an
     # answer with no findings and grounded citations is approved as system:auto; never,
-    # where only answers with blocking findings wait. Blocking findings always wait.
+    # where answers with only warn findings are approved too. Blocking findings always wait.
     review_policy: Literal["always", "on-findings", "never"] = "always"
 
     # --- Evaluation (LLM-as-a-judge) ------------------------------------------

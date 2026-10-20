@@ -191,7 +191,7 @@ class Spec(_Strict):
     secrets: Secrets = Field(default_factory=Secrets)
     ports: Ports = Field(default_factory=Ports)
     # Which answers wait for a person: always; on-findings (no findings and grounded
-    # citations are approved as system:auto); never (blocking findings still wait).
+    # citations are approved as system:auto); never (only warn findings are approved).
     review: Literal["always", "on-findings", "never"] = "always"
     patches: list[Patch] = Field(default_factory=list)
 

@@ -260,22 +260,24 @@ REVIEW_POLICIES = {
         "answers with no findings and grounded citations are approved as system:auto;"
         " the rest wait for a person"
     ),
-    "never": "only answers with blocking findings wait for a person",
+    "never": "answers with no findings or only warnings are approved as system:auto",
 }
 
 
-def review_finding(casting: Casting, env_path: Path) -> Finding:
-    """The review policy answers will run under (spec.review, unless the environment wins)."""
+def review_finding(casting: Casting) -> Finding:
+    """The review policy answers will run under (spec.review, unless the environment wins).
+
+    nexo.env always carries spec.review and is read after .env, so only the process
+    environment can override it.
+    """
     declared = casting.spec.review
-    effective = os.environ.get("REVIEW_POLICY")
-    if not effective:
-        # nexo.env only carries a policy other than always, so .env can still set one.
-        fallback = read_env(env_path).get("REVIEW_POLICY") or declared
-        effective = declared if declared != "always" else fallback
-    detail = f"{effective}: {REVIEW_POLICIES.get(effective, 'not a policy Nexo knows')}"
+    effective = os.environ.get("REVIEW_POLICY") or declared
+    detail = f"{effective}: {REVIEW_POLICIES[effective]}"
     if effective != declared:
-        detail += f" (REVIEW_POLICY overrides spec.review {declared})"
-    return Finding("review", effective in REVIEW_POLICIES, detail)
+        detail += (
+            f" (REVIEW_POLICY in the environment overrides spec.review {declared})"
+        )
+    return Finding("review", True, detail)
 
 
 def preflight(
@@ -293,7 +295,7 @@ def preflight(
             f"{host.engine} compose ({host.os})",
         ),
         secrets_finding(store, on, Path.cwd() / ".env"),
-        review_finding(casting, Path.cwd() / ".env"),
+        review_finding(casting),
     ]
     bolt = casting.spec.ports.bolt
     if "neo4j" in on and (neo4j := neo4j_finding(store, host, lock["name"], bolt)):
