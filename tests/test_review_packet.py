@@ -23,6 +23,13 @@ from tests.test_mcp_review import QUESTION, _server, call
 SNAPSHOT = Path(__file__).parent / "snapshots" / "review_packet.json"
 
 
+def _without_paused_at(out: str) -> dict[str, Any]:
+    """The CLI's JSON without the pause time, which changes on every run."""
+    result = json.loads(out)
+    assert result.pop("paused_at")
+    return result
+
+
 def _surfaces(settings, chunk_store, capsys) -> dict[str, Any]:
     record = make_chunk("doc", 0, "Acme bought Beta.", title="Deal")
     object.__setattr__(record, "chunk_id", CHUNK)
@@ -38,7 +45,7 @@ def _surfaces(settings, chunk_store, capsys) -> dict[str, Any]:
     seen: dict[str, Any] = {"checkpoint": task.interrupts[-1].value}
 
     _emit(rt.status("t1"), "status")
-    seen["cli"] = json.loads(capsys.readouterr().out)
+    seen["cli"] = _without_paused_at(capsys.readouterr().out)
 
     server = _server(settings, chunk_store, rt)
     seen["mcp_pending"] = call(server, "nexo_pending_reviews").structured_content
@@ -56,7 +63,7 @@ def _surfaces(settings, chunk_store, capsys) -> dict[str, Any]:
     # A malformed raw resume re-pauses with an error in the packet.
     rt.graph.invoke(Command(resume={"approval_status": "maybe"}), config)
     _emit(rt.status("t1"), "status")
-    seen["cli_error"] = json.loads(capsys.readouterr().out)
+    seen["cli_error"] = _without_paused_at(capsys.readouterr().out)
     seen["mcp_get_error"] = call(
         server, "nexo_get_review", {"thread_id": "t1"}
     ).structured_content

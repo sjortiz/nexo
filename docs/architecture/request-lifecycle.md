@@ -61,6 +61,9 @@ when the run's sensitivity allows it (`telemetry.content`, see
 ([ADR-0009](../decisions/adr-0009-opentelemetry-genai-conventions.md)). A reviewer may be named
 `system`; only `review.source: system` marks the compliance node's own rejection.
 
+A paused thread's result also carries `pending_review` (the review packet) and `paused_at`, the time
+of its pause checkpoint; both are absent once the thread completes.
+
 # State
 
 | Key | Written by | Meaning |

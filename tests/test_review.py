@@ -35,6 +35,15 @@ def test_pending_reviews_lists_paused_threads_newest_first(settings, backend):
         assert all(r.status == "awaiting_review" for r in listed)
         assert listed[0] == rt.status("t3")
         assert listed[0].pending_review is not None
+        assert listed[0].paused_at > listed[1].paused_at > listed[2].paused_at
+
+
+def test_paused_at_is_set_only_while_a_thread_waits(settings):
+    """A paused thread says when it paused; a reviewed one does not."""
+    with open_checkpointer(settings) as saver:
+        rt = _paused(settings, saver, "t1")
+        assert rt.status("t1").paused_at is not None
+        assert rt.review("t1", APPROVE).paused_at is None
 
 
 @pytest.mark.parametrize("backend", ["memory", "sqlite"])

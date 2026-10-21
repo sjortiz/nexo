@@ -14,6 +14,7 @@ import uuid
 from collections.abc import Iterable, Iterator
 from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass, field
+from datetime import datetime
 from typing import Any
 
 from langgraph.checkpoint.base import BaseCheckpointSaver
@@ -72,6 +73,7 @@ class RunResult(BaseModel):
     approval_status: str | None = None
     final_response: str | None = None
     pending_review: ReviewPacket | None = None
+    paused_at: datetime | None = None  # when the thread paused for review
 
 
 @contextmanager
@@ -266,7 +268,8 @@ class Runtime:
         return None
 
     def _result(self, thread_id: str, pending: ReviewPacket | None) -> RunResult:
-        values = self.graph.get_state(self._config(thread_id)).values
+        snapshot = self.graph.get_state(self._config(thread_id))
+        values = snapshot.values
         return RunResult(
             thread_id=thread_id,
             status="awaiting_review" if pending is not None else "completed",
@@ -276,6 +279,8 @@ class Runtime:
             outcome=_outcome(values, pending),
             final_response=values.get("final_response"),
             pending_review=pending,
+            # The newest checkpoint of a paused thread is the pause itself.
+            paused_at=snapshot.created_at if pending is not None else None,
         )
 
 

@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import threading
 from datetime import datetime, timedelta, timezone
-from types import SimpleNamespace
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -36,13 +35,6 @@ def packet(question="Who owns A?", blocking=False, answer="B owns A."):
     }
 
 
-def fake_saver():
-    """A saver whose newest checkpoint is two hours old."""
-    then = datetime.now(timezone.utc) - timedelta(hours=2, minutes=1)
-    stamp = SimpleNamespace(checkpoint={"ts": then.isoformat()})
-    return SimpleNamespace(get_tuple=lambda _config: stamp)
-
-
 class FakeRuntime:
     """Records decisions; holds paused and finished threads."""
 
@@ -57,7 +49,6 @@ class FakeRuntime:
                 "text": "A is owned by B",
             }
         ]
-        self.graph = SimpleNamespace(checkpointer=fake_saver())
         self.decisions = []
 
     def pending_reviews(self, limit=50):
@@ -87,7 +78,10 @@ class FakeRuntime:
 def paused(thread_id=THREAD, **kwargs):
     """Test helper."""
     return RunResult(
-        thread_id=thread_id, status="awaiting_review", pending_review=packet(**kwargs)
+        thread_id=thread_id,
+        status="awaiting_review",
+        pending_review=packet(**kwargs),
+        paused_at=datetime.now(timezone.utc) - timedelta(hours=2, minutes=1),
     )
 
 

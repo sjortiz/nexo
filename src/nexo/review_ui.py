@@ -86,15 +86,11 @@ def _layout(title: str, reviewer: str, body: str) -> str:
     )
 
 
-def _paused_since(runtime: ReviewRuntime, thread_id: str) -> str:
-    """The newest checkpoint of a paused thread is the pause itself."""
-    try:
-        saver = runtime.graph.checkpointer  # type: ignore[attr-defined]
-        stamp = saver.get_tuple({"configurable": {"thread_id": thread_id}})
-        then = datetime.fromisoformat(stamp.checkpoint["ts"])
-    except (AttributeError, KeyError, TypeError, ValueError):
+def _age(paused_at: datetime | None) -> str:
+    """How long ago a thread paused, as 2h or 5m."""
+    if paused_at is None:
         return "unknown"
-    seconds = max(0, int((datetime.now(timezone.utc) - then).total_seconds()))
+    seconds = max(0, int((datetime.now(timezone.utc) - paused_at).total_seconds()))
     for unit, size in (("d", 86400), ("h", 3600), ("m", 60)):
         if seconds >= size:
             return f"{seconds // size}{unit}"
@@ -144,7 +140,7 @@ class ReviewApp:  # pylint: disable=too-few-public-methods  # handle is the whol
         rows = "".join(
             f'<tr><td><a href="/review/{_e(r.thread_id)}">'
             f"{_e(packet.user_query)}</a></td>"
-            f"<td>{_e(_paused_since(self.runtime, r.thread_id))}</td>"
+            f"<td>{_e(_age(r.paused_at))}</td>"
             f"<td>{len(packet.findings)}</td></tr>"
             for r in self.runtime.pending_reviews()
             if (packet := r.pending_review) is not None
