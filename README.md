@@ -7,12 +7,12 @@ Overview: [sjortiz.github.io/nexo](https://sjortiz.github.io/nexo/). Step by ste
 [Jupyter notebook](examples/walkthrough.ipynb).
 
 ```
-+---------------------- LangGraph: checkpointed (SQLite / Postgres) -----------------------+
-| request -> router -> investigator -> compliance -> policy / human review -> answer       |
-|              |             |              |                   |             (approved)   |
-|              v             |              v                   v                          |
-|           refused          |         no draft: rejected    rejected (no answer)          |
-+----------------------------|-------------------------------------------------------------+
++------------------------ LangGraph: checkpointed (SQLite / Postgres) -------------------------+
+| request -> router -> investigator -> compliance + review policy -> approved answer           |
+|              |             |                 |                                               |
+|              v             |                 +-> pause -> human review -> approve / reject   |
+|           refused          |                 +-> failed / empty draft -> rejected            |
++----------------------------|-----------------------------------------------------------------+
                              | Strands Agent (@task)
                              +-> query_knowledge_graph --+
                              +-> find_paths -------------+-> Neo4j graph (READ transactions)
@@ -30,14 +30,25 @@ Overview: [sjortiz.github.io/nexo](https://sjortiz.github.io/nexo/). Step by ste
                                                                 (opt-in traces)
 ```
 
-The router selects graph, vector or hybrid retrieval and applies document/date filters; clearance
-comes from the caller. The investigator follows relationships and reads source chunks. Compliance
-checks the draft and citations before the review policy decides whether to release it or pause for
-a person. Only an approved answer is released. MCP clients use the read tools directly.
-See the [request lifecycle](docs/architecture/request-lifecycle.md) and
-[glossary](docs/architecture/glossary.md).
+The router chooses graph, vector or hybrid retrieval and document/date filters; clearance comes
+from the caller. The investigator uses five read-only tools to follow relationships and read the
+source chunks. Ingestion stores graph evidence as `chunk_id` references to chunk text, upserting
+that text before replacing the source subgraph, then removing stale chunks.
 
-The LangGraph workflow, generated from the compiled graph with `nexo graph` (no services needed):
+Compliance checks the draft and its citations. Review policy and the checkpointed interrupt run
+inside `compliance`, not separate graph nodes. A human decision resumes compliance using the stored
+investigation result. Only approval releases an answer; refusal, failed/empty output and human
+rejection release none. `on-findings` is the default policy: a clean, grounded answer completes
+without a person. See the [request lifecycle](docs/architecture/request-lifecycle.md),
+[human review](docs/operations/human-review.md) and [glossary](docs/architecture/glossary.md).
+
+MCP clients call retrieval tools directly against the stores and can review paused threads; they
+do not run through the router or investigator. Telemetry goes through the collector to SigNoz by
+default; add-ons receive traces. GenAI content stripping and the separate sensitivity gate for
+question/answer logs are described in [Observability](docs/operations/observability.md).
+
+The LangGraph workflow, generated from the compiled graph with `nexo graph --output workflow.mmd`
+(no model or database services needed):
 
 ```mermaid
 ---
@@ -60,8 +71,6 @@ graph TD;
 	classDef first fill-opacity:0
 	classDef last fill:#bfb6fc
 ```
-
-Review and the checkpointed interrupt happen inside `compliance`; they are not separate graph nodes.
 
 | Module | Code (under `src/nexo/`) | Responsibility |
 | --- | --- | --- |
@@ -98,10 +107,10 @@ default. `nexo setup` resolves `nexo.lock` and renders `.nexo/render/`; edit the
 rendered files ([ADR-0016](docs/decisions/adr-0016-declarative-setup-file.md)). Settings and precedence:
 [Configuration](docs/operations/configuration.md).
 
-CLI results go to stdout as JSON; logs go to stderr with trace ids (`LOG_FORMAT=json` for log
-pipelines). `status: completed` means the thread ended, including rejection: read `approval_status`
-and `outcome`, such as `approved by system:auto`, `rejected by you@corp` or
-`rejected: no releasable output`.
+Investigation and ingestion results go to stdout as JSON; logs go to stderr with trace ids
+(`LOG_FORMAT=json` for log pipelines). `status: completed` means the thread ended, including
+rejection: read `approval_status` and `outcome`, such as `approved by system:auto`,
+`rejected by you@corp` or `rejected: no releasable output`.
 
 ### Review
 
@@ -180,7 +189,7 @@ roles are needed to enforce those restrictions. Details and limits:
 
 The default transport is stdio (stdout carries JSON-RPC). `nexo mcp --transport streamable-http`
 binds `127.0.0.1:8765` without authentication; use an authenticating proxy before exposing it.
-The CLI opens and closes its stores and runtime around the command; MCP keeps them open while serving.
+The CLI manages store and runtime lifetimes; server commands keep them open while serving.
 
 ## Run locally (macOS and Linux)
 
