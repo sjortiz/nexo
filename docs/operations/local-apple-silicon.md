@@ -73,8 +73,10 @@ Sizes are Ollama library download sizes; KV cache and the OS need the rest. `qwe
 (`EXTRACTION_REASONING_EFFORT=none`, ...) and leaves the agent's reasoning on. Inspect any profile with
 `python3 src/nexo/local_profiles.py plan m1-max-64 heavy`.
 
-Optional, in no tier: `gemma4:31b` (20 GB, dense, tools, thinking), set with `AGENT_MODEL` and
-`EXTRACTION_MODEL` in place of `qwen3.6:35b-a3b-q4_K_M` on a 64 GB Mac; reasoning goes off for its
+Optional, in no tier: `gemma4:31b` (20 GB, dense, tools, thinking). First run
+`ollama pull gemma4:31b` on the Mac serving agent/extraction; the profile setup does not pull it.
+Then set `AGENT_MODEL=gemma4:31b` and `EXTRACTION_MODEL=gemma4:31b`
+in place of `qwen3.6:35b-a3b-q4_K_M` on a 64 GB Mac; reasoning goes off for its
 JSON roles too. On the golden set (4 cases, M1 Max) it scored the same as `qwen3.6:35b-a3b-q4_K_M`
 with half the tool calls, at about 3× the time per question.
 
