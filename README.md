@@ -74,13 +74,13 @@ graph TD;
 
 | Module | Code (under `src/nexo/`) | Responsibility |
 | --- | --- | --- |
-| A. Storage | `storage/` | Chunking, sensitivity, triple extraction, ontology, entity resolution, graph and chunk stores. |
-| B. Investigator | `agents/` | Strands loop, five retrieval tools, evidence ledger, masking and budgets. |
-| C. Orchestration | `orchestration/` | Routing, checkpointed investigation, deterministic checks and review policy. |
-| Runtime and CLI | `service.py`, `cli.py`, `llm.py` | Resource lifetimes, model roles, ingest/ask/review/status and servers. |
-| MCP and review surfaces | `mcp_server.py`, `mcp_review.py`, `review_ui.py`, `review_inbox.py` | Retrieval, confirmed MCP reviews, demo page and Agent Inbox adapter. |
-| Setup | `setup/`, `config.py`, `secret_store.py`, `local_profiles.py` | Setup schema, lock/render/check/up, settings, secrets and hardware profiles. |
-| Telemetry and evaluation | `telemetry.py`, `logging_setup.py`, `evaluation.py` | OpenTelemetry, correlated logs and retrieval/generation/extraction scores. |
+| A. Storage | [`storage/`](src/nexo/storage/) | Chunking, sensitivity, triple extraction, ontology, entity resolution, graph and chunk stores. |
+| B. Investigator | [`agents/`](src/nexo/agents/) | Strands loop, five retrieval tools, evidence ledger, masking and budgets. |
+| C. Orchestration | [`orchestration/`](src/nexo/orchestration/) | Routing, checkpointed investigation, deterministic checks and review policy. |
+| Runtime and CLI | [`service.py`](src/nexo/service.py), [`cli.py`](src/nexo/cli.py), [`llm.py`](src/nexo/llm.py) | Resource lifetimes, model roles, ingest/ask/review/status and servers. |
+| MCP and review surfaces | [`mcp_server.py`](src/nexo/mcp_server.py), [`mcp_review.py`](src/nexo/mcp_review.py), [`review_ui.py`](src/nexo/review_ui.py), [`review_inbox.py`](src/nexo/review_inbox.py) | Retrieval, confirmed MCP reviews, demo page and Agent Inbox adapter. |
+| Setup | [`setup/`](src/nexo/setup/), [`config.py`](src/nexo/config.py), [`secret_store.py`](src/nexo/secret_store.py), [`local_profiles.py`](src/nexo/local_profiles.py) | Setup schema, lock/render/check/up, settings, secrets and hardware profiles. |
+| Telemetry and evaluation | [`telemetry.py`](src/nexo/telemetry.py), [`logging_setup.py`](src/nexo/logging_setup.py), [`evaluation.py`](src/nexo/evaluation.py) | OpenTelemetry, correlated logs and retrieval/generation/extraction scores. |
 
 Full documentation lives in [`docs/`](docs/index.md) as an [Open Knowledge Format](docs/references/open-knowledge-format.md)
 bundle: architecture, components, operations, decisions and references.
@@ -282,7 +282,8 @@ Separately, `spec.telemetry.content` (default `internal`) gates export of the qu
 answer, reviewer comment and routing reason by the highest sensitivity of chunks read and detector
 findings in that text. No detector (`SENSITIVE_DATA_PROVIDER=none`) or a failing detector withholds
 this content. Set `spec.telemetry.content` to `none` to disable these content records.
-Explicit GenAI content capture bypasses the gate. The `nexo.content` logger stays at INFO for OTLP;
+Explicit GenAI content capture bypasses the gate, and `spec.telemetry.queryText: true`
+(`TRACE_QUERY_TEXT=true`) records query text outside it. The `nexo.content` logger stays at INFO for OTLP;
 stderr still follows `LOG_LEVEL` and omits the text. `OTEL_CONSOLE_EXPORT=true` prints spans to
 stderr, including released content events. See
 [Observability](docs/operations/observability.md#question-and-answer-logs).
