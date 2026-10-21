@@ -77,7 +77,7 @@ graph TD;
 | A. Storage | [`storage/`](src/nexo/storage/) | Chunking, sensitivity, triple extraction, ontology, entity resolution, graph and chunk stores. |
 | B. Investigator | [`agents/`](src/nexo/agents/) | Strands loop, five retrieval tools, evidence ledger, masking and budgets. |
 | C. Orchestration | [`orchestration/`](src/nexo/orchestration/) | Routing, checkpointed investigation, deterministic checks and review policy. |
-| Runtime and CLI | [`service.py`](src/nexo/service.py), [`cli.py`](src/nexo/cli.py), [`llm.py`](src/nexo/llm.py) | Resource lifetimes, model roles, ingest/ask/review/status and servers. |
+| Runtime and CLI | [`service.py`](src/nexo/service.py), [`cli.py`](src/nexo/cli.py), [`llm.py`](src/nexo/llm.py), [`aio.py`](src/nexo/aio.py) | Resource lifetimes, model roles, ingest/ask/review/status, servers and sync-to-async bridging. |
 | MCP and review surfaces | [`mcp_server.py`](src/nexo/mcp_server.py), [`mcp_review.py`](src/nexo/mcp_review.py), [`review_ui.py`](src/nexo/review_ui.py), [`review_inbox.py`](src/nexo/review_inbox.py) | Retrieval, confirmed MCP reviews, demo page and Agent Inbox adapter. |
 | Setup | [`setup/`](src/nexo/setup/), [`config.py`](src/nexo/config.py), [`secret_store.py`](src/nexo/secret_store.py), [`local_profiles.py`](src/nexo/local_profiles.py) | Setup schema, lock/render/check/up, settings, secrets and hardware profiles. |
 | Telemetry and evaluation | [`telemetry.py`](src/nexo/telemetry.py), [`logging_setup.py`](src/nexo/logging_setup.py), [`evaluation.py`](src/nexo/evaluation.py) | OpenTelemetry, correlated logs and retrieval/generation/extraction scores. |
@@ -87,7 +87,17 @@ bundle: architecture, components, operations, decisions and references.
 
 ## Run
 
-From the checkout, with `uv`, a container engine (Podman or Docker) and model servers:
+From the checkout, with `uv`, a container engine (Podman or Docker) and model servers. Pick your path:
+
+| Machine | Preset | Guide |
+| --- | --- | --- |
+| Apple Silicon Mac, services in Podman | `mac-single` (`mac-two-machines` for two Macs) | [Local on Apple Silicon](docs/operations/local-apple-silicon.md) |
+| Apple Silicon Mac, no containers | `mac-native` | [Native path](docs/operations/local-apple-silicon.md#native-path) |
+| Linux, GPU or CPU, Ollama | `linux-gpu`, `linux-cpu`, `linux-native` | [Local on Linux](docs/operations/local-linux.md) |
+| Linux GPU server, vLLM (4x80 GB) | `linux-vllm` | below, and [Compose stack with vLLM](docs/operations/local-stack.md) |
+
+`make env PRESET=...` writes `nexo.yaml` with this machine's hardware profile; `make up` starts it;
+`make check` says what is missing. The GPU-server flow:
 
 ```bash
 uv sync                                      # Python 3.12 from .python-version; deps from uv.lock
@@ -103,7 +113,7 @@ nexo ask "How is Acme Holdings connected to Gamma Clinics?"
 For Ollama on a Mac or Linux, use a preset [below](#run-locally-macos-and-linux). For vLLM requirements
 and container CLI use, see [Compose stack with vLLM](docs/operations/local-stack.md).
 `make env` keeps an existing `nexo.yaml` and creates missing secrets in `~/.config/nexo/config` by
-default. `nexo setup` resolves `nexo.lock` and renders `.nexo/render/`; edit the setup file, not its
+default. `nexo config --explain` shows where each setting comes from. `nexo setup` resolves `nexo.lock` and renders `.nexo/render/`; edit the setup file, not its
 rendered files ([ADR-0016](docs/decisions/adr-0016-declarative-setup-file.md)). Settings and precedence:
 [Configuration](docs/operations/configuration.md).
 
@@ -173,8 +183,8 @@ example: `deploy/ontology.example.json`.
 
 ## Use from Claude Code (MCP)
 
-`nexo mcp` serves six read-only retrieval tools: index, hybrid search, chunks, entities, neighbors and
-Cypher. Three review tools are on by default; submitting a review requires the person to confirm a
+`nexo mcp` serves seven read-only retrieval tools: index, hybrid search, chunks, entities, neighbors,
+paths and Cypher. Three review tools are on by default; submitting a review requires the person to confirm a
 client elicitation form. Clients without forms are directed to the CLI. Set `MCP_REVIEW_TOOLS=false`
 for retrieval only. The repository ships `.mcp.json` and a `nexo-knowledge` skill:
 [Use from Claude Code](docs/operations/claude-code.md).
@@ -193,14 +203,19 @@ The CLI manages store and runtime lifetimes; server commands keep them open whil
 
 ## Run locally (macOS and Linux)
 
-Ollama runs natively; Neo4j, the collector and SigNoz run in containers. Set `spec.models.local.profile`
-in `nexo.yaml` to match the machine: for example `m1-max-64` / `m5-pro-24` on Apple Silicon,
-`gpu-24` (VRAM) or `cpu-64` (RAM) on Linux.
+Ollama runs natively; Neo4j, the collector and SigNoz run in containers, or with `target.mode: native`
+(`mac-native`, `linux-native`) as Homebrew or system services with no containers. `spec.models.local.profile`
+in `nexo.yaml` matches the machine: for example `m1-max-64` / `m5-pro-24` on Apple Silicon,
+`gpu-24` (VRAM) or `cpu-64` (RAM) on Linux. `make env` detects it; pass `PROFILE=` to override.
 
 ```bash
-make env PRESET=mac-single                   # or linux-cpu / linux-gpu; set the profile before up
+make env PRESET=mac-single                   # or linux-cpu / linux-gpu; PROFILE= overrides the detected one
 make up                                     # pull/start the profile's models and container services
 make check
+
+# One Mac, no containers: Homebrew's Neo4j, Ollama and Nexo from the .venv
+make env PRESET=mac-native && make neo4j-init && brew services start neo4j
+make up && make check
 ```
 
 For two Macs, the remote machine serves agent/extraction and this one serves router/embeddings/judge
@@ -214,7 +229,8 @@ make up
 make check
 ```
 
-Presets: `mac-single`, `mac-two-machines`, `linux-cpu`, `linux-gpu`, `linux-vllm`
+Presets: `mac-single`, `mac-two-machines`, `mac-native`, `linux-cpu`, `linux-gpu`, `linux-native`,
+`linux-vllm`
 ([`examples/setups/`](examples/setups/)). `docker-compose.yml` is generated from `mac-single`
 by `make compose-file`; prefer `make up` to supply secrets from the provider. Published ports are
 configurable through `spec.ports`; URLs here use the defaults.
@@ -226,6 +242,11 @@ Which preset, models and add-ons to pick, with memory per combination:
 [Local on Linux](docs/operations/local-linux.md) (the Nexo container uses host networking on Linux).
 Windows has no dedicated setup; see the [FAQ](docs/operations/faq.md) and
 [troubleshooting](docs/operations/troubleshooting.md).
+
+Neo4j 5.26 Community is the compose and CI default; chunk search uses the `db.index.*.queryNodes`
+procedures. Neo4j 2026.09+ Community is supported too (integration tests pass on 2026.09 and
+2026.10) and uses the `SEARCH` clause: [Chunk store](docs/components/chunk-store.md#neo4j-versions).
+`target.mode: native` is covered by tests, not yet run end to end.
 
 ## Test
 

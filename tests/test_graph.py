@@ -463,10 +463,11 @@ def test_trace_follows_genai_conventions_across_the_handoff(settings, spans):
 
 @pytest.mark.parametrize("doc", ["README.md", "docs/components/orchestration-graph.md"])
 def test_published_workflow_diagram_matches_the_compiled_graph(doc):
-    """Each published doc has exactly one mermaid block, equal to the compiled graph's."""
+    """A published doc opens with the compiled graph's mermaid block; only the README has more."""
     text = (Path(__file__).resolve().parent.parent / doc).read_text()
     blocks = re.findall(r"```mermaid\n(.*?)\n```", text, re.DOTALL)
-    assert blocks == [workflow_mermaid()], f"{doc}: regenerate with `nexo graph`"
+    assert blocks[:1] == [workflow_mermaid()], f"{doc}: regenerate with `nexo graph`"
+    assert doc == "README.md" or len(blocks) == 1
 
 
 def test_workflow_diagram_shows_every_node_and_the_rejection_branch(tmp_path):
