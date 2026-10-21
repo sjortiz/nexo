@@ -520,9 +520,7 @@ def preflight(
 MAC_METRICS_LABEL = "com.nexo.mac-metrics"
 
 
-def mac_metrics_finding(
-    host: Host, plist_dir: Path | None = None
-) -> Finding | None:
+def mac_metrics_finding(host: Host, plist_dir: Path | None = None) -> Finding | None:
     """Whether the macOS host metrics collector (make mac-metrics) runs; None if not installed."""
     plist_dir = plist_dir or Path.home() / "Library" / "LaunchAgents"
     if host.os != "macos" or not (plist_dir / f"{MAC_METRICS_LABEL}.plist").exists():
@@ -532,9 +530,12 @@ def mac_metrics_finding(
     return Finding(
         "mac metrics",
         running,
-        "native collector running"
-        if running
-        else "installed but not running: make mac-metrics (log in ~/.local/share/nexo/mac-metrics)",
+        (
+            "native collector running"
+            if running
+            else "installed but not running: make mac-metrics"
+            " (log in ~/.local/share/nexo/mac-metrics)"
+        ),
         advisory=True,
     )
 
