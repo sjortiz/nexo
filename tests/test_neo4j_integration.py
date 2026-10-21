@@ -413,9 +413,11 @@ def test_mcp_tools_against_a_real_graph(store, settings, chunk_store):
     ] == [("ACQUIRED", False, "Acme Holdings")]
     assert neighbors["withheld"] == 1  # Jane Roe is PHI
     hidden = call(server, "nexo_neighbors", {"entity_key": "Person:jane roe"})
-    assert hidden.is_error and "clearance" in hidden.content[0].text
-    unknown = data(call(server, "nexo_neighbors", {"entity_key": "X:none"}))
-    assert unknown["edges"] == [] and unknown["withheld"] == 0
+    unknown = call(server, "nexo_neighbors", {"entity_key": "Person:nobody"})
+    assert (
+        hidden.is_error and hidden.content == unknown.content
+    )  # Jane reads as unknown
+    assert "unknown entity key" in unknown.content[0].text
 
     rows = data(
         call(
