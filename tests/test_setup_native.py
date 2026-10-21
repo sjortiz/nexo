@@ -525,3 +525,14 @@ def test_setup_script_apply_sets_the_app_environment_and_a_login_agent(tmp_path)
     agent = tmp_path / "Library/LaunchAgents/dev.nexo.ollama-env.plist"
     assert "launchctl setenv OLLAMA_KV_CACHE_TYPE q8_0" in agent.read_text()
     assert "quit Ollama" in result.stdout and "NOT applied" not in result.stderr
+
+
+def test_mac_metrics_finding_reports_only_an_installed_collector(tmp_path, monkeypatch):
+    """No LaunchAgent: no line. Installed: ok when launchd runs it, an advisory FAIL if not."""
+    assert check.mac_metrics_finding(MAC, plist_dir=tmp_path) is None
+    (tmp_path / f"{check.MAC_METRICS_LABEL}.plist").write_text("<plist/>")
+    monkeypatch.setattr(check, "_run", lambda *a: "state = running")
+    assert check.mac_metrics_finding(MAC, plist_dir=tmp_path).ok
+    monkeypatch.setattr(check, "_run", lambda *a: "")
+    finding = check.mac_metrics_finding(MAC, plist_dir=tmp_path)
+    assert not finding.ok and finding.advisory and "make mac-metrics" in finding.detail

@@ -1,0 +1,41 @@
+# macOS host metrics add-on (make mac-metrics): a native collector on the Mac itself, because
+# the stack's collector runs in the Podman VM and sees the VM, not the Mac. It sends the Mac's
+# memory, swap, CPU, load and disks, and the Ollama processes' own CPU and memory, to the
+# stack's collector over OTLP. host.name matches the stack's (NEXO_HOST), so SigNoz shows one host.
+receivers:
+  hostmetrics:
+    collection_interval: 30s
+    scrapers:
+      cpu: {}
+      load: {}
+      memory: {}
+      paging: {}  # swap
+      disk: {}
+      filesystem:
+        include_mount_points: { mount_points: [/], match_type: strict }
+      process:
+        include: { names: ["ollama", "ollama runner"], match_type: regexp }
+        mute_process_name_error: true
+        mute_process_exe_error: true
+        mute_process_io_error: true
+        mute_process_user_error: true
+
+processors:
+  batch: {}
+  resource:
+    attributes:
+      - { key: host.name, value: "${env:NEXO_HOST}", action: upsert }
+      - { key: nexo.metrics.source, value: mac-native, action: upsert }
+
+exporters:
+  otlphttp:
+    endpoint: "http://127.0.0.1:${env:NEXO_OTLP_PORT}"
+
+service:
+  telemetry:
+    metrics: { level: none }
+  pipelines:
+    metrics:
+      receivers: [hostmetrics]
+      processors: [resource, batch]
+      exporters: [otlphttp]
