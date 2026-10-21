@@ -73,6 +73,9 @@ Return entity-relation-entity triples as JSON matching the schema.
 - Predicates are short, specific, directional verbs in UPPER_SNAKE_CASE, oriented head -> tail.
   Avoid vague predicates like RELATED_TO.{relation_rule}
 - Only facts the passage states. The preceding text is context only: never extract facts from it.
+- Former roles and past relationships count as much as current ones ("previously led product at
+  Delta Devices" is a Person-EMPLOYED_BY-Organization fact): extract them, with valid_at the date
+  they held when the passage gives one.
 - No separate entities for dates, amounts or quantities: put a date the fact holds in valid_at.
 - evidence: a verbatim quote (max ~200 characters) from the passage that states the fact.
 - certainty: "asserted", "possible" (hedged: may, suspected) or "negated" (ruled out, denied).
@@ -115,6 +118,17 @@ class IngestionReport(BaseModel):
 
 def _normalize(text: str) -> str:
     return " ".join(text.casefold().split())
+
+
+def _direction(kept: _Kept) -> tuple[str, str]:
+    """(head key, tail key) as the triple will be stored, after any ontology swap."""
+    head, tail = kept.triple.head.key, kept.triple.tail.key
+    return (tail, head) if kept.swap else (head, tail)
+
+
+def _pair(kept: _Kept) -> tuple:
+    """The chunk, canonical relation and unordered pair a triple is about."""
+    return (kept.chunk.chunk_id, kept.relation, frozenset(_direction(kept)))
 
 
 @dataclass(frozen=True)
@@ -370,7 +384,31 @@ class KnowledgeGraphIngestor:
                     counts.dropped["self_loop"] += 1
                 else:
                     kept.append(self._mapped(chunk, triple, counts.relations))
-        return kept
+        return self._consistent(kept, counts.dropped)
+
+    def _consistent(self, kept: list[_Kept], dropped: Counter[str]) -> list[_Kept]:
+        """Drop both sides when one chunk states a directional relation both ways.
+
+        A ACQUIRED B next to B ACQUIRED A from the same passage is an extraction
+        error, not two facts; neither direction is trusted. Relations the ontology
+        gives no inverse to (PARTNERS_WITH) read the same both ways and stay.
+        """
+        ontology = self._aids.ontology
+        ends: dict[tuple, set[tuple[str, str]]] = {}
+        for k in kept:
+            if ontology is not None and not ontology.directional(k.relation):
+                continue
+            ends.setdefault(_pair(k), set()).add(_direction(k))
+        contradictory = {pair for pair, seen in ends.items() if len(seen) > 1}
+        if not contradictory:
+            return kept
+        consistent = []
+        for k in kept:
+            if _pair(k) in contradictory:
+                dropped["contradictory_direction"] += 1
+            else:
+                consistent.append(k)
+        return consistent
 
     def _mapped(self, chunk: ChunkRecord, triple: Triple, stats: Counter[str]) -> _Kept:
         """The canonical relation and direction for a triple (unchanged without an ontology)."""

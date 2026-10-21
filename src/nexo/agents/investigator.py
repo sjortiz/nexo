@@ -19,6 +19,7 @@ from typing import Any
 
 import openai
 from neo4j.exceptions import ServiceUnavailable, SessionExpired
+from opentelemetry import trace
 from strands import Agent
 from strands.models import Model
 from strands.types.agent import Limits
@@ -239,7 +240,10 @@ class Investigator:
         # cost limits, so they get no follow-up.
         follow_up = _follow_up(answer, ctx)
         remaining = self._budget.timeout_s - (time.monotonic() - started)
-        if follow_up and stop_reason in ("end_turn", "limit_turns") and remaining > 5:
+        asked = bool(
+            follow_up and stop_reason in ("end_turn", "limit_turns") and remaining > 5
+        )
+        if asked:
             log.info("investigation %s: asking for %s", ctx.request_id, follow_up[0])
             try:
                 result = await asyncio.wait_for(
@@ -257,6 +261,14 @@ class Investigator:
                 log.warning(
                     "investigation %s: follow-up hit the token cap", ctx.request_id
                 )
+        # The SigNoz dashboard counts turn-limit hits, follow-ups and empty answers.
+        trace.get_current_span().set_attributes(
+            {
+                "nexo.investigation.stop_reason": stop_reason,
+                "nexo.investigation.follow_up": asked,
+                "nexo.investigation.answer_empty": not answer,
+            }
+        )
         return AgentOutput(
             answer=answer,
             citations=extract_citations(answer, ctx.evidence.fetched),

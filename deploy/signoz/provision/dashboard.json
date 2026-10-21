@@ -1,0 +1,282 @@
+{
+ "title": "Nexo",
+ "description": "Questions, model calls, tools, reviews and Neo4j for the Nexo stack (provisioned by nexo setup up).",
+ "tags": [
+  "nexo"
+ ],
+ "version": "v5",
+ "widgets": [
+  {
+   "id": "questions",
+   "title": "Questions and how they ended",
+   "description": "One row per kind of graph run: start or review, how it ended (completed / awaiting_review) and the approval (pending, approved, rejected, not_required for router refusals).",
+   "panelTypes": "table",
+   "query": {
+    "id": "questions",
+    "queryType": "clickhouse_sql",
+    "clickhouse_sql": [
+     {
+      "name": "A",
+      "legend": "",
+      "disabled": false,
+      "query": "SELECT attributes_string['nexo.operation'] AS operation, attributes_string['nexo.status'] AS status, attributes_string['nexo.approval_status'] AS approval, count() AS runs FROM signoz_traces.distributed_signoz_index_v3 WHERE name LIKE 'invoke_workflow%' AND timestamp BETWEEN {{.start_datetime}} AND {{.end_datetime}} GROUP BY operation, status, approval ORDER BY runs DESC"
+     }
+    ],
+    "builder": {
+     "queryData": [],
+     "queryFormulas": []
+    },
+    "promql": []
+   }
+  },
+  {
+   "id": "latency",
+   "title": "Question latency (p50, p95, seconds)",
+   "description": "End-to-end time of a question, from the router to the pause or the released answer.",
+   "panelTypes": "graph",
+   "query": {
+    "id": "latency",
+    "queryType": "clickhouse_sql",
+    "clickhouse_sql": [
+     {
+      "name": "A",
+      "legend": "{{q}}",
+      "disabled": false,
+      "query": "SELECT toStartOfInterval(timestamp, INTERVAL 5 MINUTE) AS ts, 'p50' AS q, quantile(0.5)(duration_nano)/1e9 AS value FROM signoz_traces.distributed_signoz_index_v3 WHERE name LIKE 'invoke_workflow%' AND attributes_string['nexo.operation'] = 'start' AND timestamp BETWEEN {{.start_datetime}} AND {{.end_datetime}} GROUP BY ts ORDER BY ts UNION ALL SELECT toStartOfInterval(timestamp, INTERVAL 5 MINUTE) AS ts, 'p95' AS q, quantile(0.95)(duration_nano)/1e9 AS value FROM signoz_traces.distributed_signoz_index_v3 WHERE name LIKE 'invoke_workflow%' AND attributes_string['nexo.operation'] = 'start' AND timestamp BETWEEN {{.start_datetime}} AND {{.end_datetime}} GROUP BY ts ORDER BY ts"
+     }
+    ],
+    "builder": {
+     "queryData": [],
+     "queryFormulas": []
+    },
+    "promql": []
+   }
+  },
+  {
+   "id": "steps",
+   "title": "Time per step",
+   "description": "Where the time goes. Model calls usually dominate; the node rows include everything inside them.",
+   "panelTypes": "table",
+   "query": {
+    "id": "steps",
+    "queryType": "clickhouse_sql",
+    "clickhouse_sql": [
+     {
+      "name": "A",
+      "legend": "",
+      "disabled": false,
+      "query": "SELECT multiIf(name LIKE 'langgraph.node%', name, name LIKE 'chat%', 'model call', name LIKE 'execute_tool%', 'tool call', name = 'agent_query', 'Neo4j query', name LIKE 'embeddings%', 'embedding', name) AS step, count() AS spans, round(avg(duration_nano)/1e9, 2) AS avg_s, round(quantile(0.95)(duration_nano)/1e9, 2) AS p95_s, round(sum(duration_nano)/1e9, 1) AS total_s FROM signoz_traces.distributed_signoz_index_v3 WHERE (name LIKE 'langgraph.node%' OR name LIKE 'chat%' OR name LIKE 'execute_tool%' OR name = 'agent_query' OR name LIKE 'embeddings%') AND timestamp BETWEEN {{.start_datetime}} AND {{.end_datetime}} GROUP BY step ORDER BY total_s DESC"
+     }
+    ],
+    "builder": {
+     "queryData": [],
+     "queryFormulas": []
+    },
+    "promql": []
+   }
+  },
+  {
+   "id": "model_calls",
+   "title": "Model calls per question",
+   "description": "Average model calls in one question's trace (router, agent turns, follow-up). Three or four is typical; much more means the agent loops.",
+   "panelTypes": "graph",
+   "query": {
+    "id": "model_calls",
+    "queryType": "clickhouse_sql",
+    "clickhouse_sql": [
+     {
+      "name": "A",
+      "legend": "{{q}}",
+      "disabled": false,
+      "query": "SELECT toStartOfInterval(min_ts, INTERVAL 5 MINUTE) AS ts, avg(calls) AS value FROM (SELECT trace_id, min(timestamp) AS min_ts, countIf(name LIKE 'chat%') AS calls FROM signoz_traces.distributed_signoz_index_v3 WHERE timestamp BETWEEN {{.start_datetime}} AND {{.end_datetime}} GROUP BY trace_id HAVING countIf(name LIKE 'invoke_workflow%' AND attributes_string['nexo.operation'] = 'start') > 0) GROUP BY ts ORDER BY ts"
+     }
+    ],
+    "builder": {
+     "queryData": [],
+     "queryFormulas": []
+    },
+    "promql": []
+   }
+  },
+  {
+   "id": "tokens",
+   "title": "Tokens per model",
+   "description": "Token use per model, which maps to a role (agent, extraction, router, judge). A growing average prompt means the agent's context keeps growing.",
+   "panelTypes": "table",
+   "query": {
+    "id": "tokens",
+    "queryType": "clickhouse_sql",
+    "clickhouse_sql": [
+     {
+      "name": "A",
+      "legend": "",
+      "disabled": false,
+      "query": "SELECT attributes_string['gen_ai.request.model'] AS model, count() AS calls, sum(toUInt64(attributes_number['gen_ai.usage.input_tokens'])) AS input_tokens, sum(toUInt64(attributes_number['gen_ai.usage.output_tokens'])) AS output_tokens, round(avg(attributes_number['gen_ai.usage.input_tokens'])) AS avg_prompt FROM signoz_traces.distributed_signoz_index_v3 WHERE name LIKE 'chat%' AND attributes_string['gen_ai.request.model'] != '' AND timestamp BETWEEN {{.start_datetime}} AND {{.end_datetime}} GROUP BY model ORDER BY input_tokens DESC"
+     }
+    ],
+    "builder": {
+     "queryData": [],
+     "queryFormulas": []
+    },
+    "promql": []
+   }
+  },
+  {
+   "id": "tools",
+   "title": "Tool calls and failures",
+   "description": "Every agent and MCP tool call. A failed call is a span with gen_ai.tool.status=error and an error.type (see Observability: failed tool calls).",
+   "panelTypes": "table",
+   "query": {
+    "id": "tools",
+    "queryType": "clickhouse_sql",
+    "clickhouse_sql": [
+     {
+      "name": "A",
+      "legend": "",
+      "disabled": false,
+      "query": "SELECT attributes_string['gen_ai.tool.name'] AS tool, count() AS calls, countIf(attributes_string['gen_ai.tool.status'] = 'error') AS failed, groupUniqArrayIf(attributes_string['error.type'], attributes_string['error.type'] != '') AS error_types FROM signoz_traces.distributed_signoz_index_v3 WHERE name LIKE 'execute_tool%' AND timestamp BETWEEN {{.start_datetime}} AND {{.end_datetime}} GROUP BY tool ORDER BY calls DESC"
+     }
+    ],
+    "builder": {
+     "queryData": [],
+     "queryFormulas": []
+    },
+    "promql": []
+   }
+  },
+  {
+   "id": "stops",
+   "title": "How investigations stopped",
+   "description": "limit_turns rows are turn-limit hits; max_tokens a reply cut by the token cap; follow_ups the extra call that asks for the answer or citations; empty_answers runs that released nothing.",
+   "panelTypes": "table",
+   "query": {
+    "id": "stops",
+    "queryType": "clickhouse_sql",
+    "clickhouse_sql": [
+     {
+      "name": "A",
+      "legend": "",
+      "disabled": false,
+      "query": "SELECT attributes_string['nexo.investigation.stop_reason'] AS stop_reason, countIf(attributes_bool['nexo.investigation.follow_up']) AS follow_ups, countIf(attributes_bool['nexo.investigation.answer_empty']) AS empty_answers, count() AS investigations FROM signoz_traces.distributed_signoz_index_v3 WHERE name = 'langgraph.node investigator' AND timestamp BETWEEN {{.start_datetime}} AND {{.end_datetime}} GROUP BY stop_reason ORDER BY investigations DESC"
+     }
+    ],
+    "builder": {
+     "queryData": [],
+     "queryFormulas": []
+    },
+    "promql": []
+   }
+  },
+  {
+   "id": "reviews",
+   "title": "Reviews",
+   "description": "Answers the review policy approved (system:auto) against those that waited; the Questions panel shows how the waiting ones were decided.",
+   "panelTypes": "table",
+   "query": {
+    "id": "reviews",
+    "queryType": "clickhouse_sql",
+    "clickhouse_sql": [
+     {
+      "name": "A",
+      "legend": "",
+      "disabled": false,
+      "query": "SELECT if(attributes_string['nexo.review.reviewer'] = '', 'waits for a person or auto-reject', attributes_string['nexo.review.reviewer']) AS reviewer, attributes_string['nexo.review.policy'] AS policy, count() AS answers FROM signoz_traces.distributed_signoz_index_v3 WHERE name = 'langgraph.node compliance' AND timestamp BETWEEN {{.start_datetime}} AND {{.end_datetime}} GROUP BY reviewer, policy ORDER BY answers DESC"
+     }
+    ],
+    "builder": {
+     "queryData": [],
+     "queryFormulas": []
+    },
+    "promql": []
+   }
+  },
+  {
+   "id": "neo4j",
+   "title": "Neo4j query time (p95, seconds)",
+   "description": "Graph store calls by kind (agent_query, replace_source, find_candidates, chunk store reads).",
+   "panelTypes": "graph",
+   "query": {
+    "id": "neo4j",
+    "queryType": "clickhouse_sql",
+    "clickhouse_sql": [
+     {
+      "name": "A",
+      "legend": "{{q}}",
+      "disabled": false,
+      "query": "SELECT toStartOfInterval(timestamp, INTERVAL 5 MINUTE) AS ts, attributes_string['db.query.summary'] AS q, quantile(0.95)(duration_nano)/1e9 AS value FROM signoz_traces.distributed_signoz_index_v3 WHERE attributes_string['db.system.name'] = 'neo4j' AND timestamp BETWEEN {{.start_datetime}} AND {{.end_datetime}} GROUP BY ts, q ORDER BY ts"
+     }
+    ],
+    "builder": {
+     "queryData": [],
+     "queryFormulas": []
+    },
+    "promql": []
+   }
+  }
+ ],
+ "layout": [
+  {
+   "i": "questions",
+   "x": 0,
+   "y": 0,
+   "w": 6,
+   "h": 6
+  },
+  {
+   "i": "latency",
+   "x": 6,
+   "y": 0,
+   "w": 6,
+   "h": 6
+  },
+  {
+   "i": "steps",
+   "x": 0,
+   "y": 6,
+   "w": 6,
+   "h": 6
+  },
+  {
+   "i": "model_calls",
+   "x": 6,
+   "y": 6,
+   "w": 6,
+   "h": 6
+  },
+  {
+   "i": "tokens",
+   "x": 0,
+   "y": 12,
+   "w": 6,
+   "h": 6
+  },
+  {
+   "i": "tools",
+   "x": 6,
+   "y": 12,
+   "w": 6,
+   "h": 6
+  },
+  {
+   "i": "stops",
+   "x": 0,
+   "y": 18,
+   "w": 6,
+   "h": 6
+  },
+  {
+   "i": "reviews",
+   "x": 6,
+   "y": 18,
+   "w": 6,
+   "h": 6
+  },
+  {
+   "i": "neo4j",
+   "x": 0,
+   "y": 24,
+   "w": 6,
+   "h": 6
+  }
+ ]
+}

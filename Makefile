@@ -50,6 +50,9 @@ install: ## Install Python, Nexo and the dev tools into .venv with uv (from uv.l
 install-notebook: ## Also install Jupyter, for the walkthrough notebook
 	uv sync --extra notebook
 
+install-formats: ## Also install MarkItDown, for nexo ingest of PDF, Word and HTML
+	uv sync --extra formats
+
 install-keychain: ## Also install keyring, for secrets.provider keychain (local machines)
 	uv sync --extra keychain
 
@@ -67,6 +70,12 @@ up: ## Start the models and the stack in nexo.yaml (one run: LANGFUSE=1 JAEGER=1
 
 down: ## Stop the stack (data volumes are kept)
 	$(NEXO_SETUP) down
+
+mac-metrics: ## macOS: run a native collector for the Mac's memory, swap and Ollama (OTLP_PORT=4318)
+	deploy/local/mac-metrics/install.sh $$(hostname -s) $(or $(OTLP_PORT),4318)
+
+mac-metrics-down: ## macOS: stop and remove the native host metrics collector
+	deploy/local/mac-metrics/install.sh --uninstall
 
 check: ## Preflight (engine, secrets, memory), then each model role's server and model
 	$(NEXO_SETUP) check $(ADDONS) $(if $(FORCE),--force)

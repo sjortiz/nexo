@@ -224,3 +224,17 @@ See [ADR-0012](../decisions/adr-0012-local-apple-silicon.md).
 [^adr-0020]: "ADR-0020: Native mode in the setup file"
 [^ollama]: Ollama
 [^live]: Live model checks
+
+# The Mac's own metrics
+
+The stack's collector runs in the Podman VM, so its host metrics describe the VM, not the Mac, and
+Ollama runs natively, outside every container. `make mac-metrics` installs a second, native collector
+(otelcol-contrib, pinned and checksum-verified) as a user LaunchAgent that starts at login. Every 30
+seconds it sends the Mac's memory, swap (`system.paging.*`), CPU, load and disk, and the `ollama`
+processes' own CPU and memory (`process.*`), to the stack's collector on `127.0.0.1:4318` (`OTLP_PORT=`
+for another port), with the same `host.name` as the stack, so SigNoz shows one host. Its series carry
+`nexo.metrics.source=mac-native`.
+
+`make check` reports it once installed (`mac metrics`: running, or how to restart it); its log is
+`~/.local/share/nexo/mac-metrics/otelcol.log`. `make mac-metrics-down` stops and removes it. Linux needs
+none of this: the stack's collector already sees the real host.

@@ -83,6 +83,7 @@ hosts ([Local on Apple Silicon](local-apple-silicon.md)).
 |---|---|---|
 | `VECTOR_STORE_PATH` | `.data/vector_store.json` | The local chunk store file (`CHUNK_STORE=local`), and what `nexo chunks import` copies into Neo4j by default. |
 | `RETRIEVAL_MODE` | `hybrid` | Seed search: `hybrid` (BM25 + vector, Reciprocal Rank Fusion), `vector` or `keyword` (BM25 only). |
+| `INGEST_CONVERTER` | `markitdown` | How `nexo ingest` turns `.pdf`, `.docx` and `.html` into Markdown: `markitdown` (extra `formats`: `make install-formats`) or `docling` (install `docling` separately). `.md` and `.txt` pass through. |
 | `CHUNK_SIZE` / `CHUNK_OVERLAP` | `1200` / `150` | Characters per chunk and overlap inside a section. |
 | `EXTRACTION_ATTEMPTS` | `3` | Validation retries per chunk. |
 | `EXTRACTION_CONCURRENCY` | `8` | Parallel extraction calls. |
@@ -131,6 +132,7 @@ hosts ([Local on Apple Silicon](local-apple-silicon.md)).
 | `REVIEW_POLICY` | `on-findings` | Which answers wait for a person (table below). `nexo.yaml` sets it (`spec.review`). See [Review policy](human-review.md#review-policy). |
 | `CHECKPOINT_SQLITE_PATH` | `<data dir>/<stack>/checkpoints.sqlite` | SQLite file for review checkpoints, shared by every checkout of the stack; the data dir is `NEXO_DATA_DIR`, `$XDG_DATA_HOME/nexo` or `~/.local/share/nexo`. |
 | `CHECKPOINT_POSTGRES_URI` | unset | Required for `postgres` (extra `postgres`). Secret. |
+| `DELETE_OPERATORS` | empty (nobody) | Comma-separated user ids (`NEXO_USER`, else the login name) allowed to run `nexo delete`. `nexo.yaml` sets it (`spec.admin.deleteOperators`). See [Deleting a source](delete.md). |
 
 | `REVIEW_POLICY` | Approved as `system:auto` | Waits for a person | Choose it for |
 |---|---|---|---|
@@ -153,6 +155,7 @@ No policy approves an answer with a `block` finding.
 
 | Variable | Default | Effect |
 |---|---|---|
+| `SIGNOZ_ALERT_WEBHOOK` | unset | Where the Nexo alerts are sent (a webhook URL, set in `.env`); unset, they only show in SigNoz. See [Dashboard and alerts](observability.md#dashboard-and-alerts). |
 | `OTEL_SERVICE_NAME` | `nexo` | `service.name` resource attribute. |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | unset | OTLP/HTTP base URL; unset disables export. |
 | `OTEL_CONSOLE_EXPORT` | `false` | Print spans to stderr, including the released question and answer (`nexo.content` events). |

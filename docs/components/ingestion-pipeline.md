@@ -15,6 +15,14 @@ sources:
     title: Ingestion tests
 ---
 
+# Formats
+
+`nexo ingest` reads Markdown and text as they are. PDF, Word (`.docx`) and HTML are converted to
+Markdown first: MarkItDown by default (`make install-formats`, the extra `nexo[formats]`), or Docling with
+`INGEST_CONVERTER=docling` when the `docling` package is installed. Both keep headings as `#` lines, so
+chunks still carry their section path; tables become Markdown tables, which the linter flattens. A file
+the converter cannot read, or a missing extra, stops the command with a message that says which.
+
 # Stages
 
 For one document, `KnowledgeGraphIngestor.ingest(text, metadata)`:[^ingest]

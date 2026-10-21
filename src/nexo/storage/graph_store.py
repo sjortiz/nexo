@@ -113,6 +113,13 @@ class QueryLimits:
     capture_text: bool = False
 
 
+class SourceRemoval(NamedTuple):
+    """What removing a document took out of the graph."""
+
+    chunks_removed: int
+    entities_touched: int
+
+
 class GraphStore:
     """Reads and writes the lexical and domain graph in Neo4j."""
 
@@ -225,6 +232,24 @@ class GraphStore:
         with self._span("replace_source"), self.session(write=True) as session:
             removed = session.execute_write(work)
         return SourceSwap(triples_written=len(triples), chunks_removed=removed)
+
+    @_connection_retry
+    def remove_source(self, source_id: str) -> SourceRemoval:
+        """Remove a document, its chunks and what only it supported, in one transaction.
+
+        The same detach `replace_source` runs first, with nothing written after it:
+        entities and edges other documents still support keep them, and their derived
+        properties (aliases, sensitivity rank, labels) are recomputed.
+        """
+
+        def work(tx: ManagedTransaction) -> tuple[int, int]:
+            affected, removed = _delete_source(tx, source_id)
+            _refresh_derived(tx, sorted(affected))
+            return removed, len(affected)
+
+        with self._span("remove_source"), self.session(write=True) as session:
+            removed, touched = session.execute_write(work)
+        return SourceRemoval(chunks_removed=removed, entities_touched=touched)
 
     @_connection_retry
     def find_candidates(
