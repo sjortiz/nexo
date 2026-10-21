@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import os
 from pathlib import Path
 from dataclasses import dataclass, field
@@ -17,6 +16,7 @@ from opentelemetry import trace
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+from strands.models.openai import OpenAIModel
 
 from nexo.config import Settings
 from nexo.llm import build_embeddings
@@ -125,8 +125,9 @@ def make_chunk(
 
 
 def model_text(result: dict[str, Any]) -> str:
-    """The text a tool result shows the model, as Strands' OpenAI provider writes it."""
-    return json.dumps(result["content"][0]["json"], ensure_ascii=False)
+    """The text a tool result shows the model, written by Strands' OpenAI provider."""
+    message = OpenAIModel.format_request_tool_message({"toolUseId": "t", **result})
+    return message["content"]
 
 
 def as_model_text(agent_tool: Any) -> Any:

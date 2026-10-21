@@ -45,7 +45,7 @@ never calls a tool.[^llm]
 |---|---|---|---|
 | Loop turns | `AGENT_MAX_TURNS` | 12 | `stop_reason: limit_turns` |
 | Cumulative tokens | `AGENT_MAX_TOTAL_TOKENS` | 120000 | `stop_reason: limit_total_tokens` |
-| Tool calls | `AGENT_MAX_TOOL_CALLS`, at most `AGENT_MAX_TURNS` - 1 | 11 | tools return a "budget exhausted" error, recorded as a failed call |
+| Tool calls | `AGENT_MAX_TOOL_CALLS`, at most `AGENT_MAX_TURNS` - 1 | 11 | tools return a "budget exhausted" error, recorded as a refused call (a `budget_exhausted` warning) |
 | Wall clock | `AGENT_TIMEOUT_S` | 300 | investigation recorded as failed |
 
 Every tool result reports `tool_calls_left`, and the tool budget stops one turn before the turn limit,

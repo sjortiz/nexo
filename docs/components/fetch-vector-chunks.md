@@ -15,7 +15,7 @@ sources:
 # Signature
 
 ```python
-fetch_vector_chunks(chunk_ids: list[str]) -> str  # JSON
+fetch_vector_chunks(chunk_ids: list[str]) -> ToolResult  # the model reads its content as JSON
 ```
 
 # Behavior

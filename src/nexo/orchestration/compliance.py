@@ -132,13 +132,23 @@ def run_compliance_checks(
                 detail=f"agent stopped on {output.stop_reason}; answer may be incomplete",
             )
         )
-    failed_tools = [c for c in output.tool_calls if not c.ok]
+    refused = [c for c in output.tool_calls if c.refused]
+    if refused:
+        add(
+            Finding(
+                code="budget_exhausted",
+                severity="warn",
+                detail=f"{len(refused)} tool call(s) refused after the budget was spent",
+            )
+        )
+    ran = [c for c in output.tool_calls if not c.refused]
+    failed_tools = [c for c in ran if not c.ok]
     if failed_tools:
         add(
             Finding(
                 code="tool_errors",
                 severity="warn",
-                detail=f"{len(failed_tools)} of {len(output.tool_calls)} tool calls failed",
+                detail=f"{len(failed_tools)} of {len(ran)} tool calls failed",
             )
         )
     if output.withheld_chunk_ids:

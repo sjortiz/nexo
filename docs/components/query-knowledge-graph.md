@@ -18,7 +18,7 @@ sources:
 # Signature
 
 ```python
-query_knowledge_graph(cypher_query: str) -> str  # JSON
+query_knowledge_graph(cypher_query: str) -> ToolResult  # the model reads its content as JSON
 ```
 
 # Behavior
@@ -51,6 +51,7 @@ and its `execute_tool` span is marked failed with an `error.type`
 | Syntax error, timeout, access-mode violation | `{"error": "<Neo4j message>", "code": "Neo.ClientError..."}` |
 | Neo4j unreachable after retries | `{"error": "knowledge graph unavailable; do not retry, report what you have"}` |
 | Budget used up | `{"error": "tool budget exhausted; write your answer from the evidence gathered"}` |
+| Too large even with every row dropped | `{"error": "result too large; return fewer or smaller properties"}` |
 
 # Limits
 

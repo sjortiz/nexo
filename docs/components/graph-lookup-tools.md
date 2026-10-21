@@ -18,8 +18,9 @@ sources:
 # Signature
 
 ```python
-find_paths(from_key: str, to_key: str, max_hops: int = 3, max_paths: int = 5) -> str  # JSON
-entity_neighbours(entity_key: str, limit: int = 25) -> str  # JSON
+find_paths(from_key: str, to_key: str, max_hops: int = 3, max_paths: int = 5) -> ToolResult
+entity_neighbours(entity_key: str, limit: int = 25) -> ToolResult
+# the model reads each result's content as JSON
 ```
 
 # Behavior
@@ -38,7 +39,8 @@ A path or edge touching anything above the caller's clearance is dropped and cou
 an edge without `sensitivity_rank` counts as PHI. An unknown key, or an entity above clearance,
 returns `unknown entity key`; an empty result hints at
 [search_chunks](search-chunks.md). Budget, Neo4j errors and `chunk_ids_found` work as in
-query_knowledge_graph.[^test-agent]
+query_knowledge_graph. An error (unknown key, same key twice, Neo4j failure) is a failed call with an
+`error.type` on its span ([Observability](../operations/observability.md#failed-tool-calls)).[^test-agent]
 
 [^tools]: Investigation tools
 [^test-agent]: Tool tests

@@ -60,8 +60,9 @@ Ingestion adds `ingest.document`, one `ingest.extract_triples` per chunk (each w
 # Failed tool calls
 
 A tool call that returns an error to the model (unknown entity key, Cypher syntax error, budget
-exhausted, store down) is a failed call: compliance counts it in `tool_errors`, and its
-`execute_tool` span has status Error, `gen_ai.tool.status=error` and an `error.type`:
+exhausted, store down) is a failed call: its `execute_tool` span has status Error,
+`gen_ai.tool.status=error` and an `error.type`. Compliance counts the calls that ran in `tool_errors`
+and calls refused for budget under `budget_exhausted`, so failed spans = `tool_errors` + refusals.
 
 | `error.type` | Cause |
 |---|---|
@@ -70,8 +71,9 @@ exhausted, store down) is a failed call: compliance counts it in `tool_errors`, 
 | `unsafe_cypher` | the read-only guard rejected the query |
 | `Neo.ClientError...` | the Neo4j error code (syntax error, timeout, access mode) |
 | `graph_unavailable` | Neo4j unreachable after retries |
-| `budget_exhausted` | the tool budget was used up |
-| exception class name | the chunk store failed (its exception is recorded on the span) |
+| `budget_exhausted` | the tool budget was used up (a refused call) |
+| `result_too_large` | the result did not fit `TOOL_RESULT_MAX_CHARS` even with every row dropped |
+| exception class name | the chunk store failed (its exception is recorded on the span), or a bug in the tool: the model gets a generic error, and the traceback goes to the log only |
 
 The span status description is Strands' generic "tool returned error status": the error text the
 model received is message content (a Cypher error can quote the query), so it stays off the tool

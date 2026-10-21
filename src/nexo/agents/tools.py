@@ -10,6 +10,7 @@ model as JSON errors it can act on. Only programming errors escape.
 from __future__ import annotations
 
 import json
+import logging
 import threading
 import time
 from collections.abc import Callable, Sequence
@@ -32,6 +33,8 @@ from nexo.storage.graph_store import (
 from nexo.storage.schemas import CHUNK_ID_RE, ChunkRecord, Sensitivity
 from nexo.storage.sensitive_data import NoopDetector
 from nexo.storage.vector_store import ChunkFilter
+
+log = logging.getLogger(__name__)
 
 
 class GraphReader(Protocol):  # pylint: disable=too-few-public-methods  # protocol
@@ -99,6 +102,11 @@ class InvestigationContext:
                 if existing.tool == _RESERVED:
                     self.calls[i] = summary
                     return
+            self.calls.append(summary)
+
+    def record_refused(self, summary: ToolCallSummary) -> None:
+        """Record a call refused because the budget was spent; it holds no slot."""
+        with self._lock:
             self.calls.append(summary)
 
     def completed_calls(self) -> list[ToolCallSummary]:
@@ -208,6 +216,8 @@ _BUDGET_EXHAUSTED = {
 
 _CHUNK_STORE_DOWN = {"error": "chunk store unavailable; report what you have"}
 
+_UNEXPECTED = {"error": "the tool failed unexpectedly; report what you have"}
+
 
 def _is_redacted(value: Any) -> bool:
     """True if value holds anything redact_above_clearance replaced."""
@@ -266,7 +276,11 @@ def _fit(payload: dict[str, Any], max_chars: int) -> dict[str, Any]:
             payload["omitted_for_size"] = payload.get("omitted_for_size", 0) + 1
             text = json.dumps(payload, default=str, ensure_ascii=False)
     if len(text) > max_chars:
-        return {"error": "result too large; return fewer or smaller properties"}
+        raise ToolFailure(
+            "result too large",
+            {"error": "result too large; return fewer or smaller properties"},
+            error_type="result_too_large",
+        )
     return json.loads(text)
 
 
@@ -289,24 +303,32 @@ class _Call:
     max_chars: int
     started: float = field(default_factory=time.perf_counter)
 
-    def finish(self, ok: bool, detail: str, payload: dict[str, Any]) -> dict[str, Any]:
-        """Record the call and return the payload as the model receives it.
+    def finish(self, payload: dict[str, Any], counted: str) -> dict[str, Any]:
+        """Record a successful call and return the payload as the model receives it.
 
-        The payload says how many tool calls remain, so the model can plan to answer
-        instead of running into the limit.
+        The audit detail counts the `counted` items actually sent. The payload says
+        how many tool calls remain, so the model can plan to answer in time.
         """
-        self.ctx.complete_call(_summary(self.name, self.started, ok, detail))
-        return _fit(
+        sent = _fit(
             {**payload, "tool_calls_left": self.ctx.calls_left()}, self.max_chars
         )
+        detail = f"{len(sent[counted])} {counted}"
+        self.ctx.complete_call(_summary(self.name, self.started, True, detail))
+        return sent
 
-    def reply(self, payload: dict[str, Any], detail: str) -> dict[str, Any]:
+    def reply(self, payload: dict[str, Any], counted: str) -> dict[str, Any]:
         """Record the chunk ids in a graph result as discovered, then finish."""
         found: set[str] = set()
         collect_chunk_ids(payload, found)
         self.ctx.record_discovered(found)
         trace.get_current_span().set_attribute("nexo.graph.chunk_ids_found", len(found))
-        return self.finish(True, detail, {**payload, "chunk_ids_found": sorted(found)})
+        return self.finish({**payload, "chunk_ids_found": sorted(found)}, counted)
+
+    def fail(self, failure: ToolFailure) -> dict[str, Any]:
+        """Record a failed call and return its (small, JSON-ready) error payload."""
+        trace.get_current_span().set_attribute("error.type", failure.error_type)
+        self.ctx.complete_call(_summary(self.name, self.started, False, failure.detail))
+        return {**failure.payload, "tool_calls_left": self.ctx.calls_left()}
 
 
 def _run_tool(
@@ -317,20 +339,28 @@ def _run_tool(
 ) -> ToolResult:
     """Reserve a call from the budget, run body and return what the model receives.
 
-    A ToolFailure is recorded as a failed call and returned with error status, so
+    Failures are recorded as failed calls and returned with error status, so
     Strands marks the `execute_tool` span and its tool metrics as failed.
     """
-    span = trace.get_current_span()  # Strands' `execute_tool <name>` span
-    call = _Call(ctx, name, max_chars)
+    started = time.perf_counter()
     if not ctx.reserve_call():
-        span.set_attribute("error.type", "budget_exhausted")
-        ctx.complete_call(_summary(name, call.started, False, "budget exhausted"))
+        trace.get_current_span().set_attribute("error.type", "budget_exhausted")
+        ctx.record_refused(
+            _summary(name, started, False, "budget exhausted", refused=True)
+        )
         return _result("error", _BUDGET_EXHAUSTED)
+    call = _Call(ctx, name, max_chars, started)
     try:
         return _result("success", body(call))
     except ToolFailure as failure:
-        span.set_attribute("error.type", failure.error_type)
-        return _result("error", call.finish(False, failure.detail, failure.payload))
+        return _result("error", call.fail(failure))
+    # A bug, not an expected failure: neither the model nor the span gets its text.
+    except Exception as exc:  # pylint: disable=broad-exception-caught
+        log.exception("tool %s failed", name)
+        failure = ToolFailure(
+            "unexpected error", _UNEXPECTED, error_type=type(exc).__name__
+        )
+        return _result("error", call.fail(failure))
 
 
 def _result(status: str, payload: dict[str, Any]) -> ToolResult:
@@ -438,7 +468,7 @@ def _query_tool(
                 payload["hint"] = (
                     "no rows: try another name or alias, or search_chunks for the text"
                 )
-            return call.reply(payload, f"{len(rows)} rows")
+            return call.reply(payload, "rows")
 
         return _run_tool(
             ctx, "query_knowledge_graph", settings.tool_result_max_chars, run
@@ -488,7 +518,7 @@ def _lookup_tools(
             payload = visible_paths(result.rows, clearance.rank)
             if not payload["paths"]:
                 payload["hint"] = "no path in the graph: search_chunks for the text"
-            return call.reply(payload, f"{payload['path_count']} paths")
+            return call.reply(payload, "paths")
 
         return _run_tool(ctx, "find_paths", max_chars, run)
 
@@ -515,7 +545,7 @@ def _lookup_tools(
                 raise ToolFailure("unknown key", _UNKNOWN_KEY, error_type="unknown_key")
             if not payload["edges"]:
                 payload["hint"] = "no edges in the graph: search_chunks for the text"
-            return call.reply(payload, f"{payload['edge_count']} edges")
+            return call.reply(payload, "edges")
 
         return _run_tool(ctx, "entity_neighbours", max_chars, run)
 
@@ -557,8 +587,6 @@ def _fetch_tool(
             returned = [_chunk_view(shown) for _, shown in views if shown]
             redacted = sum(shown.text != r.text for r, shown in views if shown)
             sent = call.finish(
-                True,
-                f"{len(returned)} chunks",
                 {
                     "chunks": returned,
                     "withheld": withheld,
@@ -566,9 +594,10 @@ def _fetch_tool(
                     "invalid_ids": [c for c in requested if c not in well_formed],
                     "over_limit_not_fetched": well_formed[len(valid) :],
                 },
+                "chunks",
             )
             # Only text the model actually received counts as evidence.
-            received = [c["chunk_id"] for c in sent.get("chunks", [])]
+            received = [c["chunk_id"] for c in sent["chunks"]]
             ctx.record_fetched({c: sensitivity[c] for c in received}, withheld)
             trace.get_current_span().set_attributes(
                 {
@@ -618,12 +647,11 @@ def _search_tool(
             except Exception as exc:  # pylint: disable=broad-exception-caught
                 raise _chunk_store_failure(exc) from exc
             sent = call.finish(
-                True,
-                f"{len(allowed)} chunks",
                 {"query": query, "chunks": [_chunk_view(r) for r in allowed]},
+                "chunks",
             )
             sensitivity = {r.chunk_id: r.sensitivity.value for r in allowed}
-            received = [c["chunk_id"] for c in sent.get("chunks", [])]
+            received = [c["chunk_id"] for c in sent["chunks"]]
             ctx.record_fetched({c: sensitivity[c] for c in received}, [])
             trace.get_current_span().set_attributes(
                 {"nexo.chunks.requested": limit, "nexo.chunks.returned": len(received)}
@@ -646,11 +674,14 @@ def _chunk_view(record: ChunkRecord) -> dict[str, Any]:
     }
 
 
-def _summary(name: str, started: float, ok: bool, detail: str) -> ToolCallSummary:
+def _summary(
+    name: str, started: float, ok: bool, detail: str, *, refused: bool = False
+) -> ToolCallSummary:
     """The audit record of one tool call."""
     return ToolCallSummary(
         tool=name,
         ok=ok,
+        refused=refused,
         detail=detail[:200],
         duration_ms=round((time.perf_counter() - started) * 1000, 1),
     )

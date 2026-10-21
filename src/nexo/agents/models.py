@@ -23,6 +23,7 @@ class ToolCallSummary(BaseModel):
 
     tool: str
     ok: bool
+    refused: bool = False  # asked for after the tool budget was spent
     detail: str = ""
     duration_ms: float = 0.0
 
