@@ -629,7 +629,7 @@ def test_find_paths_withholds_paths_through_anything_above_clearance(
     graph, server = paths_server(
         settings,
         chunk_store,
-        ends((A, 1), (C, None)),
+        ends((A, 1), (C, 1)),
         [
             {"nodes": [_node(A), _node(C)], "hops": [_hop(A, C, P1)]},
             {
@@ -664,7 +664,9 @@ def test_find_paths_hides_unknown_and_restricted_keys(settings, chunk_store):
     """A missing key and a key above clearance get the same error; no path query runs."""
     path = [{"nodes": [_node(A), _node(C)], "hops": [_hop(A, C, P1)]}]
     errors = []
-    for endpoints in (ends((A, 1)), ends((A, 1), (C, 3)), ends((A, 3), (C, 0))):
+    # An unranked entity (rank projected as null) counts as phi, like an unranked edge.
+    hidden = (ends((A, 1), (C, 3)), ends((A, 3), (C, 0)), ends((A, 1), (C, None)))
+    for endpoints in (ends((A, 1)), *hidden):
         graph, server = paths_server(settings, chunk_store, endpoints, path)
         result = call(server, "nexo_find_paths", {"from_key": A, "to_key": C})
         assert result.is_error and len(graph.calls) == 1

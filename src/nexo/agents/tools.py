@@ -131,10 +131,11 @@ def _rank(value: dict[str, Any]) -> int:
     """The map's sensitivity rank; a level that cannot be read counts as phi.
 
     Entities and edges carry `sensitivity_rank`, chunks and documents a
-    `sensitivity` level. MENTIONED_IN maps (a verbatim `surface`) carry neither,
-    so they count as phi.
+    `sensitivity` level. A rank projected but never set (null) and MENTIONED_IN
+    maps (a verbatim `surface`, no rank) count as phi.
     """
-    rank = int(value.get("sensitivity_rank", 0) or 0)
+    rank = value.get("sensitivity_rank", 0)
+    rank = _UNKNOWN_RANK if rank is None else int(rank)
     level = value.get("sensitivity")
     if level is not None:
         try:
