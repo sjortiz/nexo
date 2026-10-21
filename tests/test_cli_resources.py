@@ -92,3 +92,44 @@ def test_serve_stops_quietly_on_ctrl_c_and_closes_the_socket():
 def test_clearance_choices_follow_sensitivity():
     """The CLI offers exactly the sensitivity levels, least sensitive first."""
     assert cli.CLEARANCES == ["public", "internal", "pii", "phi"]
+
+
+class _FailingInvestigator(_Investigator):  # pylint: disable=too-few-public-methods
+    """Raises on the second question, like an agent hitting a hard limit."""
+
+    def investigate(self, question, *, scope) -> AgentOutput:
+        if len(self.scopes) == 1:
+            self.scopes.append(scope)
+            raise RuntimeError("agent exhausted")
+        return super().investigate(question, scope=scope)
+
+
+def test_eval_records_a_failed_case_and_scores_the_rest(monkeypatch, tmp_path, capsys):
+    """One raising case gives an error row and a non-zero exit; the others are still scored."""
+    graph, investigator = _Graph(), _FailingInvestigator()
+    settings = Settings(_env_file=None).model_copy(update={"judge_model": None})
+    monkeypatch.setattr(cli, "get_settings", lambda: settings)
+    monkeypatch.setattr(cli, "setup_telemetry", lambda s: None)
+    monkeypatch.setattr(
+        cli.GraphStore, "from_settings", classmethod(lambda cls, s, read_only: graph)
+    )
+    monkeypatch.setattr(cli, "chunk_store_from_settings", lambda s, g: None)
+    monkeypatch.setattr(cli, "build_investigator", lambda s, g, c: investigator)
+    dataset = tmp_path / "golden.jsonl"
+    cases = [
+        {"question": q, "relevant_chunk_ids": ["chk_a"]} for q in ("a?", "b?", "c?")
+    ]
+    dataset.write_text("\n".join(json.dumps(c) for c in cases), encoding="utf-8")
+
+    try:
+        assert cli.main(["eval", str(dataset)]) == 1
+    finally:
+        logging.getLogger().handlers.clear()
+
+    rows = [json.loads(r) for r in capsys.readouterr().out.splitlines()]
+    assert [r["question"] for r in rows] == ["a?", "b?", "c?"]
+    assert rows[1] == {"question": "b?", "error": "RuntimeError"}
+    assert (
+        rows[0]["retrieval.context_precision"] == rows[2]["retrieval.context_precision"]
+    )
+    assert graph.closed

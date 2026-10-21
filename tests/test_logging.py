@@ -7,12 +7,14 @@ import logging
 import sys
 
 import pytest
+from opentelemetry.trace import StatusCode
 from opentelemetry.sdk._logs import LoggerProvider
 from opentelemetry.sdk._logs.export import (
     InMemoryLogRecordExporter,
     SimpleLogRecordProcessor,
 )
 
+from nexo import telemetry
 from nexo.logging_setup import (
     JsonFormatter,
     TextFormatter,
@@ -143,3 +145,22 @@ def test_configure_logging_keeps_the_otlp_handler(settings):
         assert otlp in root.handlers and len(root.handlers) == 2
     finally:
         root.handlers[:], _ = saved[0], root.setLevel(saved[1])
+
+
+@pytest.mark.parametrize("capture", [False, True])
+def test_span_exceptions_carry_the_type_and_the_message_only_when_captured(
+    spans, monkeypatch, capture
+):
+    """A failing span is ERROR with error.type; the text (it can quote a query) needs capture."""
+    monkeypatch.setattr(telemetry, "_CAPTURE_EXCEPTIONS", capture)
+    with pytest.raises(ValueError):
+        with telemetry.traced_span("agent_query"):
+            raise ValueError("MATCH (n {secret: 'JaneRoe-SSN-123'}) RETRN n")
+    (span,) = spans.get_finished_spans()
+    assert span.status.status_code == StatusCode.ERROR
+    assert span.status.description == "ValueError"
+    assert span.attributes["error.type"] == "ValueError"
+    leaked = "JaneRoe" in json.dumps(
+        [dict(span.attributes), [dict(e.attributes) for e in span.events]]
+    )
+    assert leaked is capture

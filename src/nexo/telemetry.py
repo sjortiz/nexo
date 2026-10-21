@@ -134,6 +134,8 @@ def apply_genai_env(settings: Settings) -> None:
 
 def setup_telemetry(settings: Settings) -> TracerProvider:
     """Install the process-wide providers and instrumentation once (idempotent)."""
+    global _CAPTURE_EXCEPTIONS  # pylint: disable=global-statement
+    _CAPTURE_EXCEPTIONS = settings.capture_content
     with _setup_lock:
         if "providers" in _INSTALLED:
             return _INSTALLED["providers"][0]
@@ -217,15 +219,49 @@ def get_tracer() -> trace.Tracer:
     return trace.get_tracer(TRACER_NAME)
 
 
+_CAPTURE_EXCEPTIONS = False  # setup_telemetry sets it from the content-capture flag
+
+
+def record_exception(
+    exc: BaseException, span: Span | None = None, *, message: bool = False
+) -> None:
+    """Mark the span failed by exception type; the message only when content capture is on.
+
+    A Neo4j error quotes the query line, a chunk store error may quote a path: both
+    are content ([ADR-0009](../../docs/decisions/adr-0009-opentelemetry-genai-conventions.md)).
+    """
+    span = span or trace.get_current_span()
+    name = type(exc).__name__
+    span.set_attribute("error.type", name)
+    span.set_status(trace.Status(trace.StatusCode.ERROR, name))
+    if message or _CAPTURE_EXCEPTIONS:
+        span.record_exception(exc)
+
+
 @contextmanager
 def traced_span(
     name: str, attributes: Mapping[str, Any] | None = None, **kwargs: Any
 ) -> Iterator[Span]:
-    """Start a current span; exceptions are recorded and set ERROR status."""
+    """Start a current span; an exception sets ERROR status with its type (see record_exception).
+
+    `set_status_on_exception=False` leaves the span unmarked, as for a review pause;
+    `record_exception=True` records the message whatever the capture flag.
+    """
+    message = kwargs.pop("record_exception", False)
+    mark = kwargs.pop("set_status_on_exception", True)
     with get_tracer().start_as_current_span(
-        name, attributes=clean_attributes(attributes or {}), **kwargs
+        name,
+        attributes=clean_attributes(attributes or {}),
+        record_exception=False,
+        set_status_on_exception=False,
+        **kwargs,
     ) as span:
-        yield span
+        try:
+            yield span
+        except Exception as exc:
+            if mark:
+                record_exception(exc, span, message=message)
+            raise
 
 
 def caller_attributes(settings: Settings, user: str | None = None) -> dict[str, str]:

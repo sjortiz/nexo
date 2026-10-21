@@ -155,8 +155,8 @@ def test_find_paths_withholds_paths_through_anything_above_clearance(
     assert ctx.calls[0].ok
     assert "hint" not in out and out["tool_calls_left"] == 9
     # Keys travel as parameters; hop and path counts are clamped before inlining.
-    assert graph.parameters == [{"from_key": a, "to_key": c}]
-    assert "SHORTEST 1 " in graph.queries[0] and "{1,4}" in graph.queries[0]
+    assert graph.parameters[-1] == {"from_key": a, "to_key": c}
+    assert "SHORTEST 1 " in graph.queries[-1] and "{1,4}" in graph.queries[-1]
 
 
 def test_find_paths_reports_unknown_keys_no_path_and_same_entity(settings, chunk_store):
@@ -170,7 +170,7 @@ def test_find_paths_reports_unknown_keys_no_path_and_same_entity(settings, chunk
     graph = FakeGraph(rows=[{"nodes": None, "hops": None}])  # both exist, no path
     _, tools = _named_tools(settings, graph, chunk_store)
     out = json.loads(tools["find_paths"]("X:a", "X:b", max_hops=0))
-    assert out["paths"] == [] and out["withheld"] == 0 and "{1,1}" in graph.queries[0]
+    assert out["paths"] == [] and out["withheld"] == 0 and "{1,1}" in graph.queries[-1]
     assert out["hint"] == "no path in the graph: search_chunks for the text"
 
     graph = FakeGraph(
@@ -185,6 +185,40 @@ def test_find_paths_reports_unknown_keys_no_path_and_same_entity(settings, chunk
     _, tools = _named_tools(settings, graph, chunk_store)
     assert "same entity" in json.loads(tools["find_paths"]("X:a", "X:a"))["error"]
     assert not graph.queries
+
+
+def test_find_paths_reads_a_hidden_endpoint_as_unknown(settings, chunk_store):
+    """A PHI endpoint and a missing one get the same reply, before any path query runs."""
+    rows = [{"nodes": [_node("X:a"), _node("X:b")], "hops": [_hop("X:a", "X:b", C1)]}]
+    hidden = FakeGraph(rows=rows, endpoints={"X:b": 3})
+    _, tools = _named_tools(settings, hidden, chunk_store)
+    hidden_out = json.loads(tools["find_paths"]("X:a", "X:b"))
+    missing = FakeGraph(rows=rows, endpoints={"X:b": -1})  # the lookup finds no X:b
+    _, tools = _named_tools(settings, missing, chunk_store)
+    assert hidden_out == json.loads(tools["find_paths"]("X:a", "X:b"))
+    assert "unknown entity key" in hidden_out["error"]
+    assert len(hidden.queries) == len(missing.queries) == 1  # the endpoint lookup only
+    # Visible endpoints go on to the path query.
+    shown = FakeGraph(rows=rows)
+    _, tools = _named_tools(settings, shown, chunk_store)
+    assert json.loads(tools["find_paths"]("X:a", "X:b"))["path_count"] == 1
+    assert (
+        len(shown.queries) == 2
+        and "collect(e {.key, .sensitivity_rank})" in shown.queries[0]
+    )
+
+
+def test_a_reply_that_hits_the_token_cap_is_no_answer(settings, chunk_store):
+    """MaxTokensReachedException ends the run with no answer and no follow-up."""
+    client = ScriptedClient([_completion({"content": "Acme acquired"}, "length")])
+    output = Investigator(
+        model=OpenAIModel(client=client, model_id="m", stream=False),
+        graph=FakeGraph(),
+        chunks=chunk_store,
+        settings=settings,
+    ).investigate("q", scope=InvestigationScope(strategy="hybrid"))
+    assert output.answer == "" and output.stop_reason == "max_tokens"
+    assert len(client.requests) == 1
 
 
 def test_entity_neighbours_hides_entities_and_edges_above_clearance(

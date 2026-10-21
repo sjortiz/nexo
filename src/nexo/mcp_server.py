@@ -30,10 +30,12 @@ from pydantic import BaseModel, Field
 
 from nexo.agents.redaction import ChunkRedactor
 from nexo.agents.tools import (
+    _ENDPOINTS,
     _NEIGHBOURS,
     _PATHS,
     _UNKNOWN_RANK,
     collect_chunk_ids,
+    endpoints_visible,
     redact_above_clearance,
     visible_neighbours,
     visible_paths,
@@ -65,9 +67,15 @@ Graph rows are pointers: read the text with nexo_get_chunks before stating a fac
 # The same for a key above clearance, so a caller cannot learn the entity exists.
 _UNKNOWN_KEY = "unknown entity key; look it up with nexo_find_entities"
 
-# Both ends of nexo_find_paths, so an unknown or hidden key never reaches the path query.
-_ENDPOINTS = (
-    "MATCH (e:Entity) WHERE e.key IN $keys RETURN e {.key, .sensitivity_rank} AS entity"
+# Optional document properties are read through properties(d) so Neo4j logs no
+# "property does not exist" warning on a corpus that never set them.
+_INDEX_DOCUMENTS = (
+    "MATCH (d:Document) OPTIONAL MATCH (c:Chunk)-[:PART_OF]->(d) "
+    "RETURN d.source_id AS source_id, properties(d)['title'] AS title, "
+    "properties(d)['doc_type'] AS doc_type, "
+    "properties(d)['effective_date'] AS effective_date, d.sensitivity AS sensitivity, "
+    "count(c) AS chunks "
+    "ORDER BY source_id"
 )
 
 
@@ -150,13 +158,7 @@ def build_mcp_server(  # pylint: disable=too-many-locals,too-many-statements  # 
         with traced_span(
             "execute_tool nexo_index", {"gen_ai.tool.name": "nexo_index", **caller}
         ):
-            documents = read(
-                "MATCH (d:Document) OPTIONAL MATCH (c:Chunk)-[:PART_OF]->(d) "
-                "RETURN d.source_id AS source_id, d.title AS title, d.doc_type AS doc_type, "
-                "d.effective_date AS effective_date, d.sensitivity AS sensitivity, "
-                "count(c) AS chunks "
-                "ORDER BY source_id"
-            )
+            documents = read(_INDEX_DOCUMENTS)
             visible = [
                 row
                 for row in documents.rows
@@ -351,14 +353,10 @@ def build_mcp_server(  # pylint: disable=too-many-locals,too-many-statements  # 
             {"gen_ai.tool.name": "nexo_find_paths", **caller},
         ):
             keys = [from_key, to_key]
-            ends = redact_above_clearance(
-                read(_ENDPOINTS, {"keys": keys}).rows, clearance.rank
-            )
             # Above clearance reads as unknown so the entity's existence stays hidden.
-            visible = {
-                row["entity"]["key"] for row in ends if "redacted" not in row["entity"]
-            }
-            if not all(k in visible for k in keys):
+            if not endpoints_visible(
+                read(_ENDPOINTS, {"keys": keys}).rows, keys, clearance.rank
+            ):
                 raise ToolError(_UNKNOWN_KEY)
             # max_hops and max_paths are validated ints, safe to inline.
             result = read(

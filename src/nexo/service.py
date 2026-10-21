@@ -164,26 +164,45 @@ class Runtime:
         # SQLite and Postgres list newest first across threads; the in-memory saver does not.
         ordered = not isinstance(saver, InMemorySaver)
         seen: set[str] = set()
-        found: list[tuple[str, str]] = []  # (checkpoint timestamp, thread id)
-        for item in saver.list(None):
-            thread_id = item.config["configurable"]["thread_id"]
-            if item.config["configurable"].get("checkpoint_ns") or thread_id in seen:
-                continue
-            seen.add(thread_id)
-            if any(
-                channel == _INTERRUPT_CHANNEL
-                for _, channel, _ in item.pending_writes or []
-            ):
-                found.append((item.checkpoint["ts"], thread_id))
-                if ordered and len(found) >= limit:
-                    break
-        found.sort(reverse=True)
-        results = []
-        for _, thread_id in found:
-            pending = self._pending(thread_id)
-            if pending is not None:  # the packet is the source of truth, not the scan
-                results.append(self._result(thread_id, pending))
-        return results[:limit]
+        found: list[tuple[str, str, ReviewPacket]] = []  # (ts, thread, packet)
+        before = None
+        while len(found) < limit:
+            # Scan for paused threads first and validate their packets after: the
+            # saver holds its connection lock while listing, so get_state cannot run
+            # inside the loop. An ordered saver is read a page at a time.
+            candidates: list[tuple[str, str]] = []
+            last = None
+            more = False
+            for item in saver.list(None, before=before):
+                last = item.config
+                thread_id = item.config["configurable"]["thread_id"]
+                if (
+                    item.config["configurable"].get("checkpoint_ns")
+                    or thread_id in seen
+                ):
+                    continue
+                seen.add(thread_id)
+                if any(
+                    channel == _INTERRUPT_CHANNEL
+                    for _, channel, _ in item.pending_writes or []
+                ):
+                    candidates.append((item.checkpoint["ts"], thread_id))
+                    if ordered and len(candidates) >= limit - len(found):
+                        more = True
+                        break
+            for ts, thread_id in candidates:
+                # The packet is the source of truth, not the scan: a thread whose
+                # interrupt is not a review packet takes no slot from the limit.
+                pending = self._pending(thread_id)
+                if pending is not None:
+                    found.append((ts, thread_id, pending))
+            if not more or last is None:
+                break
+            before = last
+        found.sort(key=lambda f: f[:2], reverse=True)
+        return [
+            self._result(thread_id, pending) for _, thread_id, pending in found[:limit]
+        ]
 
     def review_passages(
         self, thread_id: str, clearance: Sensitivity | str

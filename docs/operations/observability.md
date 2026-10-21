@@ -76,7 +76,7 @@ and calls refused for budget under `budget_exhausted`, so failed spans = `tool_e
 | `graph_unavailable` | Neo4j unreachable after retries |
 | `budget_exhausted` | the tool budget was used up (a refused call) |
 | `result_too_large` | the result did not fit `TOOL_RESULT_MAX_CHARS` even with every row dropped |
-| exception class name | the chunk store failed (its exception is recorded on the span), or a bug in the tool: the model gets a generic error, and the traceback goes to the log only |
+| exception class name | the chunk store failed, or a bug in the tool: the model gets a generic error, and the traceback goes to the log only |
 
 The span status description is Strands' generic "tool returned error status": the error text the
 model received is message content (a Cypher error can quote the query), so it stays off the tool
@@ -86,6 +86,17 @@ In SigNoz, Traces Explorer: filter `name LIKE 'execute_tool %'` and `hasError = 
 `gen_ai.tool.status = error`), group by `error.type`. Strands' tool metrics agree with the spans:
 `strands.tool.error_count` (by `tool_name`) counts the same calls, so a dashboard panel can chart
 either.
+
+## Failed query and store spans
+
+A span that ends in an exception (`agent_query`, a chunk store read, any `traced_span`) is `ERROR`
+with `error.type` set to the exception class and the class name as its status description, and
+nothing else: a Neo4j error quotes the offending query line, literals included, and a store error
+can quote a path, so the message and the `exception` event are recorded only when
+`OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT` is `span_only` or `span_and_event`
+([ADR-0009](../decisions/adr-0009-opentelemetry-genai-conventions.md)). The full text is still in
+the process log at `ERROR` level.
+
 
 # Metrics
 

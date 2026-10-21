@@ -148,6 +148,8 @@ class FakeGraph:
 
     rows: list[dict[str, Any]] = field(default_factory=list)
     error: Exception | None = None
+    # Ranks the path endpoint lookup reports per key; keys left out are rank 1.
+    endpoints: dict[str, int | None] = field(default_factory=dict)
     queries: list[str] = field(default_factory=list, init=False)
     parameters: list[dict[str, Any] | None] = field(default_factory=list, init=False)
 
@@ -159,6 +161,13 @@ class FakeGraph:
         self.parameters.append(parameters)
         if self.error:
             raise self.error
+        if "collect(e {.key, .sensitivity_rank})" in cypher:  # the endpoint lookup
+            entities = [
+                {"key": k, "sensitivity_rank": self.endpoints.get(k, 1)}
+                for k in parameters["keys"]
+                if k not in self.endpoints or self.endpoints[k] != -1
+            ]
+            return ReadResult(rows=[{"entities": entities}], truncated=False)
         return ReadResult(rows=self.rows, truncated=False)
 
 

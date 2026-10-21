@@ -100,6 +100,8 @@ settings = Settings(
     checkpoint_backend="memory",
     ontology_path=ROOT / "deploy/ontology.example.json",
     otel_instrumentation_genai_capture_message_content="span_only",
+    review_policy="always",  # show the pause even for a clean answer (default: on-findings)
+    agent_max_tokens=4096,  # the 35B profile model's replies can pass the 2048 default
 )
 
 # %% [markdown]
@@ -398,8 +400,10 @@ for span in spans.get_finished_spans():
 #
 # The agent is one step of a fixed LangGraph workflow. A **router** checks the request first. The
 # **investigator** runs inside a retried task. **Compliance** checks the draft (uncited claims,
-# citations to text the agent never read, sensitive data) and then pauses the run until a person
-# decides. The pause is checkpointed, so the decision can come from another process, days later.
+# citations to text the agent never read, sensitive data) and then, under the review policy this
+# walkthrough sets to `always`, pauses the run until a person decides; the default `on-findings`
+# releases a clean, cited answer without a pause. The pause is checkpointed, so the decision can
+# come from another process, days later.
 
 # %%
 show(workflow_mermaid())
@@ -412,9 +416,12 @@ stack = ExitStack()
 runtime = stack.enter_context(open_runtime(settings))
 run = runtime.start("How is Acme Holdings connected to Gamma Clinics?")
 show({"status": run.status, "routed_to": run.routing_target})
+assert (
+    run.pending_review is not None
+), run.outcome  # the agent produced nothing to review
 show(
     {
-        key: run.pending_review[key]
+        key: getattr(run.pending_review, key)
         for key in ("draft_answer", "citations", "compliance_report")
     }
 )
@@ -461,7 +468,7 @@ show(
 QUESTION = "Who is the chief executive of Beta Labs?"
 for clearance in ("internal", "pii"):
     result = runtime.start(QUESTION, clearance=clearance)
-    draft = (result.pending_review or {}).get("draft_answer")
+    draft = result.pending_review.draft_answer if result.pending_review else None
     show(
         f"[{clearance}] "
         + (draft or f"no answer released (approval: {result.approval_status})")

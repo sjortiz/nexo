@@ -22,7 +22,7 @@ from neo4j.exceptions import ServiceUnavailable, SessionExpired
 from strands import Agent
 from strands.models import Model
 from strands.types.agent import Limits
-from strands.types.exceptions import ModelThrottledException
+from strands.types.exceptions import MaxTokensReachedException, ModelThrottledException
 
 from nexo.agents.models import AGENT_NAME, AgentOutput, InvestigationScope
 from nexo.agents.redaction import ChunkRedactor
@@ -52,9 +52,10 @@ Examples for query_knowledge_graph (adapt them; they are not a script):
 - Find an entity by name or alias (names vary across documents):
   MATCH (e:Entity) WHERE toLower(e.name) CONTAINS "acme" OR any(a IN e.aliases WHERE toLower(a) CONTAINS "acme")
   RETURN e.key, e.name, e.type, e.aliases LIMIT 10
-- Facts over time:
-  MATCH (a:Entity)-[r]->(b:Entity) WHERE r.valid_at >= "2025-01-01"
-  RETURN a.name, type(r), b.name, r.valid_at, r.chunk_id ORDER BY r.valid_at LIMIT 25
+- Facts over time (valid_at is only set on dated edges, so read it through properties):
+  MATCH (a:Entity)-[r]->(b:Entity) WITH a, r, b, properties(r)['valid_at'] AS valid_at
+  WHERE valid_at >= "2025-01-01"
+  RETURN a.name, type(r), b.name, valid_at, r.chunk_id ORDER BY valid_at LIMIT 25
 - Text around a chunk (for context the chunk itself lacks):
   MATCH (c:Chunk {{chunk_id: "chk_..."}})-[:NEXT_CHUNK]-(n:Chunk) RETURN n.chunk_id, n.section_path
 
@@ -216,17 +217,24 @@ class Investigator:
         # plus tool specs; vLLM's tool-call parser turns Llama output into
         # tool_calls; Strands executes them and feeds results back.
         started = time.monotonic()
-        result = await asyncio.wait_for(
-            agent.invoke_async(
-                _render_prompt(query, seeds, scope.chunk_filter),
-                limits=Limits(
-                    turns=self._settings.agent_max_turns,
-                    total_tokens=self._settings.agent_max_total_tokens,
+        answer, stop_reason, usage = "", "max_tokens", {}
+        try:
+            result = await asyncio.wait_for(
+                agent.invoke_async(
+                    _render_prompt(query, seeds, scope.chunk_filter),
+                    limits=Limits(
+                        turns=self._settings.agent_max_turns,
+                        total_tokens=self._settings.agent_max_total_tokens,
+                    ),
                 ),
-            ),
-            timeout=self._settings.agent_timeout_s,
-        )
-        answer = str(result).strip()
+                timeout=self._settings.agent_timeout_s,
+            )
+            answer, stop_reason = str(result).strip(), str(result.stop_reason)
+            usage = _usage(result)
+        except MaxTokensReachedException:
+            # The reply hit the per-turn token cap mid-sentence: a cost limit, so no
+            # follow-up and no answer; compliance rejects the run as not releasable.
+            log.warning("investigation %s: reply hit the token cap", ctx.request_id)
 
         # Smaller models sometimes stop after reasoning without writing the answer,
         # run out of turns, or drop the citations. One bounded follow-up from the
@@ -234,22 +242,24 @@ class Investigator:
         # cost limits, so they get no follow-up.
         follow_up = _follow_up(answer, ctx)
         remaining = self._settings.agent_timeout_s - (time.monotonic() - started)
-        if (
-            follow_up
-            and str(result.stop_reason) in ("end_turn", "limit_turns")
-            and remaining > 5
-        ):
+        if follow_up and stop_reason in ("end_turn", "limit_turns") and remaining > 5:
             log.info("investigation %s: asking for %s", ctx.request_id, follow_up[0])
-            result = await asyncio.wait_for(
-                agent.invoke_async(
-                    follow_up[1],
-                    limits=Limits(
-                        turns=2, total_tokens=self._settings.agent_max_total_tokens
+            try:
+                result = await asyncio.wait_for(
+                    agent.invoke_async(
+                        follow_up[1],
+                        limits=Limits(
+                            turns=2, total_tokens=self._settings.agent_max_total_tokens
+                        ),
                     ),
-                ),
-                timeout=remaining,
-            )
-            answer = str(result).strip() or answer
+                    timeout=remaining,
+                )
+                answer = str(result).strip() or answer
+                stop_reason, usage = str(result.stop_reason), _usage(result)
+            except MaxTokensReachedException:
+                log.warning(
+                    "investigation %s: follow-up hit the token cap", ctx.request_id
+                )
         return AgentOutput(
             answer=answer,
             citations=extract_citations(answer, ctx.evidence.fetched),
@@ -258,8 +268,8 @@ class Investigator:
             fetched_sensitivity=dict(ctx.evidence.fetched),
             withheld_chunk_ids=sorted(ctx.evidence.withheld),
             tool_calls=ctx.completed_calls(),
-            stop_reason=str(result.stop_reason),
-            usage=_usage(result),
+            stop_reason=stop_reason,
+            usage=usage,
         )
 
     def investigate(
