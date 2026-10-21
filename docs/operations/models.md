@@ -54,6 +54,25 @@ Ollama, the other roles keep the profile's models, and `nexo models` shows `agen
 Models that reason before answering (`THINKING_MODELS` in the catalog) get `reasoning_effort: none`
 on the JSON roles automatically, because the schema is only enforced after the reasoning section.
 
+# Use Claude for a role
+
+Any role but embeddings can run on Claude through the Claude Code CLI, signed in as the local user
+(no API key), while the others stay local. Swap per role with its base URL:
+
+| Role | Local (Ollama / vLLM) | Claude |
+|---|---|---|
+| Extraction (and entity resolution) | `EXTRACTION_BASE_URL=http://…` | `EXTRACTION_BASE_URL=claude-cli://` |
+| Router | `ROUTER_BASE_URL=http://…` | `ROUTER_BASE_URL=claude-cli://` |
+| Agent | `AGENT_BASE_URL=http://…` | `AGENT_BASE_URL=claude-cli://` |
+| Judge | `JUDGE_BASE_URL=http://…` | `JUDGE_BASE_URL=claude-cli://` |
+| Embeddings | `EMBEDDING_BASE_URL=http://…` | (none) |
+
+`<ROLE>_MODEL` names the model on either side (`claude-sonnet-5-5`). JSON roles call `claude -p` with the
+response schema as `--json-schema`; calls run in parallel (`EXTRACTION_CONCURRENCY`). The agent runs
+`claude -p` over the read-only `nexo mcp` tools at the caller's clearance, and Nexo reads its event
+stream for the audit trail, so router, compliance and review work the same. Text sent to a Claude role
+leaves the machine; keep a role local where that is not acceptable.
+
 # Add a judge
 
 Small profiles leave the judge off, and `nexo eval` then skips the generation scores. Turn it on with

@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 import re
+import shutil
 import urllib.error
 import urllib.request
 from collections.abc import Sequence
@@ -28,6 +29,8 @@ from langchain_openai import ChatOpenAI, OpenAIEmbeddings
 from pydantic import BaseModel, ValidationError
 from strands.models.openai import OpenAIModel
 
+from nexo.claude_cli import SCHEME as CLAUDE_CLI
+from nexo.claude_cli import ClaudeCliChatModel
 from nexo.config import ModelRole, Settings
 
 T = TypeVar("T", bound=BaseModel)
@@ -45,9 +48,16 @@ class ModelServerError(RuntimeError):
 
 def build_chat_model(
     settings: Settings, *, role: ModelRole, temperature: float = 0.0
-) -> ChatOpenAI:
-    """LangChain client for a JSON-producing role (router, extraction, judge)."""
+) -> BaseChatModel:
+    """LangChain client for a JSON-producing role (router, extraction, judge).
+
+    A base URL of `claude-cli://` serves the role through the Claude Code CLI.
+    """
     endpoint = settings.endpoint(role)
+    if endpoint.base_url.startswith(CLAUDE_CLI):
+        return ClaudeCliChatModel(
+            model=endpoint.model, timeout_s=settings.llm_timeout_s
+        )
     return ChatOpenAI(
         base_url=endpoint.base_url,
         api_key=endpoint.api_key,
@@ -237,6 +247,13 @@ def check_model_servers(
     for row in rows:
         if not row.model:
             checked.append(row)
+            continue
+        if row.base_url.startswith(CLAUDE_CLI):
+            # No server to ask; the CLI's own sign-in serves the model.
+            found = shutil.which("claude") is not None
+            checked.append(
+                replace(row, check="ok" if found else "claude CLI not found")
+            )
             continue
         key = (
             settings.embedding_api_key
