@@ -13,6 +13,7 @@ import uuid
 import pytest
 from neo4j import GraphDatabase
 
+from nexo.agents.investigator import SYSTEM_PROMPT
 from nexo.agents.models import InvestigationScope
 from nexo.agents.tools import (
     _NEIGHBOURS,
@@ -118,6 +119,68 @@ def _warnings(cypher: str, parameters: dict) -> list[str]:
     ]
 
 
+def test_index_reads_optional_document_properties_without_warnings(
+    store, settings, chunk_store, monkeypatch
+):
+    """An undated corpus lists null metadata without any 01xxx GQL status."""
+    store.replace_source(DocumentMetadata(source_id="memo"), _chunks("memo", C1), [])
+    with store.session(write=True) as session:
+        session.run("MATCH (d:Document) REMOVE d.title, d.doc_type").consume()
+    read = store.run_read_query
+    queries = []
+
+    def checked_read(cypher, parameters=None):
+        queries.append(cypher)
+        assert _warnings(cypher, parameters or {}) == []
+        return read(cypher, parameters)
+
+    monkeypatch.setattr(store, "run_read_query", checked_read)
+    server = build_mcp_server(graph=store, chunks=chunk_store, settings=settings)
+    assert data(call(server, "nexo_index"))["documents"] == [
+        {
+            "source_id": "memo",
+            "title": None,
+            "doc_type": None,
+            "effective_date": None,
+            "sensitivity": "internal",
+            "chunks": 1,
+        }
+    ]
+    # Property keys survive fixture deletion. Probe keys never seen by Neo4j
+    # so earlier dated documents cannot hide a return to dot reads.
+    listing = queries[0]
+    unseen = f"never_{uuid.uuid4().hex}"
+    assert _warnings(f"MATCH (d:Document) RETURN d.{unseen}", {}) == ["01N52"]
+    for key in ("title", "doc_type", "effective_date"):
+        assert _warnings(listing.replace(key, unseen + key), {}) == []
+
+
+def test_investigator_time_example_is_warning_free_on_undated_graph(store):
+    """The rendered prompt's actual Cypher handles absent dates and still finds dated facts."""
+    acme, beta = _resolved("Acme"), _resolved("Beta")
+    store.replace_source(
+        DocumentMetadata(source_id="timeline"),
+        _chunks("timeline", C1),
+        [_row(C1, "timeline", (acme, "ACQUIRED", beta))],
+    )
+    prompt = SYSTEM_PROMPT.format(schema=store.describe_schema())
+    cypher = prompt.split("- Facts over time:\n", 1)[1].split("\n- ", 1)[0].strip()
+    assert _warnings(cypher, {}) == []
+    assert store.run_read_query(cypher).rows == []
+    assert _warnings(cypher.replace("valid_at", f"never_{uuid.uuid4().hex}"), {}) == []
+    with store.session(write=True) as session:
+        session.run("MATCH ()-[r:ACQUIRED]->() SET r.valid_at = '2025-02-01'").consume()
+    assert store.run_read_query(cypher).rows == [
+        {
+            "a.name": "Acme",
+            "type(r)": "ACQUIRED",
+            "b.name": "Beta",
+            "valid_at": "2025-02-01",
+            "r.chunk_id": C1,
+        }
+    ]
+
+
 def test_lookups_read_predicate_without_unknown_property_warnings(
     store, settings, chunk_store
 ):
@@ -141,7 +204,7 @@ def test_lookups_read_predicate_without_unknown_property_warnings(
     assert _warnings(f"MATCH ()-[r]->() RETURN r.{unseen}", {}) == ["01N52"]
     for cypher, parameters in reads:
         assert _warnings(cypher, parameters) == []
-        for key in ("predicate", "valid_at"):
+        for key in ("predicate", "valid_at", "certainty"):
             assert _warnings(cypher.replace(key, unseen + key), parameters) == []
 
     store.replace_source(
