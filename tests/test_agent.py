@@ -151,7 +151,7 @@ def test_find_paths_withholds_paths_through_anything_above_clearance(
     out = json.loads(tools["find_paths"](a, c, max_hops=99, max_paths=0))
     assert [p["hops"] for p in out["paths"]] == [[_hop(a, c, C1)]]
     assert out["withheld"] == 2 and out["chunk_ids_found"] == [C1]
-    assert ctx.evidence.discovered == {C1} and ctx.calls[0].ok
+    assert ctx.calls[0].ok
     assert "hint" not in out and out["tool_calls_left"] == 9
     # Keys travel as parameters; hop and path counts are clamped before inlining.
     assert graph.parameters == [{"from_key": a, "to_key": c}]
@@ -204,11 +204,10 @@ def test_entity_neighbours_hides_entities_and_edges_above_clearance(
             },
         ]
     )
-    ctx, tools = _named_tools(settings, graph, chunk_store)
+    _, tools = _named_tools(settings, graph, chunk_store)
     out = json.loads(tools["entity_neighbours"]("Organization:acme", limit=500))
     assert [e["neighbour"]["key"] for e in out["edges"]] == ["Organization:beta"]
     assert out["withheld"] == 2 and out["chunk_ids_found"] == [C1]
-    assert ctx.evidence.discovered == {C1}
     assert graph.parameters == [{"key": "Organization:acme", "limit": 100}]
 
     hidden = FakeGraph(
