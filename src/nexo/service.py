@@ -25,6 +25,7 @@ from langgraph.types import Command
 from pydantic import BaseModel, ValidationError
 
 from nexo.agents.investigator import Investigator
+from nexo.agents.models import AgentBudget
 from nexo.agents.redaction import ChunkRedactor
 from nexo.config import Settings
 from nexo.logging_setup import CONTENT_LOGGER
@@ -32,7 +33,12 @@ from nexo.llm import build_chat_model, build_embeddings, build_strands_model
 from nexo.orchestration.graph import WORKFLOW_NAME, GraphDependencies, build_graph
 from nexo.orchestration.state import ReviewDecision, ReviewPacket, ReviewPassage
 from nexo.storage.graph_store import GraphStore
-from nexo.storage.ingest import ExtractionAids, IngestionTargets, KnowledgeGraphIngestor
+from nexo.storage.ingest import (
+    ExtractionAids,
+    IngestionLimits,
+    IngestionTargets,
+    KnowledgeGraphIngestor,
+)
 from nexo.storage.ontology import Ontology
 from nexo.storage.resolution import EntityResolver, ResolutionLimits
 from nexo.storage.schemas import ChunkRecord, Sensitivity
@@ -464,7 +470,7 @@ def build_investigator(
         model=build_strands_model(settings),
         graph=graph_store,
         chunks=chunk_store,
-        settings=settings,
+        budget=AgentBudget.from_settings(settings),
         schema_text=graph_store.describe_schema(),
         detector=detector_from_settings(settings),
     )
@@ -548,7 +554,7 @@ def open_ingestor(
         yield KnowledgeGraphIngestor(
             llm=llm,
             detector=detector_from_settings(settings),
-            settings=settings,
+            limits=IngestionLimits.from_settings(settings),
             targets=IngestionTargets(
                 chunk_store=chunk_store,
                 graph_writer=graph_store,

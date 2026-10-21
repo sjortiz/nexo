@@ -14,7 +14,7 @@ import urllib.request
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import yaml
 from neo4j import GraphDatabase
@@ -29,6 +29,7 @@ from nexo.local_profiles import (
     plan,
 )
 from nexo.secret_store import SecretStore, SecretStoreError
+from nexo.setup.lock import Lock, served_locally
 from nexo.setup.components import MEMORY_GB
 from nexo.setup.envfile import generated_keys, missing_required, read_env
 from nexo.setup.render import RENDER_DIR, Host
@@ -68,7 +69,7 @@ def detect_host(casting: Casting) -> Host:
     target = casting.spec.target
     os_name = target.host
     if os_name == "auto":
-        os_name = "macos" if platform.system() == "Darwin" else "linux"
+        os_name = this_os()
     engine = target.engine
     if engine == "auto":
         engine = "podman" if shutil.which("podman") else "docker"
@@ -205,20 +206,13 @@ def context_findings(casting: Casting, loaded=loaded_contexts) -> list[Finding]:
 
 
 def models_finding(
-    casting: Casting, lock: dict[str, Any], pulled=ollama_models
+    casting: Casting, lock: Lock, pulled=ollama_models
 ) -> Finding | None:
     """Which models this machine serves, and which `up` still has to pull."""
     models = casting.spec.models
     if models.provider != "ollama":
         return None
-    local_server = f"http://localhost:{models.local.port}/v1"
-    served = sorted(
-        {
-            entry["model"]
-            for entry in lock["models"].values()
-            if entry["server"] == local_server and entry["model"]
-        }
-    )
+    served = sorted(served_locally(lock, models))
     size = round(sum(MODEL_SIZES_GB.get(m, 0.0) for m in served), 1)
     detail = f"this machine serves {', '.join(served)} ({size} GB)"
     have = pulled(models.local.port)
@@ -232,24 +226,19 @@ def models_finding(
     return Finding("models", True, detail)
 
 
-def memory_budget(
-    casting: Casting, lock: dict[str, Any], on: set[str]
-) -> dict[str, float]:
+def memory_budget(casting: Casting, lock: Lock, on: set[str]) -> dict[str, float]:
     """GB this machine needs: model weights it serves plus each enabled container."""
     budget = {name: MEMORY_GB[name] for name in sorted(on) if name in MEMORY_GB}
     models = casting.spec.models
     if models.provider == "ollama":
-        local_server = f"http://localhost:{models.local.port}/v1"
-        served = {
-            entry["model"]
-            for entry in lock["models"].values()
-            if entry["server"] == local_server and entry["model"]
-        }
+        served = served_locally(lock, models)
         budget["models"] = round(sum(MODEL_SIZES_GB.get(m, 0.0) for m in served), 1)
     return budget
 
 
-def neo4j_login(uri: str, user: str, password: str) -> str | None:
+def neo4j_login(
+    uri: str, user: str, password: str
+) -> Literal["refused", "unreachable"] | None:
     """None when the login works; "refused" or "unreachable" otherwise (no secret shown)."""
     try:
         with GraphDatabase.driver(
@@ -453,7 +442,7 @@ def content_finding(
 
 def preflight(
     casting: Casting,
-    lock: dict[str, Any],
+    lock: Lock,
     on: set[str],
     host: Host,
     store: SecretStore,
@@ -476,7 +465,7 @@ def preflight(
         )
     bolt = casting.spec.ports.bolt
     if "neo4j" in on and (
-        neo4j := neo4j_finding(store, host, lock["name"], bolt, native=native)
+        neo4j := neo4j_finding(store, host, lock.name, bolt, native=native)
     ):
         findings.append(neo4j)
     rendered = Path.cwd() / RENDER_DIR / "compose.yaml"
@@ -564,7 +553,7 @@ def platform_findings(casting: Casting, host: Host) -> list[Finding]:
 
 
 def memory_findings(
-    casting: Casting, lock: dict[str, Any], on: set[str], host: Host
+    casting: Casting, lock: Lock, on: set[str], host: Host
 ) -> list[Finding]:
     """Does the setup fit this machine (its real memory) and the Podman VM?"""
     budget = memory_budget(casting, lock, on)

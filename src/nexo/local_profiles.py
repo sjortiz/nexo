@@ -28,6 +28,9 @@ import json
 import re
 import sys
 from dataclasses import asdict, dataclass
+from typing import Any
+
+from pydantic import SecretStr
 
 APPLE_RE = re.compile(
     r"^m(?P<generation>[1-9])(?:-(?P<variant>pro|max|ultra))?-(?P<memory>\d{1,3})$"
@@ -232,6 +235,65 @@ def plan(profile: str, role_set: str = "single") -> Plan:
 def needs_reasoning_off(model: str | None) -> bool:
     """Whether the model thinks before answering and needs reasoning off for JSON roles."""
     return model in THINKING_MODELS
+
+
+def apply(settings: Any) -> None:
+    """Fill the role models, servers and timeouts a LOCAL_PROFILE (and REMOTE_PROFILE)
+    implies on a Settings object, leaving every field that was set explicitly alone."""
+    explicit = set(settings.model_fields_set)
+    if settings.remote_profile:
+        heavy, light = plan(settings.remote_profile, "heavy"), plan(
+            settings.local_profile, "light"
+        )
+        placement = {
+            role: (heavy.roles[role], settings.remote_base_url)
+            for role in ("agent", "extraction")
+        }
+        placement |= {
+            role: (light.roles[role], settings.local_base_url)
+            for role in ("router", "judge", "embedding")
+        }
+        parallel = heavy.num_parallel
+    else:
+        single = plan(settings.local_profile, "single")
+        placement = {
+            role: (model, settings.local_base_url)
+            for role, model in single.roles.items()
+        }
+        parallel = single.num_parallel
+
+    def default(field: str, value: object) -> None:
+        if field not in explicit:
+            setattr(settings, field, value)
+
+    for role in ("agent", "extraction", "router", "judge"):
+        model, base_url = placement[role]
+        # Role disabled by the profile (e.g. no judge on a small Mac), unless a
+        # model is set for it: that one runs on the profile's server too.
+        if model is None:
+            if f"{role}_model" not in explicit:
+                continue
+            model = getattr(settings, f"{role}_model")
+        default(f"{role}_model", model)
+        default(f"{role}_base_url", base_url)
+        # Ollama ignores the key; clients need one.
+        default(f"{role}_api_key", SecretStr("ollama"))
+        # Decide on the model that will run, which may be set explicitly.
+        effective = (
+            getattr(settings, f"{role}_model") if f"{role}_model" in explicit else model
+        )
+        if role != "agent" and needs_reasoning_off(effective):
+            default(f"{role}_reasoning_effort", "none")
+    embedding_model, embedding_url = placement["embedding"]
+    default("embedding_provider", "openai_compatible")
+    default("embedding_model", embedding_model)
+    default("embedding_base_url", embedding_url)
+    default("embedding_api_key", SecretStr("ollama"))
+    default("embedding_dimensions", 1024)
+    # Local models are slower than a GPU server.
+    default("llm_timeout_s", 300.0)
+    default("agent_timeout_s", 900.0)
+    default("extraction_concurrency", parallel)
 
 
 def _main(argv: list[str] | None = None) -> int:

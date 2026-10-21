@@ -56,7 +56,12 @@ from nexo.service import (
 )
 from nexo.storage.graph_store import GraphStore
 from nexo.storage.neo4j_chunk_store import Neo4jChunkStore, import_local_store
-from nexo.storage.ingest import ExtractionAids, IngestionTargets, KnowledgeGraphIngestor
+from nexo.storage.ingest import (
+    ExtractionAids,
+    IngestionLimits,
+    IngestionTargets,
+    KnowledgeGraphIngestor,
+)
 from nexo.storage.ontology import Ontology
 from nexo.storage.schemas import DocumentMetadata, Sensitivity, Triple
 from nexo.storage.sensitive_data import NoopDetector
@@ -323,7 +328,7 @@ def _eval_extraction(args: argparse.Namespace) -> int:
     ingestor = KnowledgeGraphIngestor(
         llm=build_chat_model(settings, role="extraction"),
         detector=NoopDetector(),
-        settings=settings,
+        limits=IngestionLimits.from_settings(settings),
         targets=IngestionTargets(
             chunk_store=LocalChunkStore(build_embeddings(settings)), graph_writer=None
         ),
@@ -464,7 +469,7 @@ def _models(args: argparse.Namespace) -> int:
         rows = check_model_servers(settings, rows)
         for problem in _context_problems(settings):
             log.warning("%s", problem)
-    failed = [row["role"] for row in rows if row.get("check", "ok") != "ok"]
+    failed = [row.role for row in rows if (row.check or "ok") != "ok"]
     profiles = (
         f"LOCAL_PROFILE={settings.local_profile or '-'} "
         f"REMOTE_PROFILE={settings.remote_profile or '-'}"
@@ -472,7 +477,7 @@ def _models(args: argparse.Namespace) -> int:
     result = {
         "local_profile": settings.local_profile,
         "remote_profile": settings.remote_profile,
-        "roles": rows,
+        "roles": [row.as_dict() for row in rows],
     }
     if failed:
         _emit(

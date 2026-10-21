@@ -29,14 +29,13 @@ from collections import Counter
 from collections.abc import Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field, replace
-from typing import NamedTuple, Protocol
+from typing import Any, NamedTuple, Protocol
 
 from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_core.runnables import RunnableConfig
 from pydantic import BaseModel, Field
 
-from nexo.config import Settings
 from nexo.llm import StructuredOutputError, invoke_structured
 from nexo.storage.chunking import (
     flatten_markdown_tables,
@@ -119,6 +118,43 @@ def _normalize(text: str) -> str:
 
 
 @dataclass(frozen=True)
+class IngestionLimits:
+    """Sizes and policies ingestion reads once; the service builds it from Settings."""
+
+    chunk_size: int
+    chunk_overlap: int
+    extraction_attempts: int
+    extraction_concurrency: int
+    extraction_context_chars: int
+    require_grounded_evidence: bool
+    sensitive_data_policy: str
+
+    @classmethod
+    def from_settings(cls, settings: Any) -> IngestionLimits:
+        """The limits the CHUNK_*, EXTRACTION_* and sensitive-data settings describe."""
+        return cls(
+            chunk_size=settings.chunk_size,
+            chunk_overlap=settings.chunk_overlap,
+            extraction_attempts=settings.extraction_attempts,
+            extraction_concurrency=settings.extraction_concurrency,
+            extraction_context_chars=settings.extraction_context_chars,
+            require_grounded_evidence=settings.require_grounded_evidence,
+            sensitive_data_policy=settings.sensitive_data_policy,
+        )
+
+
+@dataclass
+class _Counts:
+    """What the extraction stages counted, assembled into the report once."""
+
+    triples_extracted: int = 0
+    failed_chunk_ids: list[str] = field(default_factory=list)
+    dropped: Counter[str] = field(default_factory=Counter)
+    relations: Counter[str] = field(default_factory=Counter)
+    resolution: Counter[str] = field(default_factory=Counter)
+
+
+@dataclass(frozen=True)
 class IngestionTargets:
     """Where ingestion writes: `ingest()` needs both, `extract_triples()` neither."""
 
@@ -154,14 +190,15 @@ class KnowledgeGraphIngestor:
         *,
         llm: BaseChatModel,
         detector: SensitiveDataDetector,
-        settings: Settings,
         targets: IngestionTargets,
         aids: ExtractionAids | None = None,
+        limits: IngestionLimits | None = None,
+        settings: Any = None,
     ) -> None:
         aids = aids or ExtractionAids()
         self._llm = llm
         self._detector = detector
-        self._settings = settings
+        self._limits = limits or IngestionLimits.from_settings(settings)
         self._targets = targets
         self._aids = replace(
             aids,
@@ -208,19 +245,10 @@ class KnowledgeGraphIngestor:
                 ],
             )
 
-            report = IngestionReport(
-                source_id=metadata.source_id,
-                chunk_count=len(chunks),
-                triples_extracted=0,
-                triples_written=0,
-                lint_warnings=warnings,
-                sensitivity=dict(Counter(c.sensitivity.value for c in chunks)),
-            )
-            grounded = self._triples(chunks, report, resolve=True)
+            grounded, counts = self._triples(chunks, resolve=True)
             swap = self._targets.graph_writer.replace_source(metadata, chunks, grounded)
-            report.triples_written = swap.triples_written
             # The graph swap removes stale chunks itself when they live in Neo4j.
-            report.stale_chunks_deleted = max(
+            stale = max(
                 swap.chunks_removed,
                 self._targets.chunk_store.delete_source(
                     metadata.source_id, keep={c.chunk_id for c in chunks}
@@ -229,25 +257,48 @@ class KnowledgeGraphIngestor:
             span.set_attributes(
                 {
                     "ingest.chunks": len(chunks),
-                    "ingest.triples_written": report.triples_written,
-                    "ingest.failed_chunks": len(report.failed_chunk_ids),
+                    "ingest.triples_written": swap.triples_written,
+                    "ingest.failed_chunks": len(counts.failed_chunk_ids),
                 }
             )
-            return report
+            return self._report(
+                metadata,
+                chunks,
+                warnings,
+                counts,
+                triples_written=swap.triples_written,
+                stale_chunks_deleted=stale,
+                sensitivity=dict(Counter(c.sensitivity.value for c in chunks)),
+            )
 
     def extract_triples(
         self, text: str, metadata: DocumentMetadata
     ) -> tuple[list[GroundedTriple], IngestionReport]:
         """Extract triples without writes or graph resolution, for evaluation against gold."""
         chunks, warnings = self._prepare(text, metadata)
-        report = IngestionReport(
+        grounded, counts = self._triples(chunks, resolve=False)
+        return grounded, self._report(metadata, chunks, warnings, counts)
+
+    @staticmethod
+    def _report(
+        metadata: DocumentMetadata,
+        chunks: list[ChunkRecord],
+        warnings: list[str],
+        counts: _Counts,
+        **written: Any,
+    ) -> IngestionReport:
+        return IngestionReport(
             source_id=metadata.source_id,
             chunk_count=len(chunks),
-            triples_extracted=0,
-            triples_written=0,
+            triples_extracted=counts.triples_extracted,
+            triples_written=written.pop("triples_written", 0),
+            dropped=dict(counts.dropped),
+            relations=dict(counts.relations),
+            resolution=dict(counts.resolution),
+            failed_chunk_ids=counts.failed_chunk_ids,
             lint_warnings=warnings,
+            **written,
         )
-        return self._triples(chunks, report, resolve=False), report
 
     # --- stages ------------------------------------------------------------------------
     def _prepare(
@@ -262,8 +313,8 @@ class KnowledgeGraphIngestor:
         chunks = split_document(
             text,
             metadata,
-            chunk_size=self._settings.chunk_size,
-            chunk_overlap=self._settings.chunk_overlap,
+            chunk_size=self._limits.chunk_size,
+            chunk_overlap=self._limits.chunk_overlap,
         )
         return self._classify(chunks), warnings
 
@@ -273,7 +324,7 @@ class KnowledgeGraphIngestor:
             detections = self._detector.detect(chunk.text)
             level = classify(detections, chunk.sensitivity)
             text = chunk.text
-            if detections and self._settings.sensitive_data_policy == "redact":
+            if detections and self._limits.sensitive_data_policy == "redact":
                 text = redact(text, detections)
                 # Residual risk is handled by the detector's recall.
                 level = chunk.sensitivity
@@ -292,37 +343,33 @@ class KnowledgeGraphIngestor:
         return classified
 
     def _triples(
-        self, chunks: list[ChunkRecord], report: IngestionReport, *, resolve: bool
-    ) -> list[GroundedTriple]:
-        dropped: Counter[str] = Counter()
-        kept = self._grounded(chunks, report, dropped)
+        self, chunks: list[ChunkRecord], *, resolve: bool
+    ) -> tuple[list[GroundedTriple], _Counts]:
+        """Grounded triples placed on resolved entities, and what the stages counted."""
+        counts = _Counts()
+        kept = self._grounded(chunks, counts)
         refs = [ref for k in kept for ref in (k.triple.head, k.triple.tail)]
         resolved = self._aids.resolver.resolve(refs) if resolve else {}
-        grounded = _place(kept, resolved, dropped)
-        report.dropped = dict(dropped)
-        report.resolution = dict(Counter(e.method.value for e in resolved.values()))
-        return grounded
+        grounded = _place(kept, resolved, counts.dropped)
+        counts.resolution = Counter(e.method.value for e in resolved.values())
+        return grounded, counts
 
-    def _grounded(
-        self, chunks: list[ChunkRecord], report: IngestionReport, dropped: Counter[str]
-    ) -> list[_Kept]:
+    def _grounded(self, chunks: list[ChunkRecord], counts: _Counts) -> list[_Kept]:
         """Extracted triples whose evidence is in the chunk, mapped onto the ontology."""
-        relation_stats: Counter[str] = Counter()
         kept: list[_Kept] = []
-        for chunk, result in self._extract_all(chunks, report):
-            report.triples_extracted += len(result.triples)
+        for chunk, result in self._extract_all(chunks, counts.failed_chunk_ids):
+            counts.triples_extracted += len(result.triples)
             haystack = _normalize(chunk.text)
             for triple in result.triples:
                 if (
-                    self._settings.require_grounded_evidence
+                    self._limits.require_grounded_evidence
                     and _normalize(triple.evidence) not in haystack
                 ):
-                    dropped["evidence_not_in_chunk"] += 1
+                    counts.dropped["evidence_not_in_chunk"] += 1
                 elif triple.head.key == triple.tail.key:
-                    dropped["self_loop"] += 1
+                    counts.dropped["self_loop"] += 1
                 else:
-                    kept.append(self._mapped(chunk, triple, relation_stats))
-        report.relations = dict(relation_stats)
+                    kept.append(self._mapped(chunk, triple, counts.relations))
         return kept
 
     def _mapped(self, chunk: ChunkRecord, triple: Triple, stats: Counter[str]) -> _Kept:
@@ -337,9 +384,10 @@ class KnowledgeGraphIngestor:
             stats["remapped" if mapping.original else "canonical"] += 1
         return _Kept(chunk, triple, mapping.relation, mapping.swap, mapping.original)
 
-    def _extract_all(self, chunks: list[ChunkRecord], report: IngestionReport):
+    def _extract_all(self, chunks: list[ChunkRecord], failed: list[str]):
+        """Yield (chunk, extraction) per chunk; a chunk whose extraction fails goes to `failed`."""
         with ThreadPoolExecutor(
-            max_workers=self._settings.extraction_concurrency
+            max_workers=self._limits.extraction_concurrency
         ) as pool:
             # Each task runs in its own context copy so OTEL spans parent correctly.
             futures = [
@@ -361,19 +409,19 @@ class KnowledgeGraphIngestor:
                     logger.warning(
                         "extraction failed validation for chunk %s", chunk.chunk_id
                     )
-                    report.failed_chunk_ids.append(chunk.chunk_id)
+                    failed.append(chunk.chunk_id)
                 # Any other failure (model unreachable after client retries, ...) costs
                 # this chunk only, never the whole document.
                 except Exception:  # pylint: disable=broad-exception-caught
                     logger.exception("extraction failed for chunk %s", chunk.chunk_id)
-                    report.failed_chunk_ids.append(chunk.chunk_id)
+                    failed.append(chunk.chunk_id)
 
     def _extract(
         self, chunk: ChunkRecord, previous: ChunkRecord | None
     ) -> ExtractionResult:
         section = chunk.source_label or "(none)"
         parts = [f"Document section: {section}"]
-        limit = self._settings.extraction_context_chars
+        limit = self._limits.extraction_context_chars
         if previous is not None and limit:
             parts.append(f"Preceding text (context only):\n...{previous.text[-limit:]}")
         parts.append(f"Passage:\n{chunk.text}")
@@ -385,7 +433,7 @@ class KnowledgeGraphIngestor:
                     SystemMessage(content=self._system_prompt),
                     HumanMessage(content="\n\n".join(parts)),
                 ],
-                max_attempts=self._settings.extraction_attempts,
+                max_attempts=self._limits.extraction_attempts,
                 config=self._config,
             )
 
