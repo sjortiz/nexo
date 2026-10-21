@@ -5,7 +5,7 @@ nexo setup secrets                      fill missing secrets in the provider
 nexo setup lock [--upgrade]             resolve nexo.yaml into nexo.lock
 nexo setup render [--addon NAME]        write .nexo/render/
 nexo setup check [--no-models]          preflight, then ask each model server
-nexo setup up [--addon NAME]            secrets, render, models, compose up (native: no compose)
+nexo setup up [--addon NAME]            secrets, render, models, compose up (native: its containers)
 nexo setup down                         compose down (volumes kept)
 nexo setup neo4j-init                   native: give a new Neo4j the stored password
 nexo setup compose ARGS...              the container engine's compose on the render
@@ -40,11 +40,13 @@ from nexo.setup.check import (
     stale_neo4j_hint,
 )
 from nexo.setup.components import COMPONENTS, UIS
+from nexo.setup.engine import Machines, activate
 from nexo.setup.envfile import ensure_secrets, read_env, stack_secrets
 from nexo.setup.lock import lock as resolve_lock
 from nexo.setup.render import (
     RENDER_DIR,
     Host,
+    containers,
     enabled_set,
     portable_files,
     render,
@@ -93,7 +95,7 @@ class _Stack:
         """The engine's compose on the render, with .env for personal settings."""
         root = Path.cwd()
         command = [
-            self.host.engine,
+            *self.host.cli,
             "compose",
             "-f",
             str(root / RENDER_DIR / "compose.yaml"),
@@ -110,7 +112,10 @@ class _Stack:
 def _compose(stack: _Stack, args: list[str]) -> int:
     command = stack.command(args)
     log.info("%s", " ".join(command))
-    return subprocess.run(command, env=stack.environment(), check=False).returncode
+    try:
+        return subprocess.run(command, env=stack.environment(), check=False).returncode
+    except OSError as exc:
+        raise SetupError(f"cannot run {stack.host.engine}: {exc}") from exc
 
 
 def _captured(stack: _Stack, args: list[str], *, stderr: bool = True) -> str:
@@ -175,18 +180,16 @@ def _native(casting: Casting) -> bool:
     return casting.spec.target.mode == "native"
 
 
-def _ensure_render(args: argparse.Namespace) -> _Stack:
+def _stack_for(casting: Casting, lock: dict) -> _Stack:
     """The rendered stack with the secrets already in the provider (nothing generated)."""
-    casting, lock = _context(args)
-    if _native(casting):
-        raise SetupError(
-            "target.mode native runs no containers: Neo4j is this machine's service"
-            " (brew services stop neo4j) and Ollama runs on its own"
-        )
     host = detect_host(casting)
     if not (Path.cwd() / RENDER_DIR / "compose.yaml").exists():
         render(casting, lock, Path.cwd(), host)
     return _Stack(host, stack_secrets(store_for(casting), COMPONENTS))
+
+
+def _ensure_render(args: argparse.Namespace) -> _Stack:
+    return _stack_for(*_context(args))
 
 
 # The local machine's profile line in a preset (models.local.profile).
@@ -428,8 +431,11 @@ def _start_models(casting: Casting) -> int:
 
 def _up(args: argparse.Namespace) -> int:
     casting, lock = _context(args)
-    host = detect_host(casting)
     on = enabled_set(lock, _addons(args))
+    services = containers(casting, on)
+    if services and casting.spec.target.machine:
+        activate(Machines(), casting.spec.target.machine, switch=args.switch_machine)
+    host = detect_host(casting)
     store = store_for(casting)
     stack = _Stack(host, ensure_secrets(Path.cwd() / ".env", Path.cwd(), on, store))
     ports = casting.spec.ports
@@ -442,20 +448,21 @@ def _up(args: argparse.Namespace) -> int:
             return code
     if _native(casting):  # the preflight logged in to this machine's Neo4j
         log.info(
-            "native: Neo4j at %s, nothing in containers; run nexo in the .venv"
-            " (nexo config --explain shows where each setting comes from)",
+            "native: Neo4j at %s; run nexo in the .venv (nexo config --explain shows"
+            " where each setting comes from)",
             ports.bolt,
         )
+    if not services:
         return 0
-    if code := (
-        _compose(stack, UP)
-        or _wait_for_services(stack)
-        or _neo4j_accepts(stack, store, lock["name"], ports.bolt)
+    if code := _compose(stack, UP) or _wait_for_services(stack):
+        return code
+    if not _native(casting) and (
+        code := _neo4j_accepts(stack, store, lock["name"], ports.bolt)
     ):
         return code
-    for name in sorted(on & UIS.keys()):
+    for name in sorted(services & UIS.keys()):
         log.info("%s: http://localhost:%s", name, getattr(ports, UIS[name]))
-    if "agentInbox" in on:
+    if "agentInbox" in services:
         log.info(
             "agentInbox: http://127.0.0.1:%s (add inbox: graph nexo, URL http://127.0.0.1:%s); "
             "start the adapter with make review-inbox",
@@ -466,7 +473,19 @@ def _up(args: argparse.Namespace) -> int:
 
 
 def _down(args: argparse.Namespace) -> int:
-    return _compose(_ensure_render(args), ["down", "--remove-orphans"])
+    casting, lock = _context(args)
+    if not containers(casting, enabled_set(lock, _addons(args))):
+        log.info("nothing runs in containers in this setup; nothing to stop")
+        return 0
+    stack = _stack_for(casting, lock)
+    machine = stack.host.machine
+    if casting.spec.target.machine and not (machine and machine.running):
+        log.info(
+            "podman machine %s is not running, so its containers are already stopped",
+            casting.spec.target.machine,
+        )
+        return 0
+    return _compose(stack, ["down", "--remove-orphans"])
 
 
 def _passthrough(args: argparse.Namespace) -> int:
@@ -565,6 +584,11 @@ def add_parser(
     up = verb("up", _up, "start the stack (and Ollama's models)", addons=True)
     up.add_argument(
         "--skip-models", action="store_true", help="do not run ollama-setup.sh"
+    )
+    up.add_argument(
+        "--switch-machine",
+        action="store_true",
+        help="stop the running Podman machine (and its containers) to start target.machine",
     )
     for parser in (check, up):
         parser.add_argument(

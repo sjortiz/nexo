@@ -1,5 +1,6 @@
-# One Apple Silicon Mac, no containers: Ollama's models and Homebrew's Neo4j run natively,
-# Nexo runs from the .venv. Secrets stay in ~/.config/nexo/config; nothing goes in .env.
+# One Apple Silicon Mac with a bare-metal core: Nexo (from the .venv), Homebrew's Neo4j and Ollama's
+# models run on the Mac. Containers are for telemetry (the collector and SigNoz) and add-ons only.
+# Secrets stay in ~/.config/nexo/config; nothing goes in .env.
 #   brew install ollama neo4j uv && uv sync
 #   make env PRESET=mac-native     (this file, with this Mac's profile, and the secrets)
 #   make neo4j-init                (a Neo4j that has never started: the stored password)
@@ -10,7 +11,18 @@ metadata:
   name: nexo
 spec:
   target:
-    mode: native  # no containers: Neo4j on this machine, telemetry export off
+    mode: native  # bare-metal core; telemetry and add-ons run in containers
+    # A small dedicated Podman machine keeps containers from competing with the models for
+    # memory. Make it rootful (podman machine init --rootful --memory 3072 nexo-telemetry);
+    # make up SWITCH=1 stops whichever machine is running and starts this one.
+    # machine: nexo-telemetry
+  telemetry:
+    enabled: true  # the collector and SigNoz; false: no export and no containers
+  # addons:  # more containers next to the collector; Nexo reaches them on localhost ports
+  #   langfuse: { enabled: true }
+  #   jaeger: { enabled: true }
+  #   agentInbox: { enabled: true }
+  #   hostMetrics: { enabled: true }  # needs a rootful Podman machine
   models:
     provider: ollama
     local:

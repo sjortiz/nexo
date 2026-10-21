@@ -20,6 +20,7 @@ from strands.models.openai import OpenAIModel
 
 from nexo.config import Settings
 from nexo.llm import build_embeddings
+from nexo.setup import engine
 from nexo.storage.graph_store import ReadResult
 from nexo.storage.schemas import ChunkRecord, Sensitivity
 from nexo.storage.vector_store import LocalChunkStore
@@ -71,6 +72,21 @@ def isolated_config(tmp_path_factory, monkeypatch):
     # After the cleanup above: every test gets its own ~/.config/nexo.
     monkeypatch.setenv("NEXO_CONFIG_DIR", str(tmp_path_factory.mktemp("nexo-config")))
     monkeypatch.setenv("NEXO_DATA_DIR", str(tmp_path_factory.mktemp("nexo-data")))
+
+
+@pytest.fixture(autouse=True)
+def no_real_container_engine(monkeypatch):
+    """Nothing in a test runs the real podman or docker: inject a runner or patch this."""
+    real = engine.run_command
+
+    def guard(command, timeout=30):
+        assert command[0] not in (
+            "podman",
+            "docker",
+        ), f"real {command[0]} call: {command}"
+        return real(command, timeout)
+
+    monkeypatch.setattr(engine, "run_command", guard)
 
 
 @pytest.fixture
