@@ -108,17 +108,15 @@ class InvestigationContext:
             self.evidence.withheld.update(withheld)
 
 
-def collect_chunk_ids(value: Any, found: set[str]) -> None:
-    """Add every chunk id string nested anywhere in value to found."""
+def collect_chunk_ids(value: Any) -> set[str]:
+    """Every chunk id string nested anywhere in value."""
     if isinstance(value, str):
-        if CHUNK_ID_RE.fullmatch(value):
-            found.add(value)
-    elif isinstance(value, dict):
-        for item in value.values():
-            collect_chunk_ids(item, found)
-    elif isinstance(value, (list, tuple)):
-        for item in value:
-            collect_chunk_ids(item, found)
+        return {value} if CHUNK_ID_RE.fullmatch(value) else set()
+    if isinstance(value, dict):
+        return collect_chunk_ids(list(value.values()))
+    if isinstance(value, (list, tuple)):
+        return set().union(*(collect_chunk_ids(item) for item in value))
+    return set()
 
 
 # Chunk text is served only by the chunk tools, through the redactor; graph
@@ -271,8 +269,7 @@ class _Call:
 
     def reply(self, payload: dict[str, Any], detail: str, max_chars: int) -> str:
         """Record the chunk ids in payload as discovered and return it to the model."""
-        found: set[str] = set()
-        collect_chunk_ids(payload, found)
+        found = collect_chunk_ids(payload)
         self.ctx.record_discovered(found)
         payload["chunk_ids_found"] = sorted(found)
         trace.get_current_span().set_attribute("nexo.graph.chunk_ids_found", len(found))

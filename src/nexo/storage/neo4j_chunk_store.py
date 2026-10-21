@@ -14,7 +14,7 @@ import json
 from collections.abc import Sequence
 from datetime import date, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, LiteralString
 
 from langchain_core.embeddings import Embeddings
 from neo4j import ManagedTransaction
@@ -42,6 +42,20 @@ _HIT = (
     " YIELD node AS c, score WHERE c.text IS NOT NULL"
     " RETURN c {.*, embedding: null, search_text: null} AS c ORDER BY score DESC"
 )
+_VECTOR_SEARCH = "CALL db.index.vector.queryNodes($index, $fetch, $vector)" + _HIT
+_TEXT_SEARCH = (
+    "CALL db.index.fulltext.queryNodes($index, $terms, {limit: $fetch})" + _HIT
+)
+_UPSERT = (
+    "UNWIND $rows AS row MERGE (c:Chunk {chunk_id: row.chunk_id}) SET c += row.props"
+)
+_DELETE_SOURCE = (
+    "MATCH (c:Chunk {source_id: $source_id}) "
+    "WHERE NOT c.chunk_id IN $keep DETACH DELETE c RETURN count(*) AS n"
+)
+_GET_BY_IDS = "MATCH (c:Chunk) WHERE c.chunk_id IN $ids AND c.text IS NOT NULL RETURN c"
+_KNOWN_IDS = "MATCH (c:Chunk) WHERE c.chunk_id IN $ids RETURN c.chunk_id AS id"
+_MISSING_TEXT = "MATCH (c:Chunk) WHERE c.text IS NULL RETURN count(c) AS n"
 _RECORD_FIELDS = (
     "chunk_id",
     "source_id",
@@ -96,28 +110,25 @@ def _record(node: dict[str, Any]) -> ChunkRecord:
     return ChunkRecord.model_validate(values)
 
 
-def _hits(
-    tx: ManagedTransaction, statement: str, **params: Any
+def _rows(
+    tx: ManagedTransaction, cypher: LiteralString, **params: Any
 ) -> list[dict[str, Any]]:
-    return [dict(r["c"]) for r in tx.run(statement, **params)]
+    """Run one statement and return its records as dicts (nodes as property maps)."""
+    return [record.data() for record in tx.run(cypher, **params)]
 
 
 def _visible(
-    rows: list[dict[str, Any]],
-    chunk_filter: ChunkFilter,
-    limit: int,
-    into: dict[str, ChunkRecord],
-) -> list[str]:
-    """Ids of the hits the caller may see (ChunkFilter.allows), best first, at most `limit`."""
-    ids: list[str] = []
-    for node in rows:
-        record = _record(node)
-        if chunk_filter.allows(record):
-            into[record.chunk_id] = record
-            ids.append(record.chunk_id)
-        if len(ids) == limit:
+    rows: list[dict[str, Any]], chunk_filter: ChunkFilter, limit: int
+) -> dict[str, ChunkRecord]:
+    """The hits the caller may see (ChunkFilter.allows) by id, best first, at most `limit`."""
+    visible: dict[str, ChunkRecord] = {}
+    for row in rows:
+        if len(visible) == limit:
             break
-    return ids
+        record = _record(row["c"])
+        if chunk_filter.allows(record):
+            visible[record.chunk_id] = record
+    return visible
 
 
 class Neo4jChunkStore:
@@ -183,28 +194,17 @@ class Neo4jChunkStore:
             ),
             self._graph.session(write=True) as session,
         ):
-            session.execute_write(
-                lambda tx: tx.run(
-                    "UNWIND $rows AS row MERGE (c:Chunk {chunk_id: row.chunk_id}) "
-                    "SET c += row.props",
-                    rows=rows,
-                ).consume()
-            )
+            session.execute_write(_rows, _UPSERT, rows=rows)
 
     def delete_source(
         self, source_id: str, keep: set[str] | frozenset[str] = frozenset()
     ) -> int:
         """Delete a document's chunks except `keep`; return how many were deleted."""
         with self._graph.session(write=True) as session:
-            record = session.execute_write(
-                lambda tx: tx.run(
-                    "MATCH (c:Chunk {source_id: $source_id}) "
-                    "WHERE NOT c.chunk_id IN $keep DETACH DELETE c RETURN count(*) AS n",
-                    source_id=source_id,
-                    keep=sorted(keep),
-                ).single(strict=True)
+            [row] = session.execute_write(
+                _rows, _DELETE_SOURCE, source_id=source_id, keep=sorted(keep)
             )
-        return int(record["n"])
+        return int(row["n"])
 
     # --- reads ------------------------------------------------------------------
     def get_by_ids(self, chunk_ids: Sequence[str]) -> list[ChunkRecord]:
@@ -219,18 +219,9 @@ class Neo4jChunkStore:
             ) as span,
             self._graph.session(write=False) as session,
         ):
-            nodes = session.execute_read(
-                lambda tx: [
-                    dict(r["c"])
-                    for r in tx.run(
-                        "MATCH (c:Chunk) WHERE c.chunk_id IN $ids AND c.text IS NOT NULL "
-                        "RETURN c",
-                        ids=list(chunk_ids),
-                    )
-                ]
-            )
-            span.set_attribute("nexo.chunks.found", len(nodes))
-        by_id = {node["chunk_id"]: _record(node) for node in nodes}
+            rows = session.execute_read(_rows, _GET_BY_IDS, ids=list(chunk_ids))
+            span.set_attribute("nexo.chunks.found", len(rows))
+        by_id = {row["c"]["chunk_id"]: _record(row["c"]) for row in rows}
         return [by_id[i] for i in chunk_ids if i in by_id]
 
     def search(
@@ -239,7 +230,6 @@ class Neo4jChunkStore:
         """Top-k chunks the filter allows, ranked by the store's retrieval mode."""
         attributes = retrieval_attributes(k, self._mode) | {"db.system.name": "neo4j"}
         candidates = k if self._mode == "vector" else max(k * 4, 20)
-        allowed: dict[str, ChunkRecord] = {}
         fetch = candidates * OVERFETCH
         with (
             traced_span(
@@ -247,56 +237,42 @@ class Neo4jChunkStore:
             ) as span,
             self._graph.session(write=False) as session,
         ):
-            rankings: list[list[str]] = []
+            hits: list[dict[str, ChunkRecord]] = []
             if self._mode in ("vector", "hybrid"):
-                vector = self._embeddings.embed_query(query)
                 rows = session.execute_read(
-                    _hits,
-                    "CALL db.index.vector.queryNodes($index, $fetch, $vector)" + _HIT,
+                    _rows,
+                    _VECTOR_SEARCH,
                     index=VECTOR_INDEX,
                     fetch=fetch,
-                    vector=vector,
+                    vector=self._embeddings.embed_query(query),
                 )
-                rankings.append(_visible(rows, chunk_filter, candidates, allowed))
+                hits.append(_visible(rows, chunk_filter, candidates))
             terms = tokenize(query)
             if self._mode in ("keyword", "hybrid") and terms:
                 rows = session.execute_read(
-                    _hits,
-                    "CALL db.index.fulltext.queryNodes($index, $terms, {limit: $fetch})"
-                    + _HIT,
+                    _rows,
+                    _TEXT_SEARCH,
                     index=TEXT_INDEX,
                     terms=" ".join(terms),
                     fetch=fetch,
                 )
-                rankings.append(_visible(rows, chunk_filter, candidates, allowed))
-            ranked = fuse(rankings)[:k] if rankings else []
+                hits.append(_visible(rows, chunk_filter, candidates))
+            ranked = fuse([list(found) for found in hits])[:k] if hits else []
             span.set_attribute("nexo.chunks.found", len(ranked))
+        allowed = {chunk_id: r for found in hits for chunk_id, r in found.items()}
         return [allowed[chunk_id] for chunk_id in ranked]
 
     def known_ids(self, chunk_ids: Sequence[str]) -> set[str]:
         """Which of these chunk ids the graph has (with or without text)."""
         with self._graph.session(write=False) as session:
-            return set(
-                session.execute_read(
-                    lambda tx: [
-                        r["id"]
-                        for r in tx.run(
-                            "MATCH (c:Chunk) WHERE c.chunk_id IN $ids RETURN c.chunk_id AS id",
-                            ids=list(chunk_ids),
-                        )
-                    ]
-                )
-            )
+            rows = session.execute_read(_rows, _KNOWN_IDS, ids=list(chunk_ids))
+        return {row["id"] for row in rows}
 
     def missing_text(self) -> int:
         """Chunks the graph references that have no text here (ingested before ADR-0018)."""
         with self._graph.session(write=False) as session:
-            record = session.execute_read(
-                lambda tx: tx.run(
-                    "MATCH (c:Chunk) WHERE c.text IS NULL RETURN count(c) AS n"
-                ).single(strict=True)
-            )
-        return int(record["n"])
+            [row] = session.execute_read(_rows, _MISSING_TEXT)
+        return int(row["n"])
 
 
 def import_local_store(store: Neo4jChunkStore, path: Path) -> dict[str, int]:

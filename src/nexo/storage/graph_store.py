@@ -25,7 +25,7 @@ import re
 from collections import defaultdict
 from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Any, LiteralString, cast
+from typing import Any, LiteralString, NamedTuple, cast
 from urllib.parse import urlparse
 
 from neo4j import (
@@ -194,9 +194,7 @@ class GraphStore:
     @_connection_retry
     def ensure_schema(self) -> None:
         """Create the constraints and indexes the graph relies on, if missing."""
-        with self._driver.session(
-            database=self._database, default_access_mode=WRITE_ACCESS
-        ) as session:
+        with self.session(write=True) as session:
             for statement in _SCHEMA_STATEMENTS:
                 session.run(statement).consume()
 
@@ -217,55 +215,29 @@ class GraphStore:
         """
         plan = _plan_writes(triples)
         keep = sorted(c.chunk_id for c in chunks)
-        removed: list[int] = []
 
-        def work(tx: ManagedTransaction) -> None:
-            affected, stale = _delete_source(tx, document.source_id, keep)
-            removed[:] = [stale]
+        def work(tx: ManagedTransaction) -> int:
+            affected, removed = _delete_source(tx, document.source_id, keep)
             if chunks:
                 _write_lexical(tx, document, chunks)
             if triples:
-                _write_domain(tx, *plan)
-            _refresh_derived(tx, sorted(affected | {row["key"] for row in plan[1]}))
+                _write_domain(tx, plan)
+            _refresh_derived(tx, sorted(affected | {m["key"] for m in plan.mentions}))
+            return removed
 
-        with (
-            self._span("replace_source"),
-            self._driver.session(
-                database=self._database, default_access_mode=WRITE_ACCESS
-            ) as session,
-        ):
-            session.execute_write(work)
-        return SourceSwap(triples_written=len(triples), chunks_removed=removed[0])
+        with self._span("replace_source"), self.session(write=True) as session:
+            removed = session.execute_write(work)
+        return SourceSwap(triples_written=len(triples), chunks_removed=removed)
 
     @_connection_retry
     def find_candidates(
         self, entity_type: EntityType, tokens: Sequence[str], limit: int
     ) -> list[Candidate]:
         """Resolution blocking: same-type entities whose name or alias contains a token."""
-        with (
-            self._span("find_candidates"),
-            self._driver.session(
-                database=self._database, default_access_mode=READ_ACCESS
-            ) as session,
-        ):
-            records = session.execute_read(
-                lambda tx: list(
-                    tx.run(
-                        """
-                MATCH (e:Entity) WHERE e.type = $type
-                  AND any(t IN $tokens WHERE toLower(e.name) CONTAINS t
-                          OR any(a IN coalesce(e.aliases, []) WHERE toLower(a) CONTAINS t))
-                RETURN e.key AS key, e.name AS name, coalesce(e.aliases, []) AS aliases,
-                       coalesce(e.description, '') AS description
-                LIMIT $limit
-                """,
-                        type=entity_type.value,
-                        tokens=list(tokens),
-                        limit=limit,
-                    )
-                )
+        with self._span("find_candidates"), self.session(write=False) as session:
+            return session.execute_read(
+                _find_candidates, entity_type.value, list(tokens), limit
             )
-        return [Candidate(**record.data()) for record in records]
 
     # --- reads (agent tool) ----------------------------------------------------
     @_connection_retry
@@ -289,12 +261,7 @@ class GraphStore:
                 rows.append(record.data())
             return ReadResult(rows, truncated=False)
 
-        with (
-            self._span("agent_query", cypher),
-            self._driver.session(
-                database=self._database, default_access_mode=READ_ACCESS
-            ) as session,
-        ):
+        with self._span("agent_query", cypher), self.session(write=False) as session:
             return session.execute_read(work)
 
     def describe_schema(self) -> str:
@@ -319,7 +286,32 @@ class GraphStore:
         )
 
 
-def _plan_writes(triples: Sequence[GroundedTriple]):
+_FIND_CANDIDATES: LiteralString = """
+MATCH (e:Entity) WHERE e.type = $type
+  AND any(t IN $tokens WHERE toLower(e.name) CONTAINS t
+          OR any(a IN coalesce(e.aliases, []) WHERE toLower(a) CONTAINS t))
+RETURN e.key AS key, e.name AS name, coalesce(e.aliases, []) AS aliases,
+       coalesce(e.description, '') AS description
+LIMIT $limit
+"""
+
+
+def _find_candidates(
+    tx: ManagedTransaction, entity_type: str, tokens: list[str], limit: int
+) -> list[Candidate]:
+    result = tx.run(_FIND_CANDIDATES, type=entity_type, tokens=tokens, limit=limit)
+    return [Candidate(**record.data()) for record in result]
+
+
+class WritePlan(NamedTuple):
+    """The rows one replace_source writes: entities by label, mentions, relations by type."""
+
+    entities: dict[str, list[dict[str, Any]]]
+    mentions: list[dict[str, Any]]
+    relations: dict[str, list[dict[str, Any]]]
+
+
+def _plan_writes(triples: Sequence[GroundedTriple]) -> WritePlan:
     entities: dict[str, dict[str, Any]] = {}
     mentions: dict[tuple[str, str, str], dict[str, Any]] = {}
     relations: dict[str, list[dict[str, Any]]] = defaultdict(list)
@@ -374,7 +366,7 @@ def _plan_writes(triples: Sequence[GroundedTriple]):
     by_label: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for row in entities.values():
         by_label[row["type"]].append(row)
-    return by_label, list(mentions.values()), relations
+    return WritePlan(by_label, list(mentions.values()), relations)
 
 
 def _write_lexical(
@@ -421,8 +413,8 @@ def _write_lexical(
     ).consume()
 
 
-def _write_domain(tx: ManagedTransaction, entities, mentions, relations) -> None:
-    for label, rows in entities.items():
+def _write_domain(tx: ManagedTransaction, plan: WritePlan) -> None:
+    for label, rows in plan.entities.items():
         # Labels cannot be parameters; only closed-enum literals reach here.
         EntityType(label)
         tx.run(
@@ -449,9 +441,9 @@ def _write_domain(tx: ManagedTransaction, entities, mentions, relations) -> None
         MERGE (e)-[m:MENTIONED_IN {surface: row.surface}]->(c)
         SET m.resolution = row.method
         """,
-        rows=mentions,
+        rows=plan.mentions,
     ).consume()
-    for rel_type, rows in relations.items():
+    for rel_type, rows in plan.relations.items():
         # RELATED_TO keeps one edge per distinct out-of-ontology predicate.
         identity = "{predicate: row.predicate}" if rel_type == FALLBACK_RELATION else ""
         tx.run(
