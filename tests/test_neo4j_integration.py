@@ -624,10 +624,8 @@ def test_end_to_end_ingest_investigate_approve(store, settings, chunk_store):
     )
     assert paused.status == "awaiting_review"
     assert paused.pending_review is not None
-    # dict(): pylint reads the field's default (None), not its declared type.
-    review = dict(paused.pending_review)
-    assert review["citations"] == [chunk_id]
-    assert review["compliance_report"]["blocking"] is False
+    assert paused.pending_review.citations == [chunk_id]
+    assert paused.pending_review.blocking is False
     assert _last_tool_payload(client.requests[1])["rows"][0]["path"] == [
         "Acme Holdings",
         "Beta Labs",
