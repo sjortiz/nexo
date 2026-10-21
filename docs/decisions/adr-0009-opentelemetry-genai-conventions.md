@@ -52,6 +52,11 @@ content into span events.
   record has its own logger, kept at INFO, so `LOG_LEVEL` cannot drop it. `none` keeps the
   earlier behaviour; content capture still exports everything. The LangSmith add-on drops the event; it receives the verdict attribute only.[^gate]
 
+- **Amended 2026-10-21 (#85):** exceptions follow the same rule as messages. A failing span gets
+  `error.type` and a status description of the exception class only; the exception message and the
+  `exception` event, which can quote a Cypher line or a file path, are recorded only when content
+  capture is on. `traced_span` sets this for every span Nexo opens.
+
 # Options considered
 
 | Option | Against |

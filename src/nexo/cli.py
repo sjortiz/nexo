@@ -219,17 +219,28 @@ def _eval(args: argparse.Namespace) -> int:
         chunks = chunk_store_from_settings(settings, graph)
         investigator = build_investigator(settings, graph, chunks)
         judge = _judge(settings, chunks) if settings.judge_model else None
+        failed = 0
         for case in cases:
             with (
                 experiment.case_span(case) if experiment else traced_span("eval.case")
             ) as span:
-                scored = _score_case(
-                    case, investigator, judge, settings.default_clearance
-                )
-                if experiment:
-                    experiment.score(span, scored.metrics)
-            _emit(scored.row, "eval case scored", indent=None)
-    return 0
+                try:
+                    scored = _score_case(
+                        case, investigator, judge, settings.default_clearance
+                    )
+                except Exception as exc:  # pylint: disable=broad-exception-caught
+                    # One case must not end the run; the row says why it has no scores.
+                    failed += 1
+                    row = {
+                        "question": case.get("question"),
+                        "error": type(exc).__name__,
+                    }
+                else:
+                    if experiment:
+                        experiment.score(span, scored.metrics)
+                    row = scored.row
+            _emit(row, "eval case scored", indent=None)
+    return 1 if failed else 0
 
 
 def _read_jsonl(path: str) -> list[dict]:
@@ -320,15 +331,22 @@ def _eval_extraction(args: argparse.Namespace) -> int:
         aids=ExtractionAids(ontology=ontology),
     )
     totals: dict[str, list] = {"predicted": [], "gold": []}
+    failed = 0
     for n, line in enumerate(
         Path(args.dataset).read_text(encoding="utf-8").splitlines()
     ):
         if not line.strip():
             continue
         case = json.loads(line)
-        predicted, _ = ingestor.extract_triples(
-            case["text"], DocumentMetadata(source_id=f"case-{n}")
-        )
+        try:
+            predicted, _ = ingestor.extract_triples(
+                case["text"], DocumentMetadata(source_id=f"case-{n}")
+            )
+        except Exception as exc:  # pylint: disable=broad-exception-caught
+            # One case must not end the run; the row says why it has no scores.
+            failed += 1
+            _emit({"case": n, "error": type(exc).__name__}, "extraction case failed")
+            continue
         pred = {grounded_key(t) for t in predicted}
         gold = {triple_key(Triple.model_validate(t), ontology) for t in case["triples"]}
         totals["predicted"] += [(n, *k) for k in pred]
@@ -343,7 +361,7 @@ def _eval_extraction(args: argparse.Namespace) -> int:
         "extraction overall",
         indent=None,
     )
-    return 0
+    return 1 if failed else 0
 
 
 def _graph(args: argparse.Namespace) -> int:

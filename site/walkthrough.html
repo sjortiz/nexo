@@ -175,6 +175,8 @@ settings = Settings(
     checkpoint_backend=<span class="st">"memory"</span>,
     ontology_path=ROOT / <span class="st">"deploy/ontology.example.json"</span>,
     otel_instrumentation_genai_capture_message_content=<span class="st">"span_only"</span>,
+    review_policy=<span class="st">"always"</span>,  <span class="cm"># show the pause even for a clean answer (default: on-findings)</span>
+    agent_max_tokens=<span class="nu">4096</span>,  <span class="cm"># the 35B profile model's replies can pass the 2048 default</span>
 )</code></pre></div>
 <div class="prose"><p>Before anything else, confirm every model role has a server that answers and holds its model. This is what <code>nexo models --check</code> runs.</p></div>
 <div class="cell"><pre class="code"><code>show(
@@ -185,23 +187,23 @@ settings = Settings(
 )</code></pre><div class="out-label">Output</div><pre class="output"><samp>[
   {
     "role": "agent",
-    "model": "qwen3.5:9b-q4_K_M",
+    "model": "qwen3.6:35b-a3b-q4_K_M",
     "check": "ok"
   },
   {
     "role": "extraction",
-    "model": "qwen3.5:9b-q4_K_M",
+    "model": "qwen3.6:35b-a3b-q4_K_M",
     "check": "ok"
   },
   {
     "role": "router",
-    "model": "qwen3.5:9b-q4_K_M",
+    "model": "qwen3:4b-instruct-2507-q4_K_M",
     "check": "ok"
   },
   {
     "role": "judge",
-    "model": null,
-    "check": null
+    "model": "llama3.1:8b-instruct-q4_K_M",
+    "check": "ok"
   },
   {
     "role": "embedding",
@@ -325,23 +327,20 @@ show(
     }
 )</code></pre><div class="out-label">Output</div><pre class="output"><samp>(Acme Holdings Inc.) -[ACQUIRED]-&gt; (Beta Labs)
     evidence: "Acme Holdings Inc. (AHI) bought Beta Labs in March 2024."
-(Beta Labs) -[PRODUCES]-&gt; (rapid diagnostic kits)
-    evidence: "Beta Labs makes rapid diagnostic kits for respiratory infections"
-(rapid diagnostic kits) -[RELATED_TO]-&gt; (respiratory infections)
+(Beta Labs) -[PRODUCES]-&gt; (rapid diagnostic kits for respiratory infections)
     evidence: "Beta Labs makes rapid diagnostic kits for respiratory infections"
 (Jane Roe) -[EMPLOYED_BY]-&gt; (Beta Labs)
     evidence: "Jane Roe has been chief executive of Beta Labs since 2021."
-(Acme Holdings Inc.) -[SUBSIDIARY_OF]-&gt; (Beta Labs)
+(Jane Roe) -[EMPLOYED_BY]-&gt; (Delta Devices)
+    evidence: "Before Beta Labs she led product at Delta Devices."
+(Beta Labs) -[PRODUCES]-&gt; (home testing)
     evidence: "AHI expects Beta Labs to expand into home testing in 2026."
 {
-  "extracted": 6,
+  "extracted": 5,
   "kept": 5,
-  "dropped": {
-    "evidence_not_in_chunk": 1
-  },
+  "dropped": {},
   "relations": {
-    "canonical": 4,
-    "fallback": 1
+    "canonical": 5
   }
 }</samp></pre></div>
 <div class="prose"><h2 id="4-map-relations-onto-a-vocabulary">4. Map relations onto a vocabulary</h2>
@@ -401,15 +400,12 @@ show({key: <span class="st">f"</span>{r.method.value}<span class="st"> -&gt; </s
   "source_id": "acme-portfolio-note",
   "chunk_count": 3,
   "triples_written": 5,
-  "dropped": {
-    "evidence_not_in_chunk": 1
-  },
+  "dropped": {},
   "relations": {
-    "canonical": 4,
-    "fallback": 1
+    "canonical": 5
   },
   "resolution": {
-    "exact": 5
+    "new": 6
   },
   "sensitivity": {
     "internal": 2,
@@ -419,16 +415,15 @@ show({key: <span class="st">f"</span>{r.method.value}<span class="st"> -&gt; </s
 {
   "source_id": "gamma-supplier-review",
   "chunk_count": 2,
-  "triples_written": 2,
-  "dropped": {
-    "evidence_not_in_chunk": 1
-  },
+  "triples_written": 3,
+  "dropped": {},
   "relations": {
-    "canonical": 2
+    "canonical": 3
   },
   "resolution": {
-    "exact": 2,
-    "alias": 1
+    "new": 1,
+    "exact": 1,
+    "llm": 2
   },
   "sensitivity": {
     "internal": 2
@@ -452,31 +447,25 @@ show(graph.run_read_query(<span class="st">"""
     "relation": "ACQUIRED",
     "tail": "Beta Labs",
     "chunk_ids": [
-      "chk_f9eb2281935d8305"
-    ]
-  },
-  {
-    "head": "Acme Holdings Inc.",
-    "relation": "SUBSIDIARY_OF",
-    "tail": "Beta Labs",
-    "chunk_ids": [
-      "chk_3e5bbe2bcd54d9bc"
-    ]
-  },
-  {
-    "head": "Beta Labs",
-    "relation": "ACQUIRED",
-    "tail": "Acme Holdings Inc.",
-    "chunk_ids": [
+      "chk_f9eb2281935d8305",
       "chk_77404fc8e15193f8"
     ]
   },
   {
     "head": "Beta Labs",
     "relation": "PRODUCES",
-    "tail": "rapid diagnostic kits",
+    "tail": "home testing",
     "chunk_ids": [
-      "chk_f9eb2281935d8305"
+      "chk_3e5bbe2bcd54d9bc"
+    ]
+  },
+  {
+    "head": "Beta Labs",
+    "relation": "PRODUCES",
+    "tail": "rapid diagnostic kits for respiratory infections",
+    "chunk_ids": [
+      "chk_f9eb2281935d8305",
+      "chk_783852d4e180e15a"
     ]
   },
   {
@@ -496,11 +485,11 @@ show(graph.run_read_query(<span class="st">"""
     ]
   },
   {
-    "head": "rapid diagnostic kits",
-    "relation": "RELATED_TO",
-    "tail": "respiratory infections",
+    "head": "Jane Roe",
+    "relation": "EMPLOYED_BY",
+    "tail": "Delta Devices",
     "chunk_ids": [
-      "chk_f9eb2281935d8305"
+      "chk_714c2e550aacdb8f"
     ]
   }
 ]
@@ -509,6 +498,7 @@ show(graph.run_read_query(<span class="st">"""
     "name": "Acme Holdings Inc.",
     "type": "Organization",
     "aliases": [
+      "AHI",
       "Acme"
     ],
     "documents": [
@@ -526,6 +516,15 @@ show(graph.run_read_query(<span class="st">"""
       "gamma-supplier-review"
     ],
     "sensitivity": "internal"
+  },
+  {
+    "name": "Delta Devices",
+    "type": "Organization",
+    "aliases": [],
+    "documents": [
+      "acme-portfolio-note"
+    ],
+    "sensitivity": "pii"
   },
   {
     "name": "Gamma Clinics",
@@ -557,9 +556,9 @@ show(graph.run_read_query(<span class="st">"""
     show(
         <span class="st">f"</span>{mode:<span class="st">&lt;8</span>}<span class="st"> </span><span class="st">"</span>
         + <span class="st">" | "</span>.join(<span class="st">f"</span>{h.source_id}<span class="st"> &gt; </span>{h.section_path[-<span class="nu">1</span>]}<span class="st">"</span> <span class="kw">for</span> h <span class="kw">in</span> hits)
-    )</code></pre><div class="out-label">Output</div><pre class="output"><samp>keyword  gamma-supplier-review &gt; Diagnostics | acme-portfolio-note &gt; Outlook | gamma-supplier-review &gt; Ownership changes
-vector   gamma-supplier-review &gt; Diagnostics | gamma-supplier-review &gt; Ownership changes | acme-portfolio-note &gt; Acquisitions
-hybrid   gamma-supplier-review &gt; Diagnostics | gamma-supplier-review &gt; Ownership changes | acme-portfolio-note &gt; Outlook</samp></pre></div>
+    )</code></pre><div class="out-label">Output</div><pre class="output"><samp>keyword  
+vector   
+hybrid</samp></pre></div>
 <div class="prose"><h2 id="9-let-a-model-query-the-graph-safely">9. Let a model query the graph, safely</h2>
 <p>The agent writes its own Cypher, so Nexo never trusts it: queries run in a read-only transaction with a timeout and a row cap, under a read-only database user when configured. Before that, a validator rejects anything that is not a single read query.</p></div>
 <div class="cell"><pre class="code"><code><span class="kw">for</span> cypher <span class="kw">in</span> [
@@ -595,29 +594,17 @@ show(
         <span class="st">"tool_calls"</span>: [<span class="st">f"</span>{c.tool}<span class="st">: </span>{c.detail}<span class="st">"</span> <span class="kw">for</span> c <span class="kw">in</span> output.tool_calls],
         <span class="st">"stop_reason"</span>: output.stop_reason,
     }
-)</code></pre><div class="out-label">Output</div><pre class="output"><samp>**Answer:**
-
-Acme Holdings and Gamma Clinics are **not directly connected**, but they are linked indirectly through **Beta Labs**:
-
-1. **Acme Holdings acquired Beta Labs in March 2024** [chunk:chk_f9eb2281935d8305]. Beta Labs makes rapid diagnostic kits for respiratory infections and remains a separate brand inside Acme Holdings Inc. (AHI) [chunk:chk_f9eb2281935d8305].
-
-2. **Gamma Clinics has a supply agreement with Beta Labs** to purchase respiratory test kits under a three-year agreement signed in 2023 [chunk:chk_783852d4e180e15a].
-
-3. **The connection persists after the acquisition**: When Beta Labs changed hands and became part of Acme in 2024, "the agreement with Gamma Clinics continues unchanged" [chunk:chk_77404fc8e15193f8].
-
-**Summary:** The relationship is indirect—Acme Holdings owns Beta Labs, which supplies respiratory diagnostic kits to Gamma Clinics. The supply agreement between Beta Labs and Gamma Clinics remains in effect after the acquisition.
+)</code></pre><div class="out-label">Output</div><pre class="output"><samp>
 {
-  "citations": [
-    "chk_f9eb2281935d8305",
-    "chk_783852d4e180e15a",
-    "chk_77404fc8e15193f8"
-  ],
+  "citations": [],
   "tool_calls": [
-    "query_knowledge_graph: 3 rows",
     "query_knowledge_graph: 1 rows",
-    "fetch_vector_chunks: 4 chunks"
+    "query_knowledge_graph: 1 rows",
+    "find_paths: 1 paths",
+    "fetch_vector_chunks: 0 chunks",
+    "search_chunks: 0 chunks"
   ],
-  "stop_reason": "end_turn"
+  "stop_reason": "max_tokens"
 }</samp></pre></div>
 <div class="prose"><p>The trace shows what the agent did. These are the Cypher queries it wrote, in order:</p></div>
 <div class="cell"><pre class="code"><code><span class="kw">for</span> span <span class="kw">in</span> spans.get_finished_spans():
@@ -626,13 +613,10 @@ Acme Holdings and Gamma Clinics are **not directly connected**, but they are lin
             json.loads(span.attributes[<span class="st">"gen_ai.tool.call.arguments"</span>])[
                 <span class="st">"cypher_query"</span>
             ].strip()
-        )</code></pre><div class="out-label">Output</div><pre class="output"><samp>MATCH (a:Entity {key: "Organization:acme holdings"})-[r1]-(b:Entity)
-WHERE b.type = 'Organization' AND (toLower(b.name) CONTAINS 'gamma' OR toLower(b.name) CONTAINS 'beta')
-RETURN a.key, a.name, type(r1), r1.predicate, b.key, b.name, b.type, r1.certainty, r1.chunk_id LIMIT 50
-MATCH (g:Entity {key: "Organization:gamma clinics"})-[r]-(n:Entity)
-RETURN g.key, g.name, type(r), r.predicate, n.key, n.name, n.type, r.certainty, r.chunk_id LIMIT 50</samp></pre></div>
+        )</code></pre><div class="out-label">Output</div><pre class="output"><samp>MATCH (e:Entity) WHERE toLower(e.name) CONTAINS "acme holdings" OR any(a IN e.aliases WHERE toLower(a) CONTAINS "acme holdings") RETURN e.key, e.name, e.type LIMIT 5
+MATCH (e:Entity) WHERE toLower(e.name) CONTAINS "gamma clinics" OR any(a IN e.aliases WHERE toLower(a) CONTAINS "gamma clinics") RETURN e.key, e.name, e.type LIMIT 5</samp></pre></div>
 <div class="prose"><h2 id="11-put-it-in-a-workflow-with-human-review">11. Put it in a workflow with human review</h2>
-<p>The agent is one step of a fixed LangGraph workflow. A <strong>router</strong> checks the request first. The <strong>investigator</strong> runs inside a retried task. <strong>Compliance</strong> checks the draft (uncited claims, citations to text the agent never read, sensitive data) and then pauses the run until a person decides. The pause is checkpointed, so the decision can come from another process, days later.</p></div>
+<p>The agent is one step of a fixed LangGraph workflow. A <strong>router</strong> checks the request first. The <strong>investigator</strong> runs inside a retried task. <strong>Compliance</strong> checks the draft (uncited claims, citations to text the agent never read, sensitive data) and then, under the review policy this walkthrough sets to <code>always</code>, pauses the run until a person decides; the default <code>on-findings</code> releases a clean, cited answer without a pause. The pause is checkpointed, so the decision can come from another process, days later.</p></div>
 <div class="cell"><pre class="code"><code>show(workflow_mermaid())</code></pre><div class="out-label">Output</div><pre class="output"><samp>---
 config:
   flowchart:
@@ -657,9 +641,12 @@ graph TD;
 runtime = stack.enter_context(open_runtime(settings))
 run = runtime.start(<span class="st">"How is Acme Holdings connected to Gamma Clinics?"</span>)
 show({<span class="st">"status"</span>: run.status, <span class="st">"routed_to"</span>: run.routing_target})
+<span class="kw">assert</span> (
+    run.pending_review <span class="kw">is</span> <span class="kw">not</span> <span class="kw">None</span>
+), run.outcome  <span class="cm"># the agent produced nothing to review</span>
 show(
     {
-        key: run.pending_review[key]
+        key: <span class="bi">getattr</span>(run.pending_review, key)
         <span class="kw">for</span> key <span class="kw">in</span> (<span class="st">"draft_answer"</span>, <span class="st">"citations"</span>, <span class="st">"compliance_report"</span>)
     }
 )</code></pre><div class="out-label">Output</div><pre class="output"><samp>{
@@ -667,16 +654,13 @@ show(
   "routed_to": "investigator"
 }
 {
-  "draft_answer": "**Answer:**\n\nAcme Holdings is **not directly connected** to Gamma Clinics, but they are connected through an **indirect supply chain relationship** via Beta Labs:\n\n---\n\n### Connection Chain:\n\n1. **Acme Holdings → Beta Labs (ACQUIRED)**  \n   Acme Holdings Inc. acquired Beta Labs in March 2024 [chunk:chk_f9eb2281935d8305]. Beta Labs remains a separate brand inside Acme Holdings and makes rapid diagnostic kits for respiratory infections [chunk:chk_f9eb2281935d8305].\n\n2. **Beta Labs → Gamma Clinics (SUPPLIES)**  \n   Gamma Clinics buys its respiratory test kits from Beta Labs under a three-year agreement signed in 2023 [chunk:chk_783852d4e180e15a]. The agreement continues unchanged after Beta Labs was acquired by Acme Holdings [chunk:chk_77404fc8e15193f8].\n\n---\n\n### Summary:\n- **Direct relationship**: None between Acme Holdings and Gamma Clinics.\n- **Indirect relationship**: Acme Holdings owns Beta Labs, which supplies diagnostic kits to Gamma Clinics. The supplier agreement remains active post-acquisition [chunk:chk_77404fc8e15193f8].",
+  "draft_answer": "Acme Holdings is connected to Gamma Clinics through **Beta Labs** via a two-step chain:\n\n1. **Acme Holdings acquired Beta Labs** in March 2024 [chunk:chk_f9eb2281935d8305, chunk:chk_77404fc8e15193f8]\n2. **Beta Labs supplies Gamma Clinics** (Gamma Clinics buys its respiratory test kits from Beta Labs) [chunk:chk_783852d4e180e15a]\n\nThe full connection path is:\n**Acme Holdings Inc.** → *ACQUIRED* → **Beta Labs** ← *SUPPLIES* ← **Gamma Clinics**\n\nIn other words, Acme Holdings owns Beta Labs (through its March 2024 acquisition), and Beta Labs is a supplier to Gamma Clinics. This creates an indirect business relationship between Acme Holdings and Gamma Clinics through their shared connection with Beta Labs.",
   "citations": [
     "chk_f9eb2281935d8305",
-    "chk_783852d4e180e15a",
-    "chk_77404fc8e15193f8"
+    "chk_77404fc8e15193f8",
+    "chk_783852d4e180e15a"
   ],
-  "compliance_report": {
-    "findings": [],
-    "blocking": false
-  }
+  "compliance_report": "findings=[Finding(code='ungrounded_citations', severity='block', detail='chk_f9eb2281935d8305, chk_77404fc8e15193f8, chk_783852d4e180e15a'), Finding(code='evidence_withheld', severity='warn', detail='3 chunk(s) above clearance or outside scope')] blocking=True"
 }</samp></pre></div>
 <div class="prose"><p>A reviewer approves it, and only then is the answer released.</p></div>
 <div class="cell"><pre class="code"><code>done = runtime.review(
@@ -685,28 +669,10 @@ show(
 )
 show({<span class="st">"status"</span>: done.status, <span class="st">"approval"</span>: done.approval_status})
 show(done.final_response)</code></pre><div class="out-label">Output</div><pre class="output"><samp>{
-  "status": "completed",
-  "approval": "approved"
+  "status": "awaiting_review",
+  "approval": "pending"
 }
-**Answer:**
-
-Acme Holdings is **not directly connected** to Gamma Clinics, but they are connected through an **indirect supply chain relationship** via Beta Labs:
-
----
-
-### Connection Chain:
-
-1. **Acme Holdings → Beta Labs (ACQUIRED)**  
-   Acme Holdings Inc. acquired Beta Labs in March 2024 [chunk:chk_f9eb2281935d8305]. Beta Labs remains a separate brand inside Acme Holdings and makes rapid diagnostic kits for respiratory infections [chunk:chk_f9eb2281935d8305].
-
-2. **Beta Labs → Gamma Clinics (SUPPLIES)**  
-   Gamma Clinics buys its respiratory test kits from Beta Labs under a three-year agreement signed in 2023 [chunk:chk_783852d4e180e15a]. The agreement continues unchanged after Beta Labs was acquired by Acme Holdings [chunk:chk_77404fc8e15193f8].
-
----
-
-### Summary:
-- **Direct relationship**: None between Acme Holdings and Gamma Clinics.
-- **Indirect relationship**: Acme Holdings owns Beta Labs, which supplies diagnostic kits to Gamma Clinics. The supplier agreement remains active post-acquisition [chunk:chk_77404fc8e15193f8].</samp></pre></div>
+null</samp></pre></div>
 <div class="prose"><p>Requests outside the knowledge base end at the router, before any agent work:</p></div>
 <div class="cell"><pre class="code"><code>off_topic = runtime.start(<span class="st">"Write a short poem about the sea."</span>)
 show(
@@ -718,7 +684,7 @@ show(
 )</code></pre><div class="out-label">Output</div><pre class="output"><samp>{
   "status": "completed",
   "routed_to": "rejected",
-  "reason": "The user is requesting creative writing unrelated to the corporate knowledge graph or investigation services."
+  "reason": "Request is for creative output, not relationship investigation."
 }</samp></pre></div>
 <div class="prose"><h2 id="12-clearance-decides-what-the-agent-can-see">12. Clearance decides what the agent can see</h2>
 <p>The Leadership chunk holds an email address, so it is PII. A caller with the default <code>internal</code> clearance cannot see that chunk, and the agent cannot use it: it should report what it could not find rather than guess. With <code>pii</code> clearance, the same question gets a different answer.</p>
@@ -726,29 +692,17 @@ show(
 <div class="cell"><pre class="code"><code>QUESTION = <span class="st">"Who is the chief executive of Beta Labs?"</span>
 <span class="kw">for</span> clearance <span class="kw">in</span> (<span class="st">"internal"</span>, <span class="st">"pii"</span>):
     result = runtime.start(QUESTION, clearance=clearance)
-    draft = (result.pending_review <span class="kw">or</span> {}).get(<span class="st">"draft_answer"</span>)
+    draft = result.pending_review.draft_answer <span class="kw">if</span> result.pending_review <span class="kw">else</span> <span class="kw">None</span>
     show(
         <span class="st">f"</span><span class="st">[</span>{clearance}<span class="st">] </span><span class="st">"</span>
         + (draft <span class="kw">or</span> <span class="st">f"</span><span class="st">no answer released (approval: </span>{result.approval_status}<span class="st">)</span><span class="st">"</span>)
-    )</code></pre><div class="out-label">Output</div><pre class="output"><samp>[internal] Based on my investigation of the knowledge graph, I found a connection between **Jane Roe** (Person) and **Beta Labs** (Organization). However, I was unable to fetch the source text for chunk `chk_714c2e550aacdb8f` where this relationship is documented - it was withheld from access.
-
-The query results show:
-- Jane Roe is a Person entity connected to Beta Labs Organization
-- The relationship has certainty "asserted" but the specific relationship type (predicate) could not be retrieved in the graph query results
-
-**What I could not establish:**
-- The exact nature of Jane Roe's role at Beta Labs (whether she is the chief executive, CEO, or holds another position) cannot be confirmed because:
-  1. The chunk text containing this information was withheld from access
-  2. The relationship type/predicate between Jane Roe and Beta Labs could not be retrieved in the graph query results
-
-**Conclusion:** While there is a verified connection between Jane Roe and Beta Labs in the knowledge graph, I cannot definitively confirm that she is the chief executive because the supporting evidence text was not accessible. The graph indicates an asserted relationship exists, but without access to the chunk content, I cannot cite specific evidence for her role/title at Beta Labs.
-[pii] **Answer:** Jane Roe is the chief executive of Beta Labs.
+    )</code></pre><div class="out-label">Output</div><pre class="output"><samp>[internal] The documents do not mention the chief executive of Beta Labs. While the knowledge graph confirms that Beta Labs is an organization (acquired by Acme Holdings Inc. in March 2024) and produces rapid diagnostic kits for respiratory infections, there is no information about who serves as its chief executive or CEO.
+[pii] The chief executive of Beta Labs is **Jane Roe**, who has held that position since 2021.
 
 **Supporting chain:**
-- The knowledge graph contains an edge from Person:jane roe to Organization:beta labs with type EMPLOYED_BY and certainty "asserted" [chunk:chk_714c2e550aacdb8f].
-- The source text for this chunk states: "Jane Roe has been chief executive of Beta Labs since 2021." [chunk:chk_714c2e550aacdb8f]
+- Jane Roe (Person) is linked to Beta Labs (Organization) via an `EMPLOYED_BY` relationship with the evidence: *"Jane Roe has been chief executive of Beta Labs since 2021."* [chunk:chk_714c2e550aacdb8f]
 
-This evidence directly confirms that Jane Roe holds the position of chief executive at Beta Labs, with her tenure beginning in 2021.</samp></pre></div>
+Note: The source text for this chunk was withheld due to sensitivity restrictions (PII level), but the knowledge graph relationship and its evidence summary are confirmed.</samp></pre></div>
 <div class="prose"><h2 id="13-use-the-graph-from-other-clients-over-mcp">13. Use the graph from other clients over MCP</h2>
 <p><code>nexo mcp</code> exposes the same graph to Claude Code or any MCP client as read-only tools, with the same clearance and Cypher safeguards. Here the server runs in-process.</p></div>
 <div class="cell"><pre class="code"><code>server = build_mcp_server(graph=graph, chunks=chunk_store, settings=settings)
@@ -771,18 +725,19 @@ show(found)</code></pre><div class="out-label">Output</div><pre class="output"><
   "nexo_get_chunks",
   "nexo_find_entities",
   "nexo_neighbors",
+  "nexo_find_paths",
   "nexo_graph_query"
 ]
 {
   "entities": [
     {
       "aliases": [
+        "AHI",
         "Acme"
       ],
       "name": "Acme Holdings Inc.",
       "chunk_ids": [
         "chk_f9eb2281935d8305",
-        "chk_3e5bbe2bcd54d9bc",
         "chk_77404fc8e15193f8"
       ],
       "description": "",
@@ -820,34 +775,32 @@ root = <span class="bi">next</span>(
 
 show(<span class="st">"\n"</span>.join(outline(root)))</code></pre><div class="out-label">Output</div><pre class="output"><samp>invoke_workflow nexo-investigation
   langgraph.node router
-    chat qwen3.5:9b-q4_K_M
+    chat qwen3:4b-instruct-2507-q4_K_M
   langgraph.node investigator
     retrieval nexo-chunks
       embeddings bge-m3
     invoke_agent relationship-investigator
       execute_event_loop_cycle
         chat
-          chat qwen3.5:9b-q4_K_M
+          chat qwen3.6:35b-a3b-q4_K_M
+        execute_tool query_knowledge_graph
+          agent_query
         execute_tool query_knowledge_graph
           agent_query
       execute_event_loop_cycle
         chat
-          chat qwen3.5:9b-q4_K_M
-        execute_tool query_knowledge_graph
+          chat qwen3.6:35b-a3b-q4_K_M
+        execute_tool find_paths
+          agent_query
           agent_query
       execute_event_loop_cycle
         chat
-          chat qwen3.5:9b-q4_K_M
-        execute_tool query_knowledge_graph
-          agent_query
-      execute_event_loop_cycle
-        chat
-          chat qwen3.5:9b-q4_K_M
+          chat qwen3.6:35b-a3b-q4_K_M
         execute_tool fetch_vector_chunks
           chunk_store get_by_ids
       execute_event_loop_cycle
         chat
-          chat qwen3.5:9b-q4_K_M
+          chat qwen3.6:35b-a3b-q4_K_M
   langgraph.node compliance</samp></pre></div>
 <div class="prose"><h2 id="clean-up">Clean up</h2>
 <p>Close the runtime and the graph connection. The two documents stay in the graph; ingesting them again replaces them.</p></div>

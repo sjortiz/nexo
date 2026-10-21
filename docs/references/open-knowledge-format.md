@@ -20,6 +20,9 @@ ordinary Markdown links; per-claim citations are footnotes keyed to `sources[].i
 
 # Conventions in this bundle
 
+This bundle keeps no `log.md`: the history of each change is `git log --oneline` and the pull
+request that made it, so nothing is written twice and no two changes contend for one file.
+
 | Convention | Value |
 |---|---|
 | Root | `docs/`; `index.md` declares `okf_version: "0.2"`. |

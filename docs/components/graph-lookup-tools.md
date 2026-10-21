@@ -39,10 +39,9 @@ A path or edge touching anything above the caller's clearance is dropped and cou
 an edge without `sensitivity_rank` counts as PHI, and a visible edge's `evidence` is dropped unless the
 chunk it was quoted from is within clearance ([graph store](graph-store.md#read-only-enforcement)).
 `entity_neighbours` on an unknown key, or on an entity above clearance, returns `unknown entity key`.
-`find_paths` returns that only when an endpoint key matches no entity; it does not check the endpoints'
-clearance, so a path to an entity above clearance is withheld like any other and counted in `withheld`.
-`nexo_find_paths` on `nexo mcp` is stricter: it checks both keys first and answers `unknown entity key`
-for either case (porting that check to the agent is tracked in #81). An empty result hints at
+`find_paths` looks both endpoints up first (one row, so the row cap cannot drop one) and answers the
+same `unknown entity key` for a missing key and for one above clearance, before any path query runs;
+`nexo_find_paths` on `nexo mcp` does the same. An empty result hints at
 [search_chunks](search-chunks.md), as "no visible path" when paths were withheld. Budget, Neo4j errors
 and `chunk_ids_found` work as in query_knowledge_graph. An error (unknown key, same key twice, Neo4j failure) is a failed call with an
 `error.type` on its span ([Observability](../operations/observability.md#failed-tool-calls)).[^test-agent]

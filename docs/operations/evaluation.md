@@ -49,6 +49,9 @@ chunks the reviewer confirmed become `relevant_chunk_ids`.
 3. Run `nexo eval golden.jsonl > results.jsonl`.
 4. Each case is one JSON object per line on stdout (logs go to stderr): the question plus the
    [metrics](../components/evaluation.md). It is also an `eval.case` span with `eval.*` attributes.
+   A case whose investigation raises (a timeout, the token cap, a store error) is written as
+   `{"question": ..., "error": "<exception class>"}` with no scores, the run goes on, and the
+   command exits 1 at the end; `eval-extraction` does the same per case.
 
 `nexo eval` calls the investigator directly. It skips the router and human review, so it measures
 retrieval and generation only.[^cli]

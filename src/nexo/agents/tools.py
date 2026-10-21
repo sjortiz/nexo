@@ -25,6 +25,7 @@ from strands.types.tools import ToolResult
 from nexo.agents.models import InvestigationScope, ToolCallSummary
 from nexo.agents.redaction import ChunkRedactor
 from nexo.config import Settings
+from nexo.telemetry import record_exception
 from nexo.storage.graph_store import (
     GraphReader,
     ReadResult,
@@ -215,6 +216,30 @@ _UNKNOWN_KEY = {
     "query_knowledge_graph, or search_chunks for the text"
 }
 
+# Both ends of a path lookup in one row, so the row cap cannot drop one of them.
+_ENDPOINTS = (
+    "MATCH (e:Entity) WHERE e.key IN $keys "
+    "RETURN collect(e {.key, .sensitivity_rank}) AS entities"
+)
+
+
+def endpoints_visible(
+    rows: list[dict[str, Any]], keys: list[str], clearance_rank: int
+) -> bool:
+    """True only if every key names an entity within clearance.
+
+    An unknown key and one above clearance read alike, so a caller cannot learn
+    that a hidden entity exists by asking for paths to it.
+    """
+    entities = rows[0]["entities"] if rows else []
+    visible = {
+        e["key"]
+        for e in redact_above_clearance(entities, clearance_rank)
+        if "redacted" not in e
+    }
+    return all(k in visible for k in keys)
+
+
 _BUDGET_EXHAUSTED = {
     "error": "tool budget exhausted; write your answer from the evidence gathered"
 }
@@ -398,8 +423,8 @@ def _read_graph(
 
 
 def _chunk_store_failure(exc: Exception) -> ToolFailure:
-    """Any chunk store failure (down, corrupt) goes back to the agent; the trace keeps it."""
-    trace.get_current_span().record_exception(exc)
+    """Any chunk store failure (down, corrupt) goes back to the agent; the trace keeps its type."""
+    record_exception(exc)
     name = type(exc).__name__
     return ToolFailure(name, _CHUNK_STORE_DOWN, error_type=name)
 
@@ -510,6 +535,10 @@ def _lookup_tools(
                     {"error": "from_key and to_key are the same entity"},
                     error_type="same_entity",
                 )
+            keys = [from_key, to_key]
+            ends = _read_graph(graph, _ENDPOINTS, {"keys": keys})
+            if not endpoints_visible(ends.rows, keys, clearance.rank):
+                raise ToolFailure("unknown key", _UNKNOWN_KEY, error_type="unknown_key")
             hops, paths = min(max(max_hops, 1), 4), min(max(max_paths, 1), 10)
             result = _read_graph(
                 graph,

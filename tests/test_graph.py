@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import sqlite3
 import re
 from contextlib import nullcontext
 from dataclasses import dataclass, field
@@ -19,6 +20,7 @@ from langchain_core.language_models.fake_chat_models import GenericFakeChatModel
 from langchain_core.messages import AIMessage
 from langchain_openai import ChatOpenAI
 from langgraph.checkpoint.memory import InMemorySaver
+from langgraph.checkpoint.sqlite import SqliteSaver
 from langgraph.types import Command
 from opentelemetry.sdk._logs import LoggerProvider
 from opentelemetry.sdk._logs.export import (
@@ -645,3 +647,30 @@ def test_a_malformed_interrupt_reads_as_not_pending(settings, monkeypatch, caplo
         assert rt.status("t1").pending_review is None
         assert all(r.pending_review is None for r in rt.pending_reviews())
     assert any("not a review packet" in m for m in caplog.messages)
+
+
+def test_pending_limit_counts_only_valid_packets(settings, monkeypatch):
+    """A malformed newest interrupt does not use the only slot of pending_reviews(limit=1)."""
+    saver = SqliteSaver(sqlite3.connect(":memory:", check_same_thread=False))
+    rt = runtime(
+        settings,
+        FakeInvestigator([grounded_output(), grounded_output()]),
+        [route(strategy="graph"), route(strategy="graph")],
+        checkpointer=saver,
+    )
+    rt.start("How is Acme related to Beta?", thread_id="good")
+    rt.start("How is Acme related to Gamma?", thread_id="bad")
+    original = rt.graph.get_state
+
+    def broken(config):
+        snapshot = original(config)
+        if config["configurable"]["thread_id"] == "bad":
+            bogus = SimpleNamespace(
+                interrupts=[SimpleNamespace(value={"not": "a packet"})]
+            )
+            return snapshot._replace(tasks=(bogus,))
+        return snapshot
+
+    monkeypatch.setattr(rt.graph, "get_state", broken)
+    assert [r.thread_id for r in rt.pending_reviews(limit=1)] == ["good"]
+    assert [r.thread_id for r in rt.pending_reviews()] == ["good"]

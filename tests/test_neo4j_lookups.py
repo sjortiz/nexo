@@ -21,7 +21,7 @@ from nexo.agents.tools import (
     InvestigationContext,
     build_investigation_tools,
 )
-from nexo.mcp_server import build_mcp_server
+from nexo.mcp_server import _INDEX_DOCUMENTS, build_mcp_server
 from nexo.storage.schemas import DocumentMetadata, GroundedTriple, Sensitivity
 from nexo.storage.vector_store import ChunkFilter
 from tests.conftest import as_model_text
@@ -79,8 +79,12 @@ def test_lookup_tools_follow_entity_edges_within_clearance(store, settings):
     ] == [[(acme.key, "ACQUIRED", beta.key), (beta.key, "SUPPLIES", gamma.key)]]
     assert out["chunk_ids_found"] == [C1, C2]
 
-    out = json.loads(tools["find_paths"](acme.key, jane.key))
-    assert out["paths"] == [] and out["withheld"] == 1
+    # A hidden endpoint reads as unknown, so a path to it cannot reveal it exists.
+    hidden = json.loads(tools["find_paths"](acme.key, jane.key))
+    missing = json.loads(tools["find_paths"](acme.key, "Person:nobody"))
+    assert (
+        hidden["error"] == missing["error"] and "unknown entity key" in hidden["error"]
+    )
     assert "unknown" in json.loads(tools["find_paths"](acme.key, "X:none"))["error"]
 
     out = json.loads(tools["entity_neighbours"](beta.key))
@@ -381,3 +385,18 @@ def test_a_quote_leaves_with_its_chunk_and_the_next_source_requotes(store):
         "chunk": C1,
         "rank": 1,
     }
+
+
+def test_index_reads_undated_documents_without_unknown_property_warnings(store):
+    """nexo_index reads title, doc_type and effective_date through properties(d)."""
+    acme, beta = _resolved("Acme"), _resolved("Beta")
+    store.replace_source(  # no title, type or date: the properties are never written
+        DocumentMetadata(source_id="undated"),
+        _chunks("undated", C1),
+        [_row(C1, "undated", (acme, "ACQUIRED", beta))],
+    )
+    unseen = f"never_{uuid.uuid4().hex}"
+    assert _warnings(f"MATCH (d:Document) RETURN d.{unseen}", {}) == ["01N52"]
+    assert _warnings(_INDEX_DOCUMENTS, {}) == []
+    for key in ("title", "doc_type", "effective_date"):
+        assert _warnings(_INDEX_DOCUMENTS.replace(key, unseen + key), {}) == []
