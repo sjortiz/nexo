@@ -5,6 +5,7 @@ from __future__ import annotations
 import pytest
 
 from nexo.agents.redaction import ChunkRedactor
+from nexo.orchestration.state import ReviewDecision
 from nexo.service import Runtime, open_checkpointer
 from nexo.storage.schemas import Sensitivity
 from nexo.storage.sensitive_data import RegexDetector
@@ -12,7 +13,7 @@ from tests.conftest import make_chunk
 from tests.test_graph import CHUNK, FakeInvestigator, grounded_output, runtime
 
 EMAIL = "jane.roe@beta.example"
-APPROVE = {"approval_status": "approved", "reviewer": "a"}
+APPROVE = ReviewDecision(approval_status="approved", reviewer="a")
 
 
 def _paused(settings, saver, *thread_ids, chunks=None) -> Runtime:

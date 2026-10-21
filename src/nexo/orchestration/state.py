@@ -10,7 +10,7 @@ import operator
 from datetime import date
 from typing import Annotated, Any, Literal, TypedDict
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from nexo.agents.models import RetrievalStrategy
 from nexo.orchestration.compliance import ComplianceReport, Finding
@@ -64,6 +64,14 @@ class ReviewDecision(BaseModel):
     acknowledged_findings: bool = Field(
         default=False,
         description="Required to approve when the compliance report has blocking findings",
+    )
+
+
+def describe_errors(exc: ValidationError) -> str:
+    """A ValidationError as one line for a person: `field: problem; ...`."""
+    return "; ".join(
+        f"{'.'.join(map(str, e['loc']))}: {e['msg']}"
+        for e in exc.errors(include_url=False)
     )
 
 

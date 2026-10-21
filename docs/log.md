@@ -1,6 +1,7 @@
 # Bundle Update Log
 
 ## 2026-10-20
+* **Update**: Every review surface (`nexo review`, MCP, the demo page, Agent Inbox) builds a `ReviewDecision` and reports its validation errors to the reviewer; `Runtime.review` takes only a `ReviewDecision`, so a malformed decision no longer re-pauses the thread with an `error`. The graph still validates raw resume values ([Request lifecycle](architecture/request-lifecycle.md), [ADR-0019](decisions/adr-0019-review-surfaces.md)).
 * **Update**: The review packet is one typed model, `ReviewPacket` (with `ReviewPassage` for cited chunks), next to `ReviewDecision`; the compliance node pauses with it, `RunResult.pending_review` carries it, and the review surfaces read `blocking` and `findings` from it instead of each parsing the dict. What every surface shows is unchanged and pinned by a snapshot test ([ADR-0019](decisions/adr-0019-review-surfaces.md), [Orchestration graph](components/orchestration-graph.md)).
 * **Update**: `GraphStore` is a context manager and every `nexo` command opens the graph with `with`; `review-ui` and `review-inbox` serve through one helper, `--sensitivity` and `--clearance` take their choices from `Sensitivity`, and `nexo eval` builds the redactor only when a judge is set. Commands and output are unchanged.
 * **Update**: `KnowledgeGraphIngestor.ingest()` raises a `ValueError` naming `extract_triples()` when its targets lack a chunk store or graph writer, instead of an `AttributeError` mid-run ([Ingestion pipeline](components/ingestion-pipeline.md)).

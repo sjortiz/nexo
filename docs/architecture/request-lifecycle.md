@@ -32,9 +32,10 @@ sources:
    releases the answer, it is approved as `reviewer: system:auto` with no pause; an answer with a
    `block` finding never is. Otherwise the node calls `interrupt()` with a review packet (`ReviewPacket`); the run
    pauses and its state is checkpointed.[^graph]
-5. **Review.** `Runtime.review(thread_id, decision)` resumes with `Command(resume=decision)`. Invalid
-   input, or an approval of blocking findings without `acknowledged_findings: true`, pauses again with
-   an `error` in the packet.
+5. **Review.** `Runtime.review(thread_id, decision)` takes a `ReviewDecision`, which every review
+   surface builds and whose validation errors it reports to its user, and resumes with
+   `Command(resume=decision)`. An approval of blocking findings without `acknowledged_findings: true`,
+   or a raw resume value the graph cannot validate, pauses again with an `error` in the packet.
 6. **Release.** On approval, `final_response` is set to the draft answer; on rejection it stays `null`.
 
 # Result

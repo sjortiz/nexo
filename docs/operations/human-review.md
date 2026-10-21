@@ -109,6 +109,8 @@ withheld ones say so. Use review over MCP for real work ([ADR-0019](../decisions
 
 - `--acknowledge-findings` is required to approve when any finding is `block`. Without it the run stays
   paused and the packet gains an `error`.
+- An invalid decision (an empty `--reviewer`, a comment over 2000 characters) is refused before the
+  thread is touched: `nexo review` exits with 2 and names the field.
 - The reviewer's id, comment and acknowledgement are stored in the thread's `review` state as the
   audit record.[^state]
 - A rejected answer is never released; start a new thread with a refined question instead.

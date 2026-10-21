@@ -14,11 +14,18 @@ import re
 import secrets
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, HTTPServer
-from typing import Any, Protocol
+from typing import Protocol
 from urllib.parse import parse_qs, urlsplit
 
+from pydantic import ValidationError
+
 from nexo.config import Settings
-from nexo.orchestration.state import ReviewPacket, ReviewPassage
+from nexo.orchestration.state import (
+    ReviewDecision,
+    ReviewPacket,
+    ReviewPassage,
+    describe_errors,
+)
 from nexo.service import RunResult
 
 BANNER = "Demo: no authentication, local use only"
@@ -46,7 +53,7 @@ class ReviewRuntime(Protocol):
     def review_passages(self, thread_id: str, clearance: str) -> list[ReviewPassage]:
         """Cited chunk text for the thread, through clearance and redaction."""
 
-    def review(self, thread_id: str, decision: dict[str, Any]) -> RunResult:
+    def review(self, thread_id: str, decision: ReviewDecision) -> RunResult:
         """Resume a paused thread with a decision."""
 
     def status(self, thread_id: str) -> RunResult:
@@ -208,23 +215,12 @@ class ReviewApp:  # pylint: disable=too-few-public-methods  # handle is the whol
         paused = self._paused(thread_id)
         if paused is None:
             return self._detail(thread_id)  # a 404 page
-        comment = form.get("comment", "").strip()
-        acknowledged = form.get("acknowledge") == "1"
-        problem = self._problem(paused, decision, comment, acknowledged)
-        if problem:
-            return self._detail(thread_id, problem, 400)
         try:
-            result = self.runtime.review(
-                thread_id,
-                {
-                    "approval_status": (
-                        "approved" if decision == "approve" else "rejected"
-                    ),
-                    "reviewer": self.reviewer,
-                    "comment": comment or None,
-                    "acknowledged_findings": acknowledged,
-                },
-            )
+            recorded = self._decision(paused, form)
+        except ValueError as exc:
+            return self._detail(thread_id, str(exc), 400)
+        try:
+            result = self.runtime.review(thread_id, recorded)
         except ValueError as exc:
             return 409, self._page("Not reviewed", f"<p>{_e(exc)}</p>")
         return 200, self._page(
@@ -233,16 +229,24 @@ class ReviewApp:  # pylint: disable=too-few-public-methods  # handle is the whol
             f'{_e(result.approval_status)}.</p><p><a href="/">Back to the list</a></p>',
         )
 
-    @staticmethod
-    def _problem(
-        paused: ReviewPacket, decision: str, comment: str, acknowledged: bool
-    ) -> str:
-        """Why this decision must not be sent, or an empty string."""
+    def _decision(self, paused: ReviewPacket, form: dict[str, str]) -> ReviewDecision:
+        """The decision the form asks for; raises ValueError saying why it must not be sent."""
+        comment = form.get("comment", "").strip()
+        acknowledged = form.get("acknowledge") == "1"
+        approve = form.get("decision") == "approve"
         if len(comment) > MAX_COMMENT:
-            return "The comment is too long."
-        if decision == "approve" and paused.blocking and not acknowledged:
-            return "Blocking findings: acknowledge them to approve."
-        return ""
+            raise ValueError("The comment is too long.")
+        if approve and paused.blocking and not acknowledged:
+            raise ValueError("Blocking findings: acknowledge them to approve.")
+        try:
+            return ReviewDecision(
+                approval_status="approved" if approve else "rejected",
+                reviewer=self.reviewer,
+                comment=comment or None,
+                acknowledged_findings=acknowledged,
+            )
+        except ValidationError as exc:
+            raise ValueError(describe_errors(exc)) from exc
 
 
 def make_server(app: ReviewApp, host: str, port: int) -> HTTPServer:

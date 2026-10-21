@@ -13,7 +13,7 @@ import pytest
 
 from nexo.cli import main
 from nexo.config import Settings
-from nexo.orchestration.state import ReviewPassage
+from nexo.orchestration.state import ReviewDecision, ReviewPassage
 from nexo.review_ui import ReviewApp, make_server
 from nexo.service import RunResult
 
@@ -80,7 +80,7 @@ class FakeRuntime:
         return RunResult(
             thread_id=thread_id,
             status="completed",
-            approval_status=decision["approval_status"],
+            approval_status=decision.approval_status,
         )
 
 
@@ -191,12 +191,9 @@ def test_decision_calls_review_with_decision_and_reviewer(button, expected):
     assert runtime.decisions == [
         (
             THREAD,
-            {
-                "approval_status": expected,
-                "reviewer": "ana",
-                "comment": "looks right",
-                "acknowledged_findings": False,
-            },
+            ReviewDecision(
+                approval_status=expected, reviewer="ana", comment="looks right"
+            ),
         )
     ]
 
@@ -205,7 +202,7 @@ def test_reviewer_cannot_be_chosen_by_the_form():
     """Reviewer cannot be chosen by the form."""
     app, runtime = make_app(paused())
     post(app, {"decision": "approve", "reviewer": "mallory"})
-    assert runtime.decisions[0][1]["reviewer"] == "ana"
+    assert runtime.decisions[0][1].reviewer == "ana"
 
 
 def test_blocked_report_cannot_be_approved_without_acknowledgement():
@@ -220,9 +217,9 @@ def test_blocked_report_approves_when_acknowledged_and_rejects_freely():
     """Blocked report approves when acknowledged and rejects freely."""
     app, runtime = make_app(paused(blocking=True))
     assert post(app, {"decision": "approve", "acknowledge": "1"})[0] == 200
-    assert runtime.decisions[0][1]["acknowledged_findings"] is True
+    assert runtime.decisions[0][1].acknowledged_findings is True
     assert post(app, {"decision": "reject"})[0] == 200
-    assert runtime.decisions[1][1]["approval_status"] == "rejected"
+    assert runtime.decisions[1][1].approval_status == "rejected"
 
 
 def test_decision_on_a_thread_not_paused_is_not_sent():
@@ -298,3 +295,11 @@ def test_served_over_http_on_loopback_and_foreign_host_header_refused():
     finally:
         server.shutdown()
         server.server_close()
+
+
+def test_an_invalid_decision_is_shown_on_the_page_and_not_sent():
+    """A decision ReviewDecision refuses (here, an overlong reviewer) is reported, not sent."""
+    app, runtime = make_app(paused(), user="x" * 201)
+    status, page = post(app, {"decision": "approve"})
+    assert status == 400 and "reviewer: String should have at most 200" in page
+    assert not runtime.decisions

@@ -22,7 +22,14 @@ from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any, Protocol
 
-from nexo.orchestration.state import ReviewPacket, ReviewPassage
+from pydantic import ValidationError
+
+from nexo.orchestration.state import (
+    ReviewDecision,
+    ReviewPacket,
+    ReviewPassage,
+    describe_errors,
+)
 from nexo.service import RunResult
 
 COMMENT_LIMIT = 2000
@@ -43,7 +50,7 @@ class ReviewBackend(Protocol):
     def review_passages(self, thread_id: str, clearance: str) -> list[ReviewPassage]:
         """Cited chunk text as a reader with this clearance sees it."""
 
-    def review(self, thread_id: str, decision: dict[str, Any]) -> RunResult:
+    def review(self, thread_id: str, decision: ReviewDecision) -> RunResult:
         """Resume a paused thread."""
 
     def status(self, thread_id: str) -> RunResult:
@@ -115,33 +122,39 @@ def to_human_interrupt(
     }
 
 
-def to_decision(response: Any, packet: ReviewPacket, reviewer: str) -> dict[str, Any]:
+def to_decision(response: Any, packet: ReviewPacket, reviewer: str) -> ReviewDecision:
     """The ReviewDecision for one Agent Inbox response; raises InboxError when not allowed.
 
     Nothing here approves on its own: a blocked packet is approved only by an explicit
     acknowledgement, and ignore is a rejection.
     """
+    try:
+        return ReviewDecision(reviewer=reviewer, **_decision_fields(response, packet))
+    except ValidationError as exc:
+        raise InboxError(422, describe_errors(exc)) from exc
+
+
+def _decision_fields(response: Any, packet: ReviewPacket) -> dict[str, Any]:
     if not isinstance(response, dict):
         raise InboxError(422, "a response must be an object with type and args")
     kind, args = response.get("type"), response.get("args")
-    decision: dict[str, Any] = {"reviewer": reviewer}
     if kind == "accept":
         if packet.blocking:
             raise InboxError(422, f"blocking findings: edit and set {ACK_FIELD} to yes")
-        return decision | {"approval_status": "approved", "comment": ACCEPT_COMMENT}
+        return {"approval_status": "approved", "comment": ACCEPT_COMMENT}
     if kind == "edit":
-        return decision | _edit_decision(args, packet)
+        return _edit_decision(args, packet)
     if kind == "response":
         if not isinstance(args, str):
             raise InboxError(422, "a response needs text")
         if len(args) > COMMENT_LIMIT:
             raise InboxError(422, f"a comment is at most {COMMENT_LIMIT} characters")
-        return decision | {
+        return {
             "approval_status": "rejected",
             "comment": args.strip() or REJECT_COMMENT,
         }
     if kind == "ignore":
-        return decision | {"approval_status": "rejected", "comment": IGNORE_COMMENT}
+        return {"approval_status": "rejected", "comment": IGNORE_COMMENT}
     raise InboxError(422, f"unknown response type {kind!r}")
 
 

@@ -17,10 +17,15 @@ from mcp.server.mcpserver import Context, MCPServer
 from mcp.server.mcpserver.resolve import Elicit, Resolve
 from mcp.server.mcpserver.exceptions import ToolError
 from mcp.types import ToolAnnotations
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError
 
 from nexo.config import Settings
-from nexo.orchestration.state import ReviewDecision, ReviewPacket, ReviewPassage
+from nexo.orchestration.state import (
+    ReviewDecision,
+    ReviewPacket,
+    ReviewPassage,
+    describe_errors,
+)
 from nexo.service import Runtime
 from nexo.storage.schemas import Sensitivity
 from nexo.telemetry import caller_attributes, traced_span
@@ -254,17 +259,20 @@ def register_review_tools(
                 )
             reviewer = (chosen.reviewer or "").strip() or caller["user.id"]
             try:
-                result = runtime.review(
-                    thread_id,
-                    ReviewDecision(
-                        approval_status=(
-                            "approved" if chosen.decision == "approve" else "rejected"
-                        ),
-                        reviewer=reviewer,
-                        comment=chosen.comment,
-                        acknowledged_findings=chosen.acknowledge_findings,
+                recorded = ReviewDecision(
+                    approval_status=(
+                        "approved" if chosen.decision == "approve" else "rejected"
                     ),
+                    reviewer=reviewer,
+                    comment=chosen.comment,
+                    acknowledged_findings=chosen.acknowledge_findings,
                 )
+            except ValidationError as exc:
+                raise ToolError(
+                    f"invalid decision: {describe_errors(exc)}; nothing was submitted"
+                ) from exc
+            try:
+                result = runtime.review(thread_id, recorded)
             except ValueError as exc:
                 raise ToolError(str(exc)) from exc
             if result.pending_review is not None:

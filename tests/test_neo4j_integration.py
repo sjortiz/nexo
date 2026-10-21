@@ -28,6 +28,7 @@ from nexo.agents.models import InvestigationScope
 from nexo.agents.tools import InvestigationContext, build_investigation_tools
 from nexo.mcp_server import build_mcp_server
 from nexo.orchestration.graph import GraphDependencies, build_graph
+from nexo.orchestration.state import ReviewDecision
 from nexo.service import Runtime
 from nexo.storage.graph_store import GraphStore, QueryLimits
 from nexo.storage.ingest import (
@@ -632,7 +633,9 @@ def test_end_to_end_ingest_investigate_approve(store, settings, chunk_store):
         "Gamma Clinics",
     ]
 
-    done = rt.review("e2e", {"approval_status": "approved", "reviewer": "analyst"})
+    done = rt.review(
+        "e2e", ReviewDecision(approval_status="approved", reviewer="analyst")
+    )
     assert done.final_response.startswith("Acme owns Beta Labs")
 
 

@@ -29,7 +29,8 @@ packet in hand. Reviewers want an inbox, and AI clients already talk to Nexo ove
 
 Every surface calls the same `Runtime` methods:[^service] `pending_reviews` lists the paused threads,
 `status` returns one `ReviewPacket`,[^state] `review_passages` reads the cited chunks for a reviewer's
-clearance (masked by the read-time redactor) as `ReviewPassage`s, and `review` records the decision.
+clearance (masked by the read-time redactor) as `ReviewPassage`s, and `review` records a
+`ReviewDecision` the surface built, so a malformed decision fails at the surface, not in the graph.
 No surface owns review state or parses the packet itself: `blocking` and `findings` come from it.
 
 | Surface | Status | Why |

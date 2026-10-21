@@ -137,16 +137,13 @@ class Runtime:
         identity |= query_attributes(self.settings, user_query)
         return self._drive(payload, thread_id, "start", identity)
 
-    def review(
-        self, thread_id: str, decision: ReviewDecision | dict[str, Any]
-    ) -> RunResult:
+    def review(self, thread_id: str, decision: ReviewDecision) -> RunResult:
         """Resume a thread paused for review with the reviewer's decision."""
-        if isinstance(decision, ReviewDecision):
-            decision = decision.model_dump(mode="json")
         if self._pending(thread_id) is None:
             raise ValueError(f"thread {thread_id} is not awaiting review")
-        identity = caller_attributes(self.settings, decision.get("reviewer"))
-        return self._drive(Command(resume=decision), thread_id, "review", identity)
+        identity = caller_attributes(self.settings, decision.reviewer)
+        resume = Command(resume=decision.model_dump(mode="json"))
+        return self._drive(resume, thread_id, "review", identity)
 
     def status(self, thread_id: str) -> RunResult:
         """Return the thread's current result without running anything."""
