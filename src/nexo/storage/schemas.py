@@ -128,6 +128,17 @@ class ChunkRecord(BaseModel):
         ).hexdigest()
         return f"chk_{digest[:16]}"
 
+    @property
+    def source_label(self) -> str:
+        """Where the chunk comes from, for people and prompts: title (or source id) > headings.
+
+        The embedding header below deliberately omits the source id: an id is not
+        language, and the embedded text should read as the document does.
+        """
+        return " > ".join(
+            p for p in [self.title or self.source_id, *self.section_path] if p
+        )
+
     def embedding_text(self, glossary_notes: str = "") -> str:
         """Text that gets embedded: contextual header + chunk + glossary.
 

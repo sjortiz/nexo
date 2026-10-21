@@ -80,7 +80,7 @@ graph TD;
 | Runtime and CLI | [`service.py`](src/nexo/service.py), [`cli.py`](src/nexo/cli.py), [`llm.py`](src/nexo/llm.py), [`aio.py`](src/nexo/aio.py) | Resource lifetimes, model roles, ingest/ask/review/status, servers and sync-to-async bridging. |
 | MCP and review surfaces | [`mcp_server.py`](src/nexo/mcp_server.py), [`mcp_review.py`](src/nexo/mcp_review.py), [`review_ui.py`](src/nexo/review_ui.py), [`review_inbox.py`](src/nexo/review_inbox.py) | Retrieval, confirmed MCP reviews, demo page and Agent Inbox adapter. |
 | Setup | [`setup/`](src/nexo/setup/), [`config.py`](src/nexo/config.py), [`secret_store.py`](src/nexo/secret_store.py), [`local_profiles.py`](src/nexo/local_profiles.py) | Setup schema, lock/render/check/up, settings, secrets and hardware profiles. |
-| Telemetry and evaluation | [`telemetry.py`](src/nexo/telemetry.py), [`logging_setup.py`](src/nexo/logging_setup.py), [`evaluation.py`](src/nexo/evaluation.py) | OpenTelemetry, correlated logs and retrieval/generation/extraction scores. |
+| Telemetry and evaluation | [`telemetry.py`](src/nexo/telemetry.py), [`logging_setup.py`](src/nexo/logging_setup.py), [`evaluation.py`](src/nexo/evaluation.py), [`experiments.py`](src/nexo/experiments.py) | OpenTelemetry, correlated logs, retrieval/generation/extraction scores and Langfuse experiments. |
 
 Full documentation lives in [`docs/`](docs/index.md) as an [Open Knowledge Format](docs/references/open-knowledge-format.md)
 bundle: architecture, components, operations, decisions and references.

@@ -251,10 +251,8 @@ class Settings(BaseSettings):
     # official GenAI instrumentation: one `chat {model}` CLIENT span per call.
     otel_instrument_openai: bool = True
     deployment_environment: str = "dev"
-    # Which user and which question a trace belongs to (ADR-0009, amended). user.id is
-    # NEXO_USER, else the login name; the question's length and a keyed hash (the key is
-    # generated into the secrets store, never exported) are always on the request span;
-    # its text only with TRACE_QUERY_TEXT=true (telemetry.queryText in nexo.yaml).
+    # Trace identity (ADR-0009): user.id, the question's length and keyed hash always;
+    # its text only with TRACE_QUERY_TEXT=true.
     nexo_user: str | None = None
     query_hash_key: SecretStr | None = None
     trace_query_text: bool = False
@@ -362,6 +360,11 @@ class Settings(BaseSettings):
         default("agent_timeout_s", 900.0)
         default("extraction_concurrency", parallel)
         return self
+
+    @property
+    def effective_mcp_clearance(self) -> str:
+        """The clearance `nexo mcp` serves at: MCP_CLEARANCE, else the default clearance."""
+        return self.mcp_clearance or self.default_clearance
 
     def endpoint(self, role: ModelRole) -> ModelEndpoint:
         """Model endpoint for a role, falling back to the VLLM_* defaults field by field."""

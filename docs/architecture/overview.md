@@ -61,7 +61,7 @@ guidance:[^aws-health]
 | vLLM | Chat model for extraction, routing and the agent (Llama 3.3 70B) | `http://vllm-inference-service:8000/v1` |
 | Embedding server | OpenAI-compatible embeddings (BAAI/bge-m3) | `http://vllm-embedding-service:8000/v1` |
 | Neo4j | Knowledge graph | `neo4j://neo4j:7687` |
-| Chunk store | Chunk text + vectors, looked up by `chunk_id` | `.data/vector_store.json` (local) |
+| Chunk store | Chunk text + vectors, looked up by `chunk_id` | Neo4j `(:Chunk)` nodes (default); a local JSON file for offline runs |
 | Checkpointer | Durable graph state across the review pause | SQLite or Postgres |
 | OTEL collector | Trace and metric export ([Observability](../operations/observability.md)) | `OTEL_EXPORTER_OTLP_ENDPOINT` |
 

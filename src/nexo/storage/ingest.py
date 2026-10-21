@@ -371,9 +371,7 @@ class KnowledgeGraphIngestor:
     def _extract(
         self, chunk: ChunkRecord, previous: ChunkRecord | None
     ) -> ExtractionResult:
-        section = (
-            " > ".join([p for p in [chunk.title, *chunk.section_path] if p]) or "(none)"
-        )
+        section = chunk.source_label or "(none)"
         parts = [f"Document section: {section}"]
         limit = self._settings.extraction_context_chars
         if previous is not None and limit:

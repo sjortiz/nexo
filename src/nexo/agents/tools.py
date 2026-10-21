@@ -700,10 +700,9 @@ def _search_tool(
 
 def _chunk_view(record: ChunkRecord) -> dict[str, Any]:
     """What the model sees of a chunk: id, source path, date and exact text."""
-    parts = [record.title or record.source_id, *record.section_path]
     return {
         "chunk_id": record.chunk_id,
-        "source": " > ".join(p for p in parts if p),
+        "source": record.source_label,
         "effective_date": record.effective_date,
         "text": record.text,
     }

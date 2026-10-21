@@ -213,9 +213,7 @@ class Investigator:
         ctx.evidence.fetched.update({s.chunk_id: s.sensitivity.value for s in seeds})
         agent = self._build_agent(ctx)
 
-        # The Strands event loop drives vLLM: every turn sends the conversation
-        # plus tool specs; vLLM's tool-call parser turns Llama output into
-        # tool_calls; Strands executes them and feeds results back.
+        # Strands runs the tool loop against the OpenAI-compatible server (ADR-0012).
         started = time.monotonic()
         answer, stop_reason, usage = "", "max_tokens", {}
         try:
@@ -321,7 +319,7 @@ def _render_prompt(
     if seeds:
         passages = "\n\n".join(
             f'<passage chunk_id="{s.chunk_id}" '
-            f"source=\"{' > '.join([s.title or s.source_id, *s.section_path])}\">\n"
+            f'source="{s.source_label}">\n'
             f"{s.text}\n</passage>"
             for s in seeds
         )
