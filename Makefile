@@ -29,6 +29,7 @@ ARGS     ?=
 PORT     ?= 8000
 NEO4J_TEST_PORT     ?= 7688
 NEO4J_TEST_PASSWORD ?= nexo-test-pass
+NEO4J_TEST_IMAGE    ?= neo4j:5.26-community
 
 .DEFAULT_GOAL := help
 .PHONY: help install install-notebook install-keychain env models up down check render lock compose-file \
@@ -112,8 +113,8 @@ format: ## Format the code with black
 test: ## Run the test suite (the Neo4j tests also run when NEO4J_TEST_URI is set)
 	$(RUN)pytest -o addopts="" -q -rs
 
-neo4j-test: ## Start a throwaway Neo4j for the integration tests on 127.0.0.1:7688
-	@$(CONTAINER) start nexo-neo4j-test >/dev/null 2>&1 || $(CONTAINER) run -d --name nexo-neo4j-test -p 127.0.0.1:$(NEO4J_TEST_PORT):7687 -e NEO4J_AUTH=neo4j/$(NEO4J_TEST_PASSWORD) neo4j:5.26-community >/dev/null
+neo4j-test: ## Start a throwaway Neo4j on 127.0.0.1:7688 (NEO4J_TEST_IMAGE=neo4j:2026.10-community; neo4j-test-down first)
+	@$(CONTAINER) start nexo-neo4j-test >/dev/null 2>&1 || $(CONTAINER) run -d --name nexo-neo4j-test -p 127.0.0.1:$(NEO4J_TEST_PORT):7687 -e NEO4J_AUTH=neo4j/$(NEO4J_TEST_PASSWORD) $(NEO4J_TEST_IMAGE) >/dev/null
 	@for i in $$(seq 1 60); do $(RUN)python -c "from neo4j import GraphDatabase; GraphDatabase.driver('bolt://127.0.0.1:$(NEO4J_TEST_PORT)', auth=('neo4j', '$(NEO4J_TEST_PASSWORD)')).verify_connectivity()" 2>/dev/null && echo "Neo4j ready on 127.0.0.1:$(NEO4J_TEST_PORT)" && exit 0; sleep 2; done; $(CONTAINER) logs nexo-neo4j-test; exit 1
 
 test-neo4j: neo4j-test ## Run the Neo4j integration tests against that throwaway Neo4j

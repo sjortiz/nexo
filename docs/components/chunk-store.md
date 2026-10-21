@@ -77,6 +77,20 @@ The recommendation follows the AWS vector database guidance's decision criteria.
 [ADR-0018](../decisions/adr-0018-chunks-in-neo4j.md), which supersedes
 [ADR-0004](../decisions/adr-0004-chunk-store-interface-and-pgvector.md).
 
+# Neo4j versions
+
+`Neo4jChunkStore` reads its two indexes in whichever form the server supports, decided once per
+store from `CALL dbms.components()`:[^neo4j-store]
+
+| Neo4j | Index lookup |
+|---|---|
+| 2026.09 and later | `CYPHER 25 ... SEARCH c IN (VECTOR INDEX ... )` and `(FULLTEXT INDEX ...)`: no deprecation notifications. |
+| 5.26 (compose and CI default) up to 2026.08 | `db.index.vector.queryNodes` and `db.index.fulltext.queryNodes`; 2026.x deprecates them. |
+
+`SEARCH` reads vector indexes from 2026.01 and full-text indexes from 2026.09, so the store switches
+both at 2026.09. Both forms ask the index for the same number of hits and rank them the same; the Neo4j integration
+tests compare them on each server (`make test-neo4j NEO4J_TEST_IMAGE=neo4j:2026.10-community`).
+
 [^vector-store]: ChunkStore and LocalChunkStore
 [^neo4j-store]: Neo4jChunkStore
 [^aws-vdb]: AWS guidance, choosing a vector database for RAG

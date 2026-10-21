@@ -54,6 +54,7 @@ make lint
 make test                                # integration tests skip without NEO4J_TEST_URI
 make test-neo4j                          # starts nexo-neo4j-test on 127.0.0.1:7688, runs them
 make neo4j-test-down
+make test-neo4j NEO4J_TEST_IMAGE=neo4j:2026.10-community   # the same on Neo4j 2026.x
 ```
 
 CI installs with `uv sync --locked` (exactly `uv.lock`) and runs the same targets: `make lint`,

@@ -14,6 +14,7 @@ from nexo.storage.chunking import (
     lint_document,
     split_document,
 )
+from nexo.storage.neo4j_chunk_store import index_queries
 from nexo.storage.graph_store import (
     _RANK,
     UnsafeCypherError,
@@ -269,3 +270,23 @@ def test_rank_case_follows_sensitivity_and_counts_unknown_levels_as_phi():
     for level in Sensitivity:
         assert f"WHEN '{level}' THEN {level.rank} " in _RANK
     assert _RANK.endswith(f"ELSE {Sensitivity.PHI.rank} END")
+
+
+@pytest.mark.parametrize(
+    ("version", "clause"),
+    [
+        ("5.26.32", False),
+        ("2026.08.1", False),
+        ("2026.09.0", True),
+        ("2027.01.0", True),
+    ],
+)
+def test_chunk_search_uses_the_search_clause_from_neo4j_2026_09(version, clause):
+    """dbms.components() picks SEARCH on 2026.09+ and the queryNodes procedures before."""
+    components = [
+        {"name": "Neo4j Kernel", "versions": [version]},
+        {"name": "Cypher", "versions": ["5", "25"]},
+    ]
+    queries = index_queries(components)
+    assert ("SEARCH c IN" in queries.vector) is clause
+    assert ("db.index.fulltext.queryNodes" in queries.text) is not clause

@@ -9,6 +9,7 @@ NEO4J_TEST_URI=bolt://127.0.0.1:7688 NEO4J_TEST_PASSWORD=nexo-test-pass \
 from __future__ import annotations
 
 import json
+import logging
 import os
 from datetime import UTC, datetime
 from urllib.parse import urlparse
@@ -48,7 +49,11 @@ from nexo.storage.schemas import (
     Triple,
 )
 from nexo.storage.sensitive_data import NoopDetector, RegexDetector
-from nexo.storage.neo4j_chunk_store import Neo4jChunkStore, import_local_store
+from nexo.storage.neo4j_chunk_store import (
+    _PROCEDURES,
+    Neo4jChunkStore,
+    import_local_store,
+)
 from nexo.storage.vector_store import ChunkFilter, LocalChunkStore
 from tests.conftest import RecordingChatModel, make_chunk
 from tests.test_agent import ScriptedClient, _completion, _tool_call
@@ -739,6 +744,37 @@ def test_neo4j_chunk_store_round_trip_and_filters(store, chunks_in_neo4j):
     assert chunks_in_neo4j.delete_source("memo", keep={memo.chunk_id}) == 0
     assert chunks_in_neo4j.delete_source("memo") == 1
     assert not chunks_in_neo4j.get_by_ids([memo.chunk_id])
+
+
+def test_hybrid_search_ranks_alike_on_search_and_procedures(
+    store, chunks_in_neo4j, caplog
+):
+    """The store's index lookups match the procedures' ranking and raise no deprecation."""
+    texts = [
+        "Acme Holdings acquired Beta Labs in 2023.",
+        "Beta Labs makes diagnostic kits for clinics.",
+        "Order XR-7731 shipped to Gamma Clinics.",
+        "Quarterly revenue grew across every region.",
+        "Gamma Clinics buys kits from Beta Labs.",
+    ]
+    chunks = [make_chunk("memo", i, text) for i, text in enumerate(texts)]
+    chunks_in_neo4j.upsert(chunks, texts)
+    everyone = ChunkFilter(max_sensitivity=Sensitivity.PHI)
+
+    with caplog.at_level(logging.WARNING, logger="neo4j.notifications"):
+        ranked = [
+            c.chunk_id for c in chunks_in_neo4j.search("Beta Labs kits", 4, everyone)
+        ]
+    assert not [r for r in caplog.records if "deprecated" in r.getMessage()]
+
+    procedures = Neo4jChunkStore(
+        store, DeterministicFakeEmbedding(size=DIMS), dimensions=DIMS
+    )
+    procedures._queries = _PROCEDURES  # pylint: disable=protected-access
+    assert [
+        c.chunk_id for c in procedures.search("Beta Labs kits", 4, everyone)
+    ] == ranked
+    assert len(ranked) == 4
 
 
 def test_chunk_text_survives_the_graph_swap(store, chunks_in_neo4j):

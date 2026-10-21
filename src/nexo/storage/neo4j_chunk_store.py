@@ -6,15 +6,20 @@ Search is hybrid like the local store: a vector index (cosine) and a full-text
 index (Lucene, accents folded) fused with Reciprocal Rank Fusion. Candidates are
 filtered with the same `ChunkFilter.allows` as the local store, so clearance rules
 live in one place.
+
+Neo4j 2026.09+ reads both indexes with the SEARCH clause; older servers (5.26)
+with the `db.index.*.queryNodes` procedures, which 2026.x deprecates.
 """
 
 from __future__ import annotations
 
 import json
+import re
 from collections.abc import Sequence
 from datetime import date, datetime
+from functools import cached_property
 from pathlib import Path
-from typing import Any, LiteralString
+from typing import Any, LiteralString, NamedTuple
 
 from langchain_core.embeddings import Embeddings
 from neo4j import ManagedTransaction
@@ -38,15 +43,35 @@ TEXT_INDEX = "chunk_search_text"
 # Hits are filtered after the index lookup: ask for more than k, then filter.
 OVERFETCH = 10
 
+# The first Neo4j release whose SEARCH clause reads full-text as well as vector indexes.
+SEARCH_CLAUSE_SINCE = (2026, 9)
+
+
+class IndexQueries(NamedTuple):
+    """Vector and full-text lookups; both take $lookup (vector or terms) and $fetch."""
+
+    vector: LiteralString
+    text: LiteralString
+
+
 # Node properties for a hit, without the embedding and search text (large, unused).
 _HIT = (
-    " YIELD node AS c, score WHERE c.text IS NOT NULL"
+    " WITH c, score WHERE c.text IS NOT NULL"
     " RETURN c {.*, embedding: null, search_text: null} AS c ORDER BY score DESC"
 )
-_VECTOR_SEARCH = "CALL db.index.vector.queryNodes($index, $fetch, $vector)" + _HIT
-_TEXT_SEARCH = (
-    "CALL db.index.fulltext.queryNodes($index, $terms, {limit: $fetch})" + _HIT
+_SEARCH_CLAUSE = IndexQueries(
+    vector=f"CYPHER 25 MATCH (c:Chunk) SEARCH c IN (VECTOR INDEX {VECTOR_INDEX}"
+    " FOR $lookup LIMIT $fetch) SCORE AS score" + _HIT,
+    text=f"CYPHER 25 MATCH (c:Chunk) SEARCH c IN (FULLTEXT INDEX {TEXT_INDEX}"
+    " FOR $lookup LIMIT $fetch) SCORE AS score" + _HIT,
 )
+_PROCEDURES = IndexQueries(
+    vector=f"CALL db.index.vector.queryNodes('{VECTOR_INDEX}', $fetch, $lookup)"
+    " YIELD node AS c, score" + _HIT,
+    text=f"CALL db.index.fulltext.queryNodes('{TEXT_INDEX}', $lookup, {{limit: $fetch}})"
+    " YIELD node AS c, score" + _HIT,
+)
+_COMPONENTS = "CALL dbms.components() YIELD name, versions RETURN name, versions"
 _UPSERT = (
     "UNWIND $rows AS row MERGE (c:Chunk {chunk_id: row.chunk_id}) SET c += row.props"
 )
@@ -116,6 +141,13 @@ def _rows(
 ) -> list[dict[str, Any]]:
     """Run one statement and return its records as dicts (nodes as property maps)."""
     return [record.data() for record in tx.run(cypher, **params)]
+
+
+def index_queries(components: list[dict[str, Any]]) -> IndexQueries:
+    """SEARCH on Neo4j 2026.09+, the procedures before, from `dbms.components()` rows."""
+    kernel = next(row for row in components if row["name"] == "Neo4j Kernel")
+    major, minor = (int(part) for part in re.findall(r"\d+", kernel["versions"][0])[:2])
+    return _SEARCH_CLAUSE if (major, minor) >= SEARCH_CLAUSE_SINCE else _PROCEDURES
 
 
 def _visible(
@@ -208,6 +240,12 @@ class Neo4jChunkStore:
         return int(row["n"])
 
     # --- reads ------------------------------------------------------------------
+    @cached_property
+    def _queries(self) -> IndexQueries:
+        """The index lookups this server supports, decided once per store."""
+        with self._graph.session(write=False) as session:
+            return index_queries(session.execute_read(_rows, _COMPONENTS))
+
     def get_by_ids(self, chunk_ids: Sequence[str]) -> list[ChunkRecord]:
         """Return the stored chunks for these ids, in order; unknown ids are skipped."""
         attributes = {
@@ -232,6 +270,7 @@ class Neo4jChunkStore:
         attributes = retrieval_attributes(k, self._mode) | {"db.system.name": "neo4j"}
         candidates = candidate_count(k, self._mode)
         fetch = candidates * OVERFETCH
+        queries = self._queries
         with (
             traced_span(
                 f"retrieval {DATA_SOURCE_ID}", attributes, kind=SpanKind.CLIENT
@@ -242,20 +281,15 @@ class Neo4jChunkStore:
             if self._mode in ("vector", "hybrid"):
                 rows = session.execute_read(
                     _rows,
-                    _VECTOR_SEARCH,
-                    index=VECTOR_INDEX,
+                    queries.vector,
+                    lookup=self._embeddings.embed_query(query),
                     fetch=fetch,
-                    vector=self._embeddings.embed_query(query),
                 )
                 hits.append(_visible(rows, chunk_filter, candidates))
             terms = tokenize(query)
             if self._mode in ("keyword", "hybrid") and terms:
                 rows = session.execute_read(
-                    _rows,
-                    _TEXT_SEARCH,
-                    index=TEXT_INDEX,
-                    terms=" ".join(terms),
-                    fetch=fetch,
+                    _rows, queries.text, lookup=" ".join(terms), fetch=fetch
                 )
                 hits.append(_visible(rows, chunk_filter, candidates))
             ranked = fuse([list(found) for found in hits])[:k] if hits else []
