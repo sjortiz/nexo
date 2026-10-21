@@ -23,6 +23,7 @@ from nexo.agents.models import InvestigationScope, ToolCallSummary
 from nexo.agents.redaction import ChunkRedactor
 from nexo.config import Settings
 from nexo.storage.graph_store import (
+    GraphReader,
     ReadResult,
     UnsafeCypherError,
     validate_read_only_cypher,
@@ -30,15 +31,6 @@ from nexo.storage.graph_store import (
 from nexo.storage.schemas import CHUNK_ID_RE, ChunkRecord, Sensitivity
 from nexo.storage.sensitive_data import NoopDetector
 from nexo.storage.vector_store import ChunkFilter
-
-
-class GraphReader(Protocol):  # pylint: disable=too-few-public-methods  # protocol
-    """Read-only Cypher access the query tool needs."""
-
-    def run_read_query(
-        self, cypher: str, parameters: dict[str, Any] | None = None
-    ) -> ReadResult:
-        """Run a read-only Cypher query and return its bounded rows."""
 
 
 class ChunkReader(Protocol):  # pylint: disable=too-few-public-methods  # protocol

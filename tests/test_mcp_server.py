@@ -499,20 +499,24 @@ def test_find_entities_is_parameterized_and_redacts(settings, chunk_store):
     assert bad.is_error and "unknown entity type" in bad.content[0].text
 
 
-def edge(
-    relation: str, neighbor: str, neighbor_rank: int, edge_rank: int | None
-) -> dict[str, Any]:
-    """Build a neighbors row from Acme with the given neighbor and edge sensitivity."""
+ACME = {"key": "Organization:acme", "name": "Acme", "type": "Organization"}
+
+
+def edge(relation: str, neighbor: str, neighbor_rank: int, edge_rank: int) -> dict:
+    """A row of the shared neighbour query from Acme, ranks as given."""
     return {
-        "entity": {"key": "Organization:acme", "name": "Acme", "sensitivity_rank": 1},
-        "relation": relation,
-        "edge_rank": edge_rank,
-        "outgoing": True,
-        "predicate": None,
-        "certainty": "asserted",
-        "valid_at": None,
-        "chunk_ids": ["chk_a"],
-        "neighbor": {
+        "entity": {**ACME, "sensitivity_rank": 1},
+        "edge": {
+            "relation": relation,
+            "outgoing": True,
+            "predicate": None,
+            "certainty": "asserted",
+            "valid_at": None,
+            "evidence": "Acme ...",
+            "chunk_ids": ["chk_a"],
+            "sensitivity_rank": edge_rank,  # the query reads a missing rank as 3
+        },
+        "neighbour": {
             "key": f"X:{neighbor}",
             "name": neighbor,
             "type": "Organization",
@@ -522,32 +526,37 @@ def edge(
 
 
 def test_neighbors_hide_restricted_entities_and_edges(settings, chunk_store):
-    """Restricted, PHI-sourced or unranked edges are withheld; a restricted root is an error."""
+    """Edges above clearance or to hidden neighbors are withheld; a restricted root is an error."""
     rows = [
         edge("ACQUIRED", "Beta", 1, 1),
         edge("TREATS", "Jane", 3, 3),  # neighbor above clearance
-        edge(
-            "PAID", "Gamma", 1, 3
-        ),  # visible neighbor, but only a PHI source states this edge
-        edge("OWNS", "Delta", 1, None),
-    ]  # edge without a rank: treated as most sensitive
+        edge("PAID", "Gamma", 1, 3),  # only a PHI source states this edge
+    ]
     graph = RoutedGraph({"MATCH (e:Entity {key: $key})": rows})
     server = build_mcp_server(graph=graph, chunks=chunk_store, settings=settings)
     out = data(call(server, "nexo_neighbors", {"entity_key": "Organization:acme"}))
-    assert [e["neighbor"]["name"] for e in out["edges"]] == ["Beta"] and out[
-        "withheld"
-    ] == 3
-    assert "edge_rank" not in out["edges"][0]
+    assert out["edges"] == [
+        {
+            "relation": "ACQUIRED",
+            "outgoing": True,
+            "predicate": None,
+            "certainty": "asserted",
+            "valid_at": None,
+            "chunk_ids": ["chk_a"],
+            "neighbor": {**rows[0]["neighbour"]},
+        }
+    ]
+    assert out["withheld"] == 2 and out["entity_key"] == "Organization:acme"
+    assert graph.calls[0][1] == {"key": "Organization:acme", "limit": 25}
+
+    jane = {"key": "Person:jane", "name": "Jane", "type": "Person"}
     restricted = RoutedGraph(
         {
             "MATCH (e:Entity {key: $key})": [
                 {
-                    **rows[0],
-                    "entity": {
-                        "key": "Person:jane",
-                        "name": "Jane",
-                        "sensitivity_rank": 3,
-                    },
+                    "entity": {**jane, "sensitivity_rank": 3},
+                    "edge": None,
+                    "neighbour": None,
                 }
             ]
         }
@@ -558,6 +567,16 @@ def test_neighbors_hide_restricted_entities_and_edges(settings, chunk_store):
         {"entity_key": "Person:jane"},
     )
     assert result.is_error and "clearance" in result.content[0].text
+    unknown = data(
+        call(
+            build_mcp_server(
+                graph=RoutedGraph(), chunks=chunk_store, settings=settings
+            ),
+            "nexo_neighbors",
+            {"entity_key": "X:none"},
+        )
+    )
+    assert unknown["edges"] == [] and unknown["withheld"] == 0
 
 
 def test_graph_query_rejects_writes_and_redacts_rows(settings, chunk_store):

@@ -25,7 +25,7 @@ import re
 from collections import defaultdict
 from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Any, LiteralString, cast
+from typing import Any, LiteralString, Protocol, cast
 from urllib.parse import urlparse
 
 from neo4j import (
@@ -105,6 +105,18 @@ class ReadResult:
 
     rows: list[dict[str, Any]]
     truncated: bool
+
+
+class GraphReader(Protocol):
+    """Read-only graph access: what the agent tools and the MCP server need."""
+
+    def run_read_query(
+        self, cypher: str, parameters: dict[str, Any] | None = None
+    ) -> ReadResult:
+        """Run a read-only Cypher query and return its bounded rows."""
+
+    def describe_schema(self) -> str:
+        """Describe the graph's labels and relationship patterns as text."""
 
 
 @dataclass(frozen=True)

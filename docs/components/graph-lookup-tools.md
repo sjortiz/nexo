@@ -40,5 +40,8 @@ returns `unknown entity key`; an empty result hints at
 [search_chunks](search-chunks.md). Budget, Neo4j errors and `chunk_ids_found` work as in
 query_knowledge_graph.[^test-agent]
 
+The MCP server's `nexo_neighbors` runs the same neighbour query and the same `visible_neighbours`
+filter, and keeps its own result shape ([MCP server](mcp-server.md)).
+
 [^tools]: Investigation tools
 [^test-agent]: Tool tests
