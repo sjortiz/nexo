@@ -118,7 +118,7 @@ neo4j-test: ## Start a throwaway Neo4j on 127.0.0.1:7688 (NEO4J_TEST_IMAGE=neo4j
 	@for i in $$(seq 1 60); do $(RUN)python -c "from neo4j import GraphDatabase; GraphDatabase.driver('bolt://127.0.0.1:$(NEO4J_TEST_PORT)', auth=('neo4j', '$(NEO4J_TEST_PASSWORD)')).verify_connectivity()" 2>/dev/null && echo "Neo4j ready on 127.0.0.1:$(NEO4J_TEST_PORT)" && exit 0; sleep 2; done; $(CONTAINER) logs nexo-neo4j-test; exit 1
 
 test-neo4j: neo4j-test ## Run the Neo4j integration tests against that throwaway Neo4j
-	NEO4J_TEST_URI=bolt://127.0.0.1:$(NEO4J_TEST_PORT) NEO4J_TEST_PASSWORD=$(NEO4J_TEST_PASSWORD) $(RUN)pytest -o addopts="" -q tests/test_neo4j_integration.py
+	NEO4J_TEST_URI=bolt://127.0.0.1:$(NEO4J_TEST_PORT) NEO4J_TEST_PASSWORD=$(NEO4J_TEST_PASSWORD) $(RUN)pytest -o addopts="" -q tests/test_neo4j_integration.py tests/test_neo4j_lookups.py
 
 neo4j-test-down: ## Remove the throwaway Neo4j
 	$(CONTAINER) rm -f nexo-neo4j-test

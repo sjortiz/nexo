@@ -41,6 +41,7 @@ sources:
 | `tests/test_claude_skill.py` | nothing | The skill's frontmatter, tool list and phases, and `.mcp.json`, in sync with the MCP server. |
 | `tests/test_docs_okf.py` | nothing | This bundle conforms to OKF v0.2; links, sources and footnotes resolve; every setting is documented. |
 | `tests/test_neo4j_integration.py` | Neo4j | Real Cypher: merging, labels, lexical graph order, alias withdrawal, RELATED_TO per predicate, cross-document resolution through the real candidate query, server-side write refusal, row cap, database span, end-to-end ingest → investigate → approve. |
+| `tests/test_neo4j_lookups.py` | Neo4j | Real Cypher for the lookups: `entity_neighbours`, `find_paths`, `nexo_neighbors` and `nexo_find_paths` across clearances, edge evidence shown only within the rank of the chunk it quotes, and no `01N52` warnings on optional edge properties. |
 
 The suite runs on macOS and Linux (verified in `python:3.12-slim` on Linux aarch64 with Neo4j 5.26).
 vLLM is never required: the agent tests drive the real Strands loop with scripted chat completions, so
