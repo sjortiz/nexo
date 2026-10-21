@@ -427,7 +427,8 @@ def _lookup_tools(
             return call.fail("unknown key", _UNKNOWN_KEY)
         payload = visible_paths(result.rows, clearance.rank)
         if not payload["paths"]:
-            payload["hint"] = "no path in the graph: search_chunks for the text"
+            where = "no visible path" if payload["withheld"] else "no path in the graph"
+            payload["hint"] = f"{where}: search_chunks for the text"
         return call.reply(payload, f"{payload['path_count']} paths", max_chars)
 
     @tool

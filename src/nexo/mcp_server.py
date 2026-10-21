@@ -387,7 +387,10 @@ def build_mcp_server(  # pylint: disable=too-many-locals,too-many-statements  # 
             payload["chunk_ids_found"] = sorted(found)
             payload["truncated"] = result.truncated
             if not payload["paths"]:
-                payload["hint"] = "no path in the graph: nexo_search for the text"
+                where = (
+                    "no visible path" if payload["withheld"] else "no path in the graph"
+                )
+                payload["hint"] = f"{where}: nexo_search for the text"
             return payload
 
     @server.tool(annotations=READ_ONLY, structured_output=True)

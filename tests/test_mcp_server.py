@@ -685,11 +685,18 @@ def test_find_paths_reports_no_path_and_validates_bounds(settings, chunk_store):
     )
     out = data(call(server, "nexo_find_paths", {"from_key": A, "to_key": C}))
     assert out["paths"] == [] and out["withheld"] == 0
-    assert "nexo_search" in out["hint"] and "{1,3}" in graph.calls[1][0]
+    assert out["hint"] == "no path in the graph: nexo_search for the text"
+    assert "{1,3}" in graph.calls[1][0]
     for bad in ({"max_hops": 5}, {"max_hops": 0}, {"max_paths": 11}):
         result = call(server, "nexo_find_paths", {"from_key": A, "to_key": C, **bad})
         assert result.is_error
     assert len(graph.calls) == 2  # rejected before reaching the graph
+
+    hidden = [{"nodes": [_node(A), _node(C)], "hops": [_hop(A, C, P1, 3)]}]
+    _, server = paths_server(settings, chunk_store, ends((A, 0), (C, 1)), hidden)
+    out = data(call(server, "nexo_find_paths", {"from_key": A, "to_key": C}))
+    assert out["withheld"] == 1  # a path exists, just not one this caller may see
+    assert out["hint"] == "no visible path: nexo_search for the text"
 
 
 def test_stdout_carries_only_json_rpc_and_logs_go_to_stderr(tmp_path):

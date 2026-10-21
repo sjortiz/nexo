@@ -170,7 +170,15 @@ def test_find_paths_reports_unknown_keys_no_path_and_same_entity(settings, chunk
     _, tools = _named_tools(settings, graph, chunk_store)
     out = json.loads(tools["find_paths"]("X:a", "X:b", max_hops=0))
     assert out["paths"] == [] and out["withheld"] == 0 and "{1,1}" in graph.queries[0]
-    assert "search_chunks" in out["hint"]
+    assert out["hint"] == "no path in the graph: search_chunks for the text"
+
+    graph = FakeGraph(
+        rows=[{"nodes": [_node("X:a")], "hops": [_hop("X:a", "X:b", C1, 3)]}]
+    )
+    _, tools = _named_tools(settings, graph, chunk_store)
+    out = json.loads(tools["find_paths"]("X:a", "X:b"))
+    assert out["withheld"] == 1
+    assert out["hint"] == "no visible path: search_chunks for the text"
 
     graph = FakeGraph()
     _, tools = _named_tools(settings, graph, chunk_store)
