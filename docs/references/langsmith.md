@@ -52,6 +52,9 @@ and GDPR but does not document a BAA; confirm one before sending PHI. Masking ha
 (`LANGSMITH_HIDE_INPUTS`, `LANGSMITH_HIDE_OUTPUTS`, anonymizers) or, for OTLP, in a collector
 redaction processor.[^privacy][^redaction] Self-hosted LangSmith is an Enterprise add-on.
 
+The add-on drops Nexo's `nexo.content` span event (a run's question and answer); LangSmith receives
+only the request span's `nexo.content` verdict (`released (internal)`, `withheld (pii)`), never the text.
+
 How Nexo uses it: an opt-in trace add-on ([ADR-0014](../decisions/adr-0014-langfuse-default-trace-backend.md));
 evaluation and Studio options are discussed in [ADR-0011](../decisions/adr-0011-langsmith-adoption.md).
 
