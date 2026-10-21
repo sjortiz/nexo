@@ -90,7 +90,9 @@ hosts ([Local on Apple Silicon](local-apple-silicon.md)).
 | `REQUIRE_GROUNDED_EVIDENCE` | `true` | Drop triples whose evidence quote is not in the chunk. |
 | `EXTRACTION_CONTEXT_CHARS` | `500` | Tail of the previous chunk shown to the extractor (context only); 0 disables. |
 | `ONTOLOGY_PATH` | unset | [Relation ontology](../components/relation-ontology.md) JSON; unset keeps free-form predicates. |
+| `<ROLE>_BASE_URL=claude-cli://` | - | Serve a JSON role (extraction, router, judge) through the Claude Code CLI (`claude -p`) with the signed-in user's account; `<ROLE>_MODEL` is the Claude model id. `AGENT_BASE_URL=claude-cli://` runs the investigator as `claude -p` over the read-only `nexo mcp` tools at the caller's clearance; Nexo reads its event stream for the audit trail, so compliance and review are unchanged. Text goes to Anthropic. |
 | `GLOSSARY_PATH` | unset | JSON object of acronym → expansion. |
+| *(convention)* | `local/` | Deployment- and client-specific files (`ENTITY_TYPES_PATH`, `INGEST_EXCLUSIONS_PATH`, `ONTOLOGY_PATH`, `GLOSSARY_PATH`) belong in `local/` or `*.local.yaml`, which `.gitignore` excludes. |
 | `INGEST_EXCLUSIONS_PATH` | unset | YAML/JSON [ingest exclusions](../components/ingest-exclusions.md): content kept out of the `document`, `search` or `extraction` stage. |
 | `ENTITY_TYPES_PATH` | unset | YAML/JSON: which built-in [entity types](../components/triple-extraction.md#entity-types) to extract and the deployment's own; unset = every built-in type. |
 | `AMOUNT_ENTITIES` | `convert` | A triple that made an amount an entity: `convert` (to an attribute of the other entity), `drop` or `keep`. |

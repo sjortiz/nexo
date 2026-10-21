@@ -24,6 +24,8 @@ from langgraph.graph.state import CompiledStateGraph
 from langgraph.types import Command
 from pydantic import BaseModel, ValidationError
 
+from nexo.agents.claude_cli_agent import ClaudeCliInvestigator
+from nexo.claude_cli import SCHEME as CLAUDE_CLI
 from nexo.agents.investigator import Investigator
 from nexo.agents.models import AgentBudget
 from nexo.agents.redaction import ChunkRedactor
@@ -467,8 +469,17 @@ def chunk_store_from_settings(
 
 def build_investigator(
     settings: Settings, graph_store: GraphStore, chunk_store: ChunkStore
-) -> Investigator:
-    """The investigator agent over this graph and chunk store, on the agent model."""
+) -> Investigator | ClaudeCliInvestigator:
+    """The investigator agent over this graph and chunk store, on the agent model.
+
+    AGENT_BASE_URL=claude-cli:// runs it through the Claude Code CLI over the
+    nexo MCP tools instead of Strands on an OpenAI-compatible server.
+    """
+    endpoint = settings.endpoint("agent")
+    if endpoint.base_url.startswith(CLAUDE_CLI):
+        return ClaudeCliInvestigator(
+            model=endpoint.model, chunks=chunk_store, timeout_s=settings.agent_timeout_s
+        )
     return Investigator(
         model=build_strands_model(settings),
         graph=graph_store,

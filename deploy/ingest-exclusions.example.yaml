@@ -14,6 +14,7 @@
 #   entity: <regex>             extracted entities whose name matches (extraction only)
 #
 # doc_types limits a rule to documents ingested with those --doc-type values.
+# Keep a deployment's own rules in local/ (git-ignored), e.g. local/ingest-exclusions.yaml.
 
 exclude:
   # Image descriptions written by an upstream pipeline: searchable, but screenshots

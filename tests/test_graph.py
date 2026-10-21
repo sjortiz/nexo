@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from datetime import date
+
 import json
 import logging
 import sqlite3
@@ -33,6 +35,7 @@ from pydantic import SecretStr
 from nexo.agents.models import AgentOutput, InvestigationScope
 from nexo.cli import main
 from nexo.orchestration.graph import (
+    router_prompt,
     stated_scope,
     GraphDependencies,
     build_graph,
@@ -264,6 +267,11 @@ def test_stated_scope(query, known, kept_types, kept_dates):
     scoped, _ = stated_scope(decision, query, known)
     assert scoped.doc_types == kept_types
     assert (scoped.effective_from is not None) is kept_dates
+
+
+def test_router_prompt_carries_todays_date():
+    """The router is told the date, so it does not treat recent years as the future."""
+    assert router_prompt(date(2026, 10, 21)).endswith("Today's date: 2026-10-21.")
 
 
 def test_router_cannot_raise_caller_clearance(settings):

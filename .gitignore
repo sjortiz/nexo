@@ -10,6 +10,13 @@ __pycache__/
 # nexo visualize output: embeds graph data from the documents
 /graph.html
 
+# Deployment- and client-specific config (entity types, exclusions, ontologies,
+# glossaries): keep it in local/ or name it *.local.yaml / *.local.json, never in git.
+/local/
+*.local.yaml
+*.local.yml
+*.local.json
+
 # nexo setup: your setup file, its lock and the rendered stack (machine-specific)
 /nexo.yaml
 /nexo.lock

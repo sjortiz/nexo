@@ -5,8 +5,8 @@
 # custom:  your own types; name is a Neo4j label (letters and digits, starting
 #          with a capital), description tells the extractor when to use it.
 #
-# Keep a deployment's file next to its data, not in this repository, when the
-# types describe a client's business.
+# Keep a deployment's own file in local/ (git-ignored), e.g. local/entity-types.yaml,
+# or name it *.local.yaml: types that describe a client's business stay out of git.
 
 builtin: [Person, Organization, Location, Product, Event, Concept]
 
