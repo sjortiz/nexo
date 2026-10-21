@@ -53,9 +53,9 @@ class _ChunkStore:  # pylint: disable=too-few-public-methods
         return 3
 
 
-class _Graph:  # pylint: disable=too-few-public-methods
-    def close(self) -> None:
-        """Nothing to close."""
+@contextmanager
+def _open_chunk_store(_settings):
+    yield _ChunkStore()
 
 
 @pytest.mark.parametrize(
@@ -71,9 +71,7 @@ def test_stdout_is_the_commands_json_and_logs_go_to_stderr(
 ):
     """`nexo ask | jq` works: stdout parses as one JSON document; the log lines are on stderr."""
     cli_env.setattr("nexo.cli.open_runtime", _open_runtime)
-    cli_env.setattr(
-        "nexo.cli._chunk_store", lambda _settings: (_Graph(), _ChunkStore())
-    )
+    cli_env.setattr("nexo.cli._open_chunk_store", _open_chunk_store)
     assert cli.main(argv) == code
     captured = capsys.readouterr()
     result = json.loads(captured.out)  # fails on any log line or stray print

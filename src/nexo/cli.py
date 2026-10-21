@@ -1,17 +1,22 @@
-"""Command line entry point: ingest, ask, review, status, eval, models."""
+"""Command line entry point; `nexo --help` lists the commands."""
 
 from __future__ import annotations
 
 import argparse
-from contextlib import ExitStack
 import json
 import logging
 import sys
+from collections.abc import Iterator
+from contextlib import ExitStack, contextmanager, suppress
 from datetime import date
 from pathlib import Path
+from socketserver import BaseServer
+from typing import NamedTuple
 
+from langchain_core.language_models import BaseChatModel
 from pydantic import BaseModel
 
+from nexo.agents.investigator import Investigator
 from nexo.agents.models import InvestigationScope
 from nexo.agents.redaction import ChunkRedactor
 from nexo.config import get_settings
@@ -51,7 +56,7 @@ from nexo.storage.ingest import ExtractionAids, IngestionTargets, KnowledgeGraph
 from nexo.storage.ontology import Ontology
 from nexo.storage.schemas import DocumentMetadata, Sensitivity, Triple
 from nexo.storage.sensitive_data import NoopDetector, build_detector
-from nexo.storage.vector_store import ChunkFilter, LocalChunkStore
+from nexo.storage.vector_store import ChunkFilter, ChunkStore, LocalChunkStore
 from nexo.telemetry import (
     caller_attributes,
     setup_telemetry,
@@ -60,6 +65,8 @@ from nexo.telemetry import (
 )
 
 log = logging.getLogger("nexo.cli")
+
+CLEARANCES = [s.value for s in Sensitivity]
 
 
 def _emit(
@@ -153,13 +160,14 @@ def _review_ui(args: argparse.Namespace) -> int:
             "demo review page (no authentication) at http://%s:%d/",
             *server.server_address[:2],
         )
-        try:
-            server.serve_forever()
-        except KeyboardInterrupt:
-            pass
-        finally:
-            server.server_close()
+        _serve(server)
     return 0
+
+
+def _serve(server: BaseServer) -> None:
+    """Serve until Ctrl-C, then close the socket."""
+    with server, suppress(KeyboardInterrupt):
+        server.serve_forever()
 
 
 def _status(args: argparse.Namespace) -> int:
@@ -181,60 +189,68 @@ def _eval(args: argparse.Namespace) -> int:
 
     settings = get_settings()
     setup_telemetry(settings)
-    judge = None
-    if settings.judge_model:
-        judge = build_chat_model(settings, role="judge")
-    graph = GraphStore.from_settings(settings, read_only=True)
-    chunks = chunk_store_from_settings(settings, graph)
-    investigator = build_investigator(settings, graph, chunks)
-    redactor = ChunkRedactor(
-        build_detector(settings.sensitive_data_provider, aws_region=settings.aws_region)
-    )
-    try:
+    with GraphStore.from_settings(settings, read_only=True) as graph:
+        chunks = chunk_store_from_settings(settings, graph)
+        investigator = build_investigator(settings, graph, chunks)
+        judge = _judge(settings, chunks) if settings.judge_model else None
         for line in Path(args.dataset).read_text(encoding="utf-8").splitlines():
             if not line.strip():
                 continue
-            case = json.loads(line)
             with traced_span("eval.case"):
-                scope = InvestigationScope(
-                    strategy=case.get("strategy", "hybrid"),
-                    chunk_filter=ChunkFilter(
-                        max_sensitivity=case.get(
-                            "clearance", settings.default_clearance
-                        )
-                    ),
+                row = _score_case(
+                    json.loads(line), investigator, judge, settings.default_clearance
                 )
-                output = investigator.investigate(case["question"], scope=scope)
-                metrics = retrieval_scores(output, case.get("relevant_chunk_ids", []))
-                if "answer_contains" in case:
-                    metrics.update(
-                        answer_scores(output.answer, case["answer_contains"])
-                    )
-                if judge and output.answer:
-                    evidence = _judge_evidence(
-                        chunks, redactor, scope.chunk_filter, output.citations
-                    )
-                    metrics["generation.faithfulness"] = judge_faithfulness(
-                        judge, output.answer, evidence
-                    ).score
-                    metrics["generation.relevancy"] = judge_relevancy(
-                        judge, case["question"], output.answer
-                    ).score
-                record_metrics(metrics)
-            _emit(
-                {
-                    "question": case["question"],
-                    **metrics,
-                    "answer": output.answer,
-                    "tool_calls": len(output.tool_calls),
-                    "stop_reason": output.stop_reason,
-                },
-                "eval case scored",
-                indent=None,
-            )
-    finally:
-        graph.close()
+            _emit(row, "eval case scored", indent=None)
     return 0
+
+
+class _Judge(NamedTuple):
+    """The judge model, and the chunks it reads as the case's caller would see them."""
+
+    model: BaseChatModel
+    chunks: ChunkStore
+    redactor: ChunkRedactor
+
+
+def _judge(settings, chunks: ChunkStore) -> _Judge:
+    detector = build_detector(
+        settings.sensitive_data_provider, aws_region=settings.aws_region
+    )
+    return _Judge(
+        build_chat_model(settings, role="judge"), chunks, ChunkRedactor(detector)
+    )
+
+
+def _score_case(
+    case: dict, investigator: Investigator, judge: _Judge | None, clearance: str
+) -> dict:
+    """Investigate one golden case and return its output row with the scores."""
+    scope = InvestigationScope(
+        strategy=case.get("strategy", "hybrid"),
+        chunk_filter=ChunkFilter(max_sensitivity=case.get("clearance", clearance)),
+    )
+    output = investigator.investigate(case["question"], scope=scope)
+    metrics = retrieval_scores(output, case.get("relevant_chunk_ids", []))
+    if "answer_contains" in case:
+        metrics.update(answer_scores(output.answer, case["answer_contains"]))
+    if judge and output.answer:
+        evidence = _judge_evidence(
+            judge.chunks, judge.redactor, scope.chunk_filter, output.citations
+        )
+        metrics["generation.faithfulness"] = judge_faithfulness(
+            judge.model, output.answer, evidence
+        ).score
+        metrics["generation.relevancy"] = judge_relevancy(
+            judge.model, case["question"], output.answer
+        ).score
+    record_metrics(metrics)
+    return {
+        "question": case["question"],
+        **metrics,
+        "answer": output.answer,
+        "tool_calls": len(output.tool_calls),
+        "stop_reason": output.stop_reason,
+    }
 
 
 def _judge_evidence(chunks, redactor, chunk_filter, chunk_ids) -> list[str]:
@@ -300,25 +316,23 @@ def _graph(args: argparse.Namespace) -> int:
     return 0
 
 
-def _chunk_store(settings) -> tuple[GraphStore, Neo4jChunkStore]:
+@contextmanager
+def _open_chunk_store(settings) -> Iterator[Neo4jChunkStore]:
     if settings.chunk_store != "neo4j":
         raise SystemExit(
             "nexo chunks works on the neo4j chunk store (CHUNK_STORE=neo4j)"
         )
-    graph = GraphStore.from_settings(settings, read_only=False)
-    store = chunk_store_from_settings(settings, graph)
-    assert isinstance(store, Neo4jChunkStore)
-    return graph, store
+    with GraphStore.from_settings(settings, read_only=False) as graph:
+        store = chunk_store_from_settings(settings, graph)
+        assert isinstance(store, Neo4jChunkStore)
+        yield store
 
 
 def _chunks_status(_args: argparse.Namespace) -> int:
     """How many of the graph's chunks have no text (ingested before ADR-0018)."""
     settings = get_settings()
-    graph, store = _chunk_store(settings)
-    try:
+    with _open_chunk_store(settings) as store:
         missing = store.missing_text()
-    finally:
-        graph.close()
     result = {"chunk_store": settings.chunk_store, "chunks_without_text": missing}
     if missing:
         _emit(
@@ -336,15 +350,12 @@ def _chunks_status(_args: argparse.Namespace) -> int:
 def _chunks_import(args: argparse.Namespace) -> int:
     """Copy a local JSON chunk store into Neo4j, with its stored embeddings."""
     settings = get_settings()
-    graph, store = _chunk_store(settings)
-    try:
+    with _open_chunk_store(settings) as store:
         store.ensure_schema()
         result = import_local_store(
             store, Path(args.path or settings.vector_store_path)
         )
         result["chunks_without_text"] = store.missing_text()
-    finally:
-        graph.close()
     _emit(
         result,
         "imported %d chunks (%d referenced by the graph); %d graph chunks still lack text",
@@ -410,10 +421,9 @@ def _mcp(args: argparse.Namespace) -> int:
 
     settings = get_settings()
     setup_telemetry(settings)
-    graph = GraphStore.from_settings(settings, read_only=True)
-    chunks = chunk_store_from_settings(settings, graph)
     with ExitStack() as stack:
-        stack.callback(graph.close)
+        graph = stack.enter_context(GraphStore.from_settings(settings, read_only=True))
+        chunks = chunk_store_from_settings(settings, graph)
         runtime = (
             stack.enter_context(open_review_runtime(settings, chunks))
             if settings.mcp_review_tools
@@ -467,12 +477,7 @@ def _review_inbox(args: argparse.Namespace) -> int:
             adapter.reviewer,
             clearance,
         )
-        try:
-            server.serve_forever()
-        except KeyboardInterrupt:
-            pass
-        finally:
-            server.server_close()
+        _serve(server)
     return 0
 
 
@@ -490,7 +495,7 @@ def _add_document_commands(sub: argparse._SubParsersAction) -> None:
     ingest.add_argument(
         "--sensitivity",
         default="internal",
-        choices=["public", "internal", "pii", "phi"],
+        choices=CLEARANCES,
     )
     ingest.set_defaults(handler=_ingest)
 
@@ -499,7 +504,7 @@ def _add_document_commands(sub: argparse._SubParsersAction) -> None:
     )
     ask.add_argument("query")
     ask.add_argument("--thread-id")
-    ask.add_argument("--clearance", choices=["public", "internal", "pii", "phi"])
+    ask.add_argument("--clearance", choices=CLEARANCES)
     ask.add_argument(
         "--user", help="who is asking, on the trace (default: NEXO_USER or login name)"
     )
