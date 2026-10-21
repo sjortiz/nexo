@@ -187,7 +187,8 @@ def _edit_decision(args: Any, packet: ReviewPacket) -> dict[str, Any]:
 
 
 def _timestamp(offset: int = 0) -> str:
-    # Nexo keeps no thread times; newest-first order is kept by spacing them a second apart.
+    # The inbox sorts by created_at. Until it reads RunResult.paused_at, newest-first
+    # order is kept by spacing the threads a second apart.
     when = datetime.now(timezone.utc) - timedelta(seconds=offset)
     return when.isoformat()
 

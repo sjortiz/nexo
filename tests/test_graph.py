@@ -8,6 +8,7 @@ import re
 from contextlib import nullcontext
 from dataclasses import dataclass, field
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 from unittest.mock import patch
 
@@ -623,3 +624,23 @@ def test_cli_review_reports_an_invalid_decision_without_opening_the_runtime(
         code = main(["review", "t1", "--approve", "--reviewer", ""])
     assert code == 2
     assert "invalid decision: reviewer:" in capsys.readouterr().err
+
+
+def test_a_malformed_interrupt_reads_as_not_pending(settings, monkeypatch, caplog):
+    """One foreign interrupt value must not break status() or the pending list."""
+    rt = runtime(
+        settings, FakeInvestigator([grounded_output()]), [route(strategy="graph")]
+    )
+    rt.start("How is Acme related to Beta?", thread_id="t1")
+    original = rt.graph.get_state
+
+    def broken(config):
+        snapshot = original(config)
+        bogus = SimpleNamespace(interrupts=[SimpleNamespace(value={"not": "a packet"})])
+        return snapshot._replace(tasks=(bogus,))
+
+    monkeypatch.setattr(rt.graph, "get_state", broken)
+    with caplog.at_level(logging.WARNING, logger="nexo.service"):
+        assert rt.status("t1").pending_review is None
+        assert all(r.pending_review is None for r in rt.pending_reviews())
+    assert any("not a review packet" in m for m in caplog.messages)

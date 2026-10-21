@@ -90,6 +90,8 @@ def _age(paused_at: datetime | None) -> str:
     """How long ago a thread paused, as 2h or 5m."""
     if paused_at is None:
         return "unknown"
+    if paused_at.tzinfo is None:  # a naive time from another runtime: read it as UTC
+        paused_at = paused_at.replace(tzinfo=timezone.utc)
     seconds = max(0, int((datetime.now(timezone.utc) - paused_at).total_seconds()))
     for unit, size in (("d", 86400), ("h", 3600), ("m", 60)):
         if seconds >= size:

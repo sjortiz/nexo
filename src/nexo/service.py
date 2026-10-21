@@ -22,7 +22,7 @@ from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.checkpoint.sqlite import SqliteSaver
 from langgraph.graph.state import CompiledStateGraph
 from langgraph.types import Command
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 
 from nexo.agents.investigator import Investigator
 from nexo.agents.redaction import ChunkRedactor
@@ -264,7 +264,17 @@ class Runtime:
         snapshot = self.graph.get_state(self._config(thread_id))
         for t in snapshot.tasks:
             if t.interrupts:
-                return ReviewPacket.model_validate(t.interrupts[-1].value)
+                try:
+                    return ReviewPacket.model_validate(t.interrupts[-1].value)
+                except ValidationError as exc:
+                    # One foreign or malformed interrupt must not break the whole
+                    # pending list; the thread reads as not awaiting review.
+                    log.warning(
+                        "thread %s: interrupt is not a review packet (%d errors)",
+                        thread_id,
+                        exc.error_count(),
+                    )
+                    return None
         return None
 
     def _result(self, thread_id: str, pending: ReviewPacket | None) -> RunResult:

@@ -40,6 +40,13 @@ No surface owns review state or parses the packet itself: `blocking` and `findin
 | Local web page | Demo only | Shows the flow without an MCP client; no authentication, loopback only (`make review-ui`, [Human review](../operations/human-review.md#demo-review-page)). |
 | `nexo review` | Always available | The fallback every other surface can print. |
 
+- **Amended 2026-10-21:** the packet and the decision are typed. The compliance node pauses with a
+  `ReviewPacket` (its JSON shape unchanged), `status` and `pending_reviews` return it, and
+  `review_passages` returns `ReviewPassage`s, so no surface re-derives `blocking` or `findings`.
+  Each surface builds the `ReviewDecision` and reports a validation error to its own user
+  (`nexo review` exits 2, the page answers 400, the inbox 422, the MCP tool an error) instead of
+  letting the graph re-pause the thread; the graph still validates raw resumes.
+
 # Why MCP is the default
 
 `nexo mcp` is already how Claude Code and other clients reach Nexo, so the reviewer needs nothing new
