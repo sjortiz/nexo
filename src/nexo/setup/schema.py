@@ -200,6 +200,13 @@ class Patch(_Strict):
     operations: list[dict[str, Any]]
 
 
+class Admin(_Strict):
+    """Operator actions and who may run them."""
+
+    # user ids (NEXO_USER, else the login name) allowed to run `nexo delete`; empty: nobody
+    delete_operators: list[str] = Field(default_factory=list, alias="deleteOperators")
+
+
 class Spec(_Strict):
     """Everything below `spec:`."""
 
@@ -213,6 +220,7 @@ class Spec(_Strict):
     # Which answers wait for a person: on-findings (the default: no findings and grounded
     # citations are approved as system:auto); always; never (only warn findings are approved).
     review: Literal["always", "on-findings", "never"] = "on-findings"
+    admin: Admin = Field(default_factory=Admin)
     patches: list[Patch] = Field(default_factory=list)
 
     @model_validator(mode="after")

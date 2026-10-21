@@ -131,6 +131,7 @@ hosts ([Local on Apple Silicon](local-apple-silicon.md)).
 | `REVIEW_POLICY` | `on-findings` | Which answers wait for a person (table below). `nexo.yaml` sets it (`spec.review`). See [Review policy](human-review.md#review-policy). |
 | `CHECKPOINT_SQLITE_PATH` | `<data dir>/<stack>/checkpoints.sqlite` | SQLite file for review checkpoints, shared by every checkout of the stack; the data dir is `NEXO_DATA_DIR`, `$XDG_DATA_HOME/nexo` or `~/.local/share/nexo`. |
 | `CHECKPOINT_POSTGRES_URI` | unset | Required for `postgres` (extra `postgres`). Secret. |
+| `DELETE_OPERATORS` | empty (nobody) | Comma-separated user ids (`NEXO_USER`, else the login name) allowed to run `nexo delete`. `nexo.yaml` sets it (`spec.admin.deleteOperators`). See [Deleting a source](delete.md). |
 
 | `REVIEW_POLICY` | Approved as `system:auto` | Waits for a person | Choose it for |
 |---|---|---|---|

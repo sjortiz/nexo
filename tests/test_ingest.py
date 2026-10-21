@@ -316,3 +316,40 @@ def test_ingest_without_targets_points_at_extract_triples(settings):
     ingestor = _ingestor(settings, None, [], None)
     with pytest.raises(ValueError, match="extract_triples"):
         ingestor.ingest(DOC, DocumentMetadata(source_id="d"))
+
+
+def test_contradictory_directions_in_one_chunk_are_both_dropped(settings, chunk_store):
+    """A ACQUIRED B next to B ACQUIRED A is an extraction error; symmetric relations stay."""
+    text = (
+        "# Deals\n\nAcme Holdings bought Beta Labs. "
+        "Beta Labs bought Acme Holdings. They partner."
+    )
+    replies = [
+        json.dumps(
+            {
+                "triples": [
+                    _triple("Acme Holdings bought Beta Labs", "acquired"),
+                    _triple(
+                        "Beta Labs bought Acme Holdings",
+                        "acquired",
+                        head=_entity("Beta Labs"),
+                        tail=_entity("Acme Holdings"),
+                    ),
+                    _triple("They partner", "partners with"),
+                    _triple(
+                        "They partner",
+                        "partners with",
+                        head=_entity("Beta Labs"),
+                        tail=_entity("Acme Holdings"),
+                    ),
+                ]
+            }
+        )
+    ]
+    writer = RecordingGraphWriter()
+    report = _ingestor(
+        settings, chunk_store, replies, writer, ontology=ONTOLOGY
+    ).ingest(text, DocumentMetadata(source_id="d"))
+    [(_, _, triples)] = writer.calls
+    assert sorted(t.relation for t in triples) == ["PARTNERS_WITH", "PARTNERS_WITH"]
+    assert report.dropped == {"contradictory_direction": 2}

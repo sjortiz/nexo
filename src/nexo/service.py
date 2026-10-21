@@ -28,7 +28,7 @@ from nexo.agents.investigator import Investigator
 from nexo.agents.models import AgentBudget
 from nexo.agents.redaction import ChunkRedactor
 from nexo.config import Settings
-from nexo.logging_setup import CONTENT_LOGGER
+from nexo.logging_setup import AUDIT_LOGGER, CONTENT_LOGGER
 from nexo.llm import build_chat_model, build_embeddings, build_strands_model
 from nexo.orchestration.graph import WORKFLOW_NAME, GraphDependencies, build_graph
 from nexo.orchestration.state import ReviewDecision, ReviewPacket, ReviewPassage
@@ -63,6 +63,7 @@ log = logging.getLogger("nexo.service")
 # Its own logger, pinned to INFO by configure_logging: the audit record reaches OTLP
 # whatever LOG_LEVEL is.
 content_log = logging.getLogger(CONTENT_LOGGER)
+audit_log = logging.getLogger(AUDIT_LOGGER)
 
 
 class RunResult(BaseModel):
@@ -579,3 +580,41 @@ def open_ingestor(
         )
     finally:
         graph_store.close()
+
+
+def remove_source(
+    settings: Settings, source_id: str, *, operator: str | None = None
+) -> dict[str, Any]:
+    """Remove a document from the graph and the chunk store, as an allowed operator.
+
+    The operator is the `user.id` traces carry (NEXO_USER, else the login name) and
+    must be in DELETE_OPERATORS; anyone else gets a PermissionError and nothing
+    changes. The removal is one audit record (`nexo.audit`, always exported like the
+    content record) and one span event: source id, operator and counts, never text.
+    """
+    who = caller_attributes(settings, operator)["user.id"]
+    if who not in settings.delete_operator_set:
+        raise PermissionError(f"{who} is not a delete operator (DELETE_OPERATORS)")
+    setup_telemetry(settings)
+    with GraphStore.from_settings(settings, read_only=False) as graph:
+        chunks = chunk_store_from_settings(settings, graph)
+        attributes = {"document.source_id": source_id, "user.id": who}
+        with traced_span("delete_source", attributes) as span:
+            removal = graph.remove_source(source_id)
+            # The graph swap removes stale chunks itself when they live in Neo4j.
+            removed = max(removal.chunks_removed, chunks.delete_source(source_id))
+            record = {
+                "source_id": source_id,
+                "operator": who,
+                "chunks_removed": removed,
+                "entities_touched": removal.entities_touched,
+            }
+            span.add_event("nexo.delete", record)
+    audit_log.info(
+        "delete %s by %s: %d chunks removed, %d entities touched",
+        source_id,
+        who,
+        removed,
+        removal.entities_touched,
+    )
+    return record

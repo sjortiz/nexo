@@ -218,6 +218,9 @@ class Settings(BaseSettings):
     # never, where answers with only warn findings are approved too. Blocking findings
     # always wait.
     review_policy: Literal["always", "on-findings", "never"] = "on-findings"
+    # Who may run `nexo delete`: comma-separated user ids (the `user.id` traces carry:
+    # NEXO_USER, else the login name). Empty: nobody. nexo.yaml sets it (spec.admin).
+    delete_operators: str = ""
 
     # --- Evaluation (LLM-as-a-judge) ------------------------------------------
     # Prefer a different model from the generator to reduce self-preference bias.
@@ -311,6 +314,13 @@ class Settings(BaseSettings):
             return self
         apply_profiles(self)
         return self
+
+    @property
+    def delete_operator_set(self) -> frozenset[str]:
+        """The user ids allowed to run `nexo delete`."""
+        return frozenset(
+            p.strip() for p in self.delete_operators.split(",") if p.strip()
+        )
 
     @property
     def effective_mcp_clearance(self) -> str:

@@ -133,3 +133,51 @@ def test_eval_records_a_failed_case_and_scores_the_rest(monkeypatch, tmp_path, c
         rows[0]["retrieval.context_precision"] == rows[2]["retrieval.context_precision"]
     )
     assert graph.closed
+
+
+def test_eval_repeats_cases_and_scores_canned_answers(monkeypatch, tmp_path, capsys):
+    """--repeat N emits a row per repeat and a mean/spread row; a canned answer runs no agent."""
+    graph, investigator = _Graph(), _Investigator()
+    settings = Settings(_env_file=None).model_copy(update={"judge_model": None})
+    monkeypatch.setattr(cli, "get_settings", lambda: settings)
+    monkeypatch.setattr(cli, "setup_telemetry", lambda s: None)
+    monkeypatch.setattr(
+        cli.GraphStore, "from_settings", classmethod(lambda cls, s, read_only: graph)
+    )
+    monkeypatch.setattr(cli, "chunk_store_from_settings", lambda s, g: None)
+    monkeypatch.setattr(cli, "build_investigator", lambda s, g, c: investigator)
+    dataset = tmp_path / "golden.jsonl"
+    cases = [
+        {
+            "question": "who?",
+            "relevant_chunk_ids": ["chk_a"],
+            "answer_contains": ["beta"],
+        },
+        {
+            "question": "wrong?",
+            "canned_answer": "The sky is green.",
+            "answer_contains": ["beta"],
+        },
+    ]
+    dataset.write_text("\n".join(json.dumps(c) for c in cases), encoding="utf-8")
+
+    try:
+        assert cli.main(["eval", str(dataset), "--repeat", "2"]) == 0
+    finally:
+        logging.getLogger().handlers.clear()
+
+    rows = [json.loads(r) for r in capsys.readouterr().out.splitlines()]
+    scored = [r for r in rows if "rep" in r]
+    assert [(r["question"], r["rep"]) for r in scored] == [
+        ("who?", 1),
+        ("wrong?", 1),
+        ("who?", 2),
+        ("wrong?", 2),
+    ]
+    canned = [r for r in scored if r["question"] == "wrong?"]
+    assert all(r["canned"] and r["generation.answer_contains"] == 0.0 for r in canned)
+    assert len(investigator.scopes) == 2  # the canned case never ran the agent
+    summary = {r["question"]: r for r in rows if "mean" in r}
+    assert summary["who?"]["reps"] == 2
+    assert summary["who?"]["mean"]["generation.answer_contains"] == 1.0
+    assert summary["who?"]["spread"]["retrieval.context_precision"] == 0.0

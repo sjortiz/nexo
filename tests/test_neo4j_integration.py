@@ -781,3 +781,42 @@ def test_import_moves_a_local_store_into_neo4j(tmp_path, store, chunks_in_neo4j)
     assert [
         c.text for c in chunks_in_neo4j.get_by_ids([c.chunk_id for c in chunks])
     ] == [c.text for c in chunks]
+
+
+def test_remove_source_drops_what_only_it_supported_and_recomputes_the_rest(store):
+    """Removing one document keeps shared entities with the other document's provenance."""
+    acme, beta, delta = _resolved("Acme"), _resolved("Beta"), _resolved("Delta")
+    store.replace_source(
+        DocumentMetadata(source_id="a"),
+        _chunks("a", C1),
+        [
+            _row(C1, "a", (acme, "ACQUIRED", beta)),
+            _row(C1, "a", (acme, "SUPPLIES", delta)),
+        ],
+    )
+    store.replace_source(
+        DocumentMetadata(source_id="b"),
+        _chunks("b", C2),
+        [_row(C2, "b", (acme, "ACQUIRED", beta))],
+    )
+    removal = store.remove_source("a")
+    assert removal.chunks_removed == 1 and removal.entities_touched == 3
+    rows = store.run_read_query(
+        "MATCH (e:Entity) RETURN e.key AS key, e.chunk_ids AS chunk_ids, "
+        "e.source_ids AS source_ids ORDER BY key"
+    ).rows
+    assert {r["key"]: (r["chunk_ids"], r["source_ids"]) for r in rows} == {
+        acme.key: ([C2], ["b"]),
+        beta.key: ([C2], ["b"]),
+    }  # Delta had only document a
+    assert store.run_read_query(
+        "MATCH (d:Document {source_id: 'a'}) RETURN count(d) AS n"
+    ).rows == [{"n": 0}]
+    assert store.run_read_query(
+        "MATCH (c:Chunk) RETURN collect(c.chunk_id) AS ids"
+    ).rows == [{"ids": [C2]}]
+    edges = store.run_read_query(
+        "MATCH ()-[r]->() WHERE type(r) <> 'MENTIONED_IN' AND type(r) <> 'PART_OF' "
+        "AND type(r) <> 'FIRST_CHUNK' RETURN type(r) AS t, r.chunk_ids AS ids"
+    ).rows
+    assert edges == [{"t": "ACQUIRED", "ids": [C2]}]

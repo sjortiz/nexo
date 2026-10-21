@@ -99,6 +99,11 @@ class Ontology(BaseModel):
                 self._by_name[alias] = (spec, swap)
         return self
 
+    def directional(self, relation: str) -> bool:
+        """True if the relation's direction carries meaning (it has declared inverses)."""
+        entry = self._by_name.get(relation)
+        return bool(entry and entry[0].inverses)
+
     def map(
         self, predicate: str, head: EntityType, tail: EntityType
     ) -> RelationMapping:

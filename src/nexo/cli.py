@@ -17,7 +17,7 @@ from langchain_core.language_models import BaseChatModel
 from pydantic import BaseModel, ValidationError
 
 from nexo.agents.investigator import Investigator
-from nexo.agents.models import InvestigationScope
+from nexo.agents.models import AgentOutput, InvestigationScope
 from nexo.agents.redaction import ChunkRedactor
 from nexo.config import explain, get_settings, render_drift
 from nexo.evaluation import (
@@ -53,6 +53,7 @@ from nexo.service import (
     open_ingestor,
     open_review_runtime,
     open_runtime,
+    remove_source,
 )
 from nexo.storage.graph_store import GraphStore
 from nexo.storage.neo4j_chunk_store import Neo4jChunkStore, import_local_store
@@ -183,6 +184,23 @@ def _serve(server: BaseServer) -> None:
         server.serve_forever()
 
 
+def _delete(args: argparse.Namespace) -> int:
+    """Remove a document and what only it supported; operators only (DELETE_OPERATORS)."""
+
+    try:
+        record = remove_source(get_settings(), args.source_id)
+    except PermissionError as exc:
+        log.error("%s", exc)
+        return 2
+    _emit(
+        record,
+        "deleted %s: %d chunks removed",
+        record["source_id"],
+        record["chunks_removed"],
+    )
+    return 0
+
+
 def _status(args: argparse.Namespace) -> int:
 
     with open_runtime(get_settings()) as runtime:
@@ -226,27 +244,53 @@ def _eval(args: argparse.Namespace) -> int:
         investigator = build_investigator(settings, graph, chunks)
         judge = _judge(settings, chunks) if settings.judge_model else None
         failed = 0
-        for case in cases:
-            with (
-                experiment.case_span(case) if experiment else traced_span("eval.case")
-            ) as span:
-                try:
-                    scored = _score_case(
-                        case, investigator, judge, settings.default_clearance
-                    )
-                except Exception as exc:  # pylint: disable=broad-exception-caught
-                    # One case must not end the run; the row says why it has no scores.
-                    failed += 1
-                    row = {
-                        "question": case.get("question"),
-                        "error": type(exc).__name__,
-                    }
-                else:
-                    if experiment:
-                        experiment.score(span, scored.metrics)
-                    row = scored.row
-            _emit(row, "eval case scored", indent=None)
+        repeats = max(1, getattr(args, "repeat", 1))
+        runs: dict[str, list[dict]] = {}  # question -> one metrics dict per repeat
+        for rep in range(1, repeats + 1):
+            for case in cases:
+                with (
+                    experiment.case_span(case)
+                    if experiment
+                    else traced_span("eval.case")
+                ) as span:
+                    try:
+                        scored = _score_case(
+                            case, investigator, judge, settings.default_clearance
+                        )
+                    except Exception as exc:  # pylint: disable=broad-exception-caught
+                        # One case must not end the run; the row says why it has no scores.
+                        failed += 1
+                        row = {
+                            "question": case.get("question"),
+                            "error": type(exc).__name__,
+                        }
+                    else:
+                        if experiment:
+                            experiment.score(span, scored.metrics)
+                        row = scored.row
+                        runs.setdefault(case["question"], []).append(scored.metrics)
+                if repeats > 1:
+                    row = {**row, "rep": rep}
+                _emit(row, "eval case scored", indent=None)
+        if repeats > 1:
+            for question, metrics in runs.items():
+                _emit(_summary_row(question, metrics), "eval summary", indent=None)
     return 1 if failed else 0
+
+
+def _summary_row(question: str, runs: list[dict]) -> dict:
+    """Mean and spread (max - min) of each metric over the repeats of one question.
+
+    The spread is the noise floor: a difference between two versions smaller than
+    their spreads is not a difference.
+    """
+    keys = sorted({k for m in runs for k, v in m.items() if v is not None})
+    mean, spread = {}, {}
+    for key in keys:
+        values = [m[key] for m in runs if m.get(key) is not None]
+        mean[key] = round(sum(values) / len(values), 3)
+        spread[key] = round(max(values) - min(values), 3)
+    return {"question": question, "reps": len(runs), "mean": mean, "spread": spread}
 
 
 def _read_jsonl(path: str) -> list[dict]:
@@ -285,7 +329,10 @@ def _score_case(
         strategy=case.get("strategy", "hybrid"),
         chunk_filter=ChunkFilter(max_sensitivity=case.get("clearance", clearance)),
     )
-    output = investigator.investigate(case["question"], scope=scope)
+    if "canned_answer" in case:  # judge-sanity case: score a given answer, run nothing
+        output = AgentOutput(answer=case["canned_answer"], stop_reason="canned")
+    else:
+        output = investigator.investigate(case["question"], scope=scope)
     metrics = retrieval_scores(output, case.get("relevant_chunk_ids", []))
     if "answer_contains" in case:
         metrics.update(answer_scores(output.answer, case["answer_contains"]))
@@ -307,6 +354,8 @@ def _score_case(
         "tool_calls": len(output.tool_calls),
         "stop_reason": output.stop_reason,
     }
+    if "canned_answer" in case:
+        row["canned"] = True
     return _Scored(metrics, row)
 
 
@@ -614,6 +663,12 @@ def _add_document_commands(sub: argparse._SubParsersAction) -> None:
     status.add_argument("thread_id")
     status.set_defaults(handler=_status)
 
+    delete = sub.add_parser(
+        "delete", help="remove a document and what only it supported (operators only)"
+    )
+    delete.add_argument("source_id")
+    delete.set_defaults(handler=_delete)
+
 
 def main(argv: list[str] | None = None) -> int:
     """Parse the command line, run the chosen subcommand and return its exit code."""
@@ -631,6 +686,13 @@ def main(argv: list[str] | None = None) -> int:
     )
     evaluate.add_argument(
         "--run-name", help="Langfuse experiment (default: agent model and time)"
+    )
+    evaluate.add_argument(
+        "--repeat",
+        type=int,
+        default=1,
+        metavar="N",
+        help="run each case N times and add a mean/spread summary row per question",
     )
     evaluate.set_defaults(handler=_eval)
 

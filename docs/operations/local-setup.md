@@ -119,6 +119,9 @@ compose-file`), for plain `podman compose up -d`; a test fails when it is stale.
 
 # Five model roles
 
+To change one role's model, add a judge or move a role to another machine, see
+[Swapping and adding models](models.md).
+
 | Role | Used for | One machine | Two machines |
 |---|---|---|---|
 | agent | The investigator's multi-turn tool calls | this machine | remote |

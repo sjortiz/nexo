@@ -27,16 +27,19 @@ One JSON object per line:
 ```
 
 Optional fields: `answer_contains` (phrases a correct answer states; scored without a judge),
-`strategy` (`graph`, `vector` or `hybrid`, default `hybrid`) and `clearance` (`public`, `internal`, `pii`,
-`phi`; default `DEFAULT_CLEARANCE`). `nexo eval` skips the router, so `strategy` and `clearance` replay what
+`strategy` (`graph`, `vector` or `hybrid`, default `hybrid`), `clearance` (`public`, `internal`, `pii`,
+`phi`; default `DEFAULT_CLEARANCE`) and `canned_answer` (score this answer instead of running the agent:
+a judge-sanity case, whose `sanity` field says why it must score low). `nexo eval` skips the router, so `strategy` and `clearance` replay what
 the router chose and who is asking. Each result also holds the answer, the tool call count and the stop reason.
 
-[`examples/golden/acme-gamma.jsonl`](../../examples/golden/acme-gamma.jsonl) covers the two sample documents
-in `examples/corpus`: a multi-hop chain through a missing entity (Delta Devices), a direct lookup, a
-question that needs both documents and a question the documents do not answer. Ingest both documents
-first. The leadership chunk has an email address, so it is classified `pii`. The Delta case runs at the default `internal`
-clearance and is answered from the masked chunk ([read-time redaction](../components/sensitive-data-detection.md#read-time-redaction));
-the two cases after it use `pii` to read the chunk whole. The judge is shown cited chunks as the case's clearance sees them (masked, or dropped if withheld), so a hosted judge never receives the masked-out text.
+[`examples/golden/acme-gamma.jsonl`](../../examples/golden/acme-gamma.jsonl) has 26 cases over the four
+sample documents in `examples/corpus`: direct lookups, multi-hop chains (Acme to Delta Devices through
+Beta Labs and Jane Roe; Arun Mehta to Gamma Clinics through Delta Devices), questions that need two
+documents, three the documents do not answer, clearance pairs (the same question at `internal` and at
+`pii` or `phi`: the leadership chunk holds an email address and the trial participant's chunk a medical
+record number) and two judge-sanity cases with a canned answer that is wrong or beside the point. Ingest
+all four documents first. The judge is shown cited chunks as the case's clearance sees them (masked, or
+dropped if withheld), so a hosted judge never receives the masked values.
 
 Build it from real reviewer-approved threads: the approved answer becomes `reference_answer`, and the
 chunks the reviewer confirmed become `relevant_chunk_ids`.
@@ -46,7 +49,9 @@ chunks the reviewer confirmed become `relevant_chunk_ids`.
 1. Ingest the corpus the golden set refers to (chunk ids are deterministic, so they stay stable as
    long as the text does).
 2. Optionally turn on the judge ([below](#judge-scores)) for faithfulness and relevancy.
-3. Run `nexo eval golden.jsonl > results.jsonl`.
+3. Run `nexo eval golden.jsonl > results.jsonl`. Add `--repeat 3` to run every case three times:
+   each row then carries `rep`, and one summary row per question closes the file with the `mean` and
+   the `spread` (max minus min) of every metric over the repeats.
 4. Each case is one JSON object per line on stdout (logs go to stderr): the question plus the
    [metrics](../components/evaluation.md). It is also an `eval.case` span with `eval.*` attributes.
    A case whose investigation raises (a timeout, the token cap, a store error) is written as
@@ -121,10 +126,20 @@ each case and scores the result:
 ```
 
 Gold relations go through the same ontology mapping, so a gold `ACQUIRED_BY` matches a predicted
-`ACQUIRED` in the right direction. Each case and the overall precision, recall and capture rate are
+`ACQUIRED` in the right direction. [`examples/golden/extraction-gold.jsonl`](../../examples/golden/extraction-gold.jsonl)
+holds one case per section of the sample corpus, past roles included; a passage that states a directional
+relation both ways (A ACQUIRED B and B ACQUIRED A) is an extraction error and both triples are dropped,
+counted under `contradictory_direction`. Each case and the overall precision, recall and capture rate are
 written to stdout, one JSON object per line (`"case": "overall"` last). Use it before and after changing the extraction prompt or the ontology.
 
 # Reading results
+
+**Noise before differences.** A local model answers the same question differently from run to run, and
+one run of the four-case set moved context and citation precision by up to 0.6 on identical code. Before
+comparing two versions, run each with `--repeat 3` or more and look at the `spread` rows: a difference
+between versions that is smaller than their spreads on that metric is noise. The judge-sanity cases are
+the control: if a wrong or unsupported canned answer scores high on faithfulness or relevancy, the judge
+is not discriminating and its scores say nothing about the versions either.
 
 | Symptom | Likely cause |
 |---|---|

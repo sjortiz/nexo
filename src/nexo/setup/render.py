@@ -473,6 +473,8 @@ def build_env(casting: Casting, on: Collection[str] = ()) -> dict[str, str]:
     # Always set, even to the default: a REVIEW_POLICY left in .env would otherwise override
     # spec.review, e.g. relax always and release answers without a person.
     env["REVIEW_POLICY"] = spec.review
+    # Always set for the same reason: a stale allowlist in .env must not let anyone delete.
+    env["DELETE_OPERATORS"] = ",".join(spec.admin.delete_operators)
     for role, override in models.roles.items():
         if override.model:
             env[f"{role.upper()}_MODEL"] = override.model

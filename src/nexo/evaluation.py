@@ -57,8 +57,9 @@ def extraction_scores(
     pred_keys = set(predicted)
     true_positive = len(gold_keys & pred_keys)
     # A false value: right head + predicate, wrong tail (e.g. wrong dosage/date entity).
-    gold_slots = {(h, r) for h, r, _ in gold_keys}
-    false_values = len({k for k in pred_keys - gold_keys if (k[0], k[1]) in gold_slots})
+    # Keys may carry a case index in front (the overall row), so slice from the end.
+    gold_slots = {k[:-1] for k in gold_keys}
+    false_values = len({k for k in pred_keys - gold_keys if k[:-1] in gold_slots})
     return {
         "extraction.precision": _ratio(true_positive, len(pred_keys)),
         "extraction.recall": _ratio(true_positive, len(gold_keys)),
