@@ -38,6 +38,9 @@ aws = ["boto3>=1.35,<2"]
 notebook = ["jupyterlab>=4.2,<5", "ipykernel>=6.29", "nbclient>=0.10", "nbformat>=5.10"]
 # secrets.provider keychain (local machines only): uv sync --extra keychain
 keychain = ["keyring>=25.6,<26"]
+formats = [
+    "markitdown[docx,pdf]>=0.1,<0.2",
+]
 
 [dependency-groups]
 # Installed by `uv sync` by default; not part of the published package.

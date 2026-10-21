@@ -83,6 +83,7 @@ hosts ([Local on Apple Silicon](local-apple-silicon.md)).
 |---|---|---|
 | `VECTOR_STORE_PATH` | `.data/vector_store.json` | The local chunk store file (`CHUNK_STORE=local`), and what `nexo chunks import` copies into Neo4j by default. |
 | `RETRIEVAL_MODE` | `hybrid` | Seed search: `hybrid` (BM25 + vector, Reciprocal Rank Fusion), `vector` or `keyword` (BM25 only). |
+| `INGEST_CONVERTER` | `markitdown` | How `nexo ingest` turns `.pdf`, `.docx` and `.html` into Markdown: `markitdown` (extra `formats`: `make install-formats`) or `docling` (install `docling` separately). `.md` and `.txt` pass through. |
 | `CHUNK_SIZE` / `CHUNK_OVERLAP` | `1200` / `150` | Characters per chunk and overlap inside a section. |
 | `EXTRACTION_ATTEMPTS` | `3` | Validation retries per chunk. |
 | `EXTRACTION_CONCURRENCY` | `8` | Parallel extraction calls. |

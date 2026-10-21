@@ -50,6 +50,9 @@ install: ## Install Python, Nexo and the dev tools into .venv with uv (from uv.l
 install-notebook: ## Also install Jupyter, for the walkthrough notebook
 	uv sync --extra notebook
 
+install-formats: ## Also install MarkItDown, for nexo ingest of PDF, Word and HTML
+	uv sync --extra formats
+
 install-keychain: ## Also install keyring, for secrets.provider keychain (local machines)
 	uv sync --extra keychain
 

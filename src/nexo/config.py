@@ -162,6 +162,9 @@ class Settings(BaseSettings):
     retrieval_mode: Literal["hybrid", "vector", "keyword"] = "hybrid"
 
     # --- Ingestion ------------------------------------------------------------
+    # How `nexo ingest` turns PDF, Word and HTML into Markdown: markitdown (extra
+    # nexo[formats]) or docling (installed separately). Markdown files pass through.
+    ingest_converter: Literal["markitdown", "docling"] = "markitdown"
     chunk_size: int = 1200
     chunk_overlap: int = 150
     extraction_attempts: int = Field(default=3, ge=1)

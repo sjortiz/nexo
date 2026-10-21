@@ -28,7 +28,7 @@ jobs:
           enable-cache: true
       # Python from .python-version, dependencies exactly as in uv.lock.
       - name: Install
-        run: uv sync --locked
+        run: uv sync --locked --extra formats
       # The Makefile targets developers run.
       - name: Lint
         run: make lint

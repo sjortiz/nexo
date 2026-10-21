@@ -55,6 +55,7 @@ from nexo.service import (
     open_runtime,
     remove_source,
 )
+from nexo.storage.convert import ConversionError, to_markdown
 from nexo.storage.graph_store import GraphStore
 from nexo.storage.neo4j_chunk_store import Neo4jChunkStore, import_local_store
 from nexo.storage.ingest import (
@@ -106,8 +107,14 @@ def _ingest(args: argparse.Namespace) -> int:
         ),
         sensitivity=Sensitivity(args.sensitivity),
     )
-    with open_ingestor(get_settings()) as ingestor:
-        report = ingestor.ingest(Path(args.file).read_text(encoding="utf-8"), metadata)
+    settings = get_settings()
+    try:
+        text = to_markdown(Path(args.file), settings.ingest_converter)
+    except ConversionError as exc:
+        log.error("%s", exc)
+        return 2
+    with open_ingestor(settings) as ingestor:
+        report = ingestor.ingest(text, metadata)
     if report.failed_chunk_ids:
         _emit(
             report.model_dump(mode="json"),
