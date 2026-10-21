@@ -5,7 +5,7 @@ nexo setup secrets                      fill missing secrets in the provider
 nexo setup lock [--upgrade]             resolve nexo.yaml into nexo.lock
 nexo setup render [--addon NAME]        write .nexo/render/
 nexo setup check [--no-models]          preflight, then ask each model server
-nexo setup up [--addon NAME]            secrets, render, models, compose up (native: no compose)
+nexo setup up [--addon NAME]            secrets, render, models, compose up (native: its containers)
 nexo setup down                         compose down (volumes kept)
 nexo setup neo4j-init                   native: give a new Neo4j the stored password
 nexo setup compose ARGS...              the container engine's compose on the render
@@ -17,7 +17,6 @@ import argparse
 import contextlib
 import logging
 import os
-import platform
 import re
 import shutil
 import subprocess
@@ -28,10 +27,11 @@ from pathlib import Path
 import yaml
 
 from nexo.config import Settings
-from nexo.llm import build_embeddings, check_model_servers, resolved_models
+from nexo.llm import ModelRow, build_embeddings, check_model_servers, resolved_models
 from nexo.local_profiles import MODEL_SIZES_GB, ProfileError, parse_profile
 from nexo.secret_store import SecretStore, SecretStoreError, store_from_options
 from nexo.setup.check import (
+    this_os,
     FORCEABLE,
     detect_host,
     detect_profile,
@@ -40,11 +40,14 @@ from nexo.setup.check import (
     stale_neo4j_hint,
 )
 from nexo.setup.components import COMPONENTS, UIS
+from nexo.setup.engine import Machines, activate
 from nexo.setup.envfile import ensure_secrets, read_env, stack_secrets
+from nexo.setup.lock import Lock, served_locally
 from nexo.setup.lock import lock as resolve_lock
 from nexo.setup.render import (
     RENDER_DIR,
     Host,
+    containers,
     enabled_set,
     portable_files,
     render,
@@ -93,7 +96,7 @@ class _Stack:
         """The engine's compose on the render, with .env for personal settings."""
         root = Path.cwd()
         command = [
-            self.host.engine,
+            *self.host.cli,
             "compose",
             "-f",
             str(root / RENDER_DIR / "compose.yaml"),
@@ -110,7 +113,10 @@ class _Stack:
 def _compose(stack: _Stack, args: list[str]) -> int:
     command = stack.command(args)
     log.info("%s", " ".join(command))
-    return subprocess.run(command, env=stack.environment(), check=False).returncode
+    try:
+        return subprocess.run(command, env=stack.environment(), check=False).returncode
+    except OSError as exc:
+        raise SetupError(f"cannot run {stack.host.engine}: {exc}") from exc
 
 
 def _captured(stack: _Stack, args: list[str], *, stderr: bool = True) -> str:
@@ -175,18 +181,16 @@ def _native(casting: Casting) -> bool:
     return casting.spec.target.mode == "native"
 
 
-def _ensure_render(args: argparse.Namespace) -> _Stack:
+def _stack_for(casting: Casting, lock: Lock) -> _Stack:
     """The rendered stack with the secrets already in the provider (nothing generated)."""
-    casting, lock = _context(args)
-    if _native(casting):
-        raise SetupError(
-            "target.mode native runs no containers: Neo4j is this machine's service"
-            " (brew services stop neo4j) and Ollama runs on its own"
-        )
     host = detect_host(casting)
     if not (Path.cwd() / RENDER_DIR / "compose.yaml").exists():
         render(casting, lock, Path.cwd(), host)
     return _Stack(host, stack_secrets(store_for(casting), COMPONENTS))
+
+
+def _ensure_render(args: argparse.Namespace) -> _Stack:
+    return _stack_for(*_context(args))
 
 
 # The local machine's profile line in a preset (models.local.profile).
@@ -201,7 +205,7 @@ def _init(args: argparse.Namespace) -> int:
     detected = None if args.profile else detect_profile()
     preset = args.preset or (
         "mac-single"
-        if platform.system() == "Darwin"
+        if this_os() == "macos"
         else "linux-gpu" if detected and detected[0].startswith("gpu-") else "linux-cpu"
     )
     source = Path.cwd() / PRESETS / preset / "nexo.yaml"
@@ -255,7 +259,7 @@ def _secrets(args: argparse.Namespace) -> int:
 
 def _lock(args: argparse.Namespace) -> int:
     _, lock = _context(args)
-    on = sorted(name for name, enabled in lock["enabled"].items() if enabled)
+    on = sorted(name for name, enabled in lock.enabled.items() if enabled)
     log.info("%s: %s", Path(args.file).with_suffix(".lock"), ", ".join(on))
     return 0
 
@@ -273,7 +277,7 @@ def _render(args: argparse.Namespace) -> int:
 
 
 def _report(
-    casting: Casting, lock: dict, on: set[str], host: Host, force: bool
+    casting: Casting, lock: Lock, on: set[str], host: Host, force: bool
 ) -> bool:
     """Log the preflight; False when a check failed (memory ones pass with --force)."""
     findings = preflight(casting, lock, on, host, store_for(casting))
@@ -296,36 +300,31 @@ def _report(
     return not blocked
 
 
-def model_lines(rows: list[dict]) -> list[tuple[bool, str]]:
+def model_lines(rows: list[ModelRow]) -> list[tuple[bool, str]]:
     """One (ok, text) per role; a role that is off (no model) is ok and says why."""
     lines = []
     for row in rows:
-        if not row.get("model"):
-            lines.append((True, f"model {row['role']}: {row.get('note', 'off')}"))
+        if not row.model:
+            lines.append((True, f"model {row.role}: {row.note or 'off'}"))
             continue
-        status = row.get("check", "ok")
-        text = f"model {row['role']}: {row['model']} at {row['base_url']}"
+        status = row.check or "ok"
+        text = f"model {row.role}: {row.model} at {row.base_url}"
         if status != "ok":
             text += f" ({status})"
-            if "served" in row:
-                text += f"; the server has: {', '.join(row['served']) or 'no models'}"
-            if row.get("detail"):
-                text += f"; {row['detail']}"
+            if row.served is not None:
+                text += f"; the server has: {', '.join(row.served) or 'no models'}"
+            if row.detail:
+                text += f"; {row.detail}"
         lines.append((status == "ok", text))
     return lines
 
 
-def pulled_by_up(casting: Casting, lock: dict) -> set[str]:
+def pulled_by_up(casting: Casting, lock: Lock) -> set[str]:
     """Models `up` pulls into this machine's Ollama (not a remote machine's)."""
     models = casting.spec.models
     if models.provider != "ollama":
         return set()
-    local = f"http://localhost:{models.local.port}/v1"
-    return {
-        entry["model"]
-        for entry in lock["models"].values()
-        if entry["server"] == local and entry["model"]
-    }
+    return served_locally(lock, models)
 
 
 def _models_reachable(pending: set[str] = frozenset()) -> bool:
@@ -338,14 +337,14 @@ def _models_reachable(pending: set[str] = frozenset()) -> bool:
     later = [
         row
         for row in rows
-        if row.get("check") == "model not served here" and row["model"] in pending
+        if row.check == "model not served here" and row.model in pending
     ]
     for row in later:
         log.info(
             "todo model %s: %s not pulled yet; up pulls it (%s GB)",
-            row["role"],
-            row["model"],
-            MODEL_SIZES_GB.get(row["model"], "?"),
+            row.role,
+            row.model,
+            MODEL_SIZES_GB.get(row.model, "?"),
         )
     lines = model_lines([row for row in rows if row not in later])
     for ok, text in lines:
@@ -428,8 +427,11 @@ def _start_models(casting: Casting) -> int:
 
 def _up(args: argparse.Namespace) -> int:
     casting, lock = _context(args)
-    host = detect_host(casting)
     on = enabled_set(lock, _addons(args))
+    services = containers(casting, on)
+    if services and casting.spec.target.machine:
+        activate(Machines(), casting.spec.target.machine, switch=args.switch_machine)
+    host = detect_host(casting)
     store = store_for(casting)
     stack = _Stack(host, ensure_secrets(Path.cwd() / ".env", Path.cwd(), on, store))
     ports = casting.spec.ports
@@ -442,20 +444,21 @@ def _up(args: argparse.Namespace) -> int:
             return code
     if _native(casting):  # the preflight logged in to this machine's Neo4j
         log.info(
-            "native: Neo4j at %s, nothing in containers; run nexo in the .venv"
-            " (nexo config --explain shows where each setting comes from)",
+            "native: Neo4j at %s; run nexo in the .venv (nexo config --explain shows"
+            " where each setting comes from)",
             ports.bolt,
         )
+    if not services:
         return 0
-    if code := (
-        _compose(stack, UP)
-        or _wait_for_services(stack)
-        or _neo4j_accepts(stack, store, lock["name"], ports.bolt)
+    if code := _compose(stack, UP) or _wait_for_services(stack):
+        return code
+    if not _native(casting) and (
+        code := _neo4j_accepts(stack, store, lock.name, ports.bolt)
     ):
         return code
-    for name in sorted(on & UIS.keys()):
+    for name in sorted(services & UIS.keys()):
         log.info("%s: http://localhost:%s", name, getattr(ports, UIS[name]))
-    if "agentInbox" in on:
+    if "agentInbox" in services:
         log.info(
             "agentInbox: http://127.0.0.1:%s (add inbox: graph nexo, URL http://127.0.0.1:%s); "
             "start the adapter with make review-inbox",
@@ -466,7 +469,19 @@ def _up(args: argparse.Namespace) -> int:
 
 
 def _down(args: argparse.Namespace) -> int:
-    return _compose(_ensure_render(args), ["down", "--remove-orphans"])
+    casting, lock = _context(args)
+    if not containers(casting, enabled_set(lock, _addons(args))):
+        log.info("nothing runs in containers in this setup; nothing to stop")
+        return 0
+    stack = _stack_for(casting, lock)
+    machine = stack.host.machine
+    if casting.spec.target.machine and not (machine and machine.running):
+        log.info(
+            "podman machine %s is not running, so its containers are already stopped",
+            casting.spec.target.machine,
+        )
+        return 0
+    return _compose(stack, ["down", "--remove-orphans"])
 
 
 def _passthrough(args: argparse.Namespace) -> int:
@@ -565,6 +580,11 @@ def add_parser(
     up = verb("up", _up, "start the stack (and Ollama's models)", addons=True)
     up.add_argument(
         "--skip-models", action="store_true", help="do not run ollama-setup.sh"
+    )
+    up.add_argument(
+        "--switch-machine",
+        action="store_true",
+        help="stop the running Podman machine (and its containers) to start target.machine",
     )
     for parser in (check, up):
         parser.add_argument(

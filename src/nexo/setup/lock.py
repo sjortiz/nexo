@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any
 
 import yaml
+from pydantic import BaseModel, ConfigDict, Field
 
 from nexo.local_profiles import plan
 from nexo.setup.components import COMPONENTS, DEFAULT_ON, default_images
@@ -22,6 +23,34 @@ HEADER = (
 )
 
 
+class Lock(BaseModel):
+    """`nexo.lock` as a document: components on, image pins and the model per role."""
+
+    model_config = ConfigDict(extra="ignore", populate_by_name=True)
+
+    source: dict[str, str] | None = None
+    api_version: str = Field(default=API_VERSION, alias="apiVersion")
+    kind: str = "SetupLock"
+    name: str
+    enabled: dict[str, bool]
+    images: dict[str, dict[str, str]]
+    models: dict[str, dict[str, str | None]]
+
+    def document(self) -> dict[str, Any]:
+        """The YAML document, in the order `nexo.lock` has always had."""
+        return self.model_dump(by_alias=True, exclude_none=True)
+
+
+def served_locally(locked: Lock, models: Models) -> set[str]:
+    """The models the lock places on this machine's Ollama."""
+    local = f"http://localhost:{models.local.port}/v1"
+    return {
+        entry["model"]
+        for entry in locked.models.values()
+        if entry["server"] == local and entry["model"]
+    }
+
+
 def casting_hash(path: Path) -> str:
     """sha256 of the setup file's bytes."""
     return hashlib.sha256(path.read_bytes()).hexdigest()
@@ -30,13 +59,16 @@ def casting_hash(path: Path) -> str:
 def enabled_components(casting: Casting) -> dict[str, bool]:
     """Every component and whether this setup turns it on."""
     spec = casting.spec
-    if spec.target.mode == "native":  # Neo4j on the host; it still needs its password
-        return {name: name == "neo4j" for name in COMPONENTS}
     overrides = {
         name: c.enabled for name, c in spec.addons.items() if c.enabled is not None
     }
-    enabled = {name: name in DEFAULT_ON for name in COMPONENTS}
-    enabled |= overrides
+    if spec.target.mode == "native":
+        # Neo4j runs on the host but still needs its password; telemetry is containers.
+        telemetry = {"collector", "signoz"} if spec.telemetry.enabled else set()
+        default = {"neo4j"} | telemetry
+    else:
+        default = DEFAULT_ON
+    enabled = {name: name in default for name in COMPONENTS} | overrides
     enabled["vllm"] = spec.models.provider == "vllm"
     return enabled
 
@@ -103,22 +135,20 @@ def _images(
 
 def resolve(
     casting: Casting, root: Path, previous: dict[str, Any] | None, upgrade: bool
-) -> dict[str, Any]:
-    """The lock document for a setup file."""
+) -> Lock:
+    """The lock for a setup file."""
     old_images = (previous or {}).get("images", {})
-    return {
-        "apiVersion": API_VERSION,
-        "kind": "SetupLock",
-        "name": casting.metadata.name,
-        "enabled": enabled_components(casting),
-        "images": _images(casting, root, old_images, upgrade),
-        "models": resolve_models(casting.spec.models, casting.spec.ports),
-    }
+    return Lock(
+        name=casting.metadata.name,
+        enabled=enabled_components(casting),
+        images=_images(casting, root, old_images, upgrade),
+        models=resolve_models(casting.spec.models, casting.spec.ports),
+    )
 
 
 def lock(
     casting: Casting, casting_path: Path, root: Path, *, upgrade: bool = False
-) -> dict[str, Any]:
+) -> Lock:
     """Read the lock next to the setup file, re-resolving it when the file changed."""
     lock_path = casting_path.with_suffix(".lock")
     digest = casting_hash(casting_path)
@@ -126,12 +156,12 @@ def lock(
     if lock_path.exists():
         previous = yaml.safe_load(lock_path.read_text(encoding="utf-8")) or {}
         if previous.get("source", {}).get("sha256") == digest and not upgrade:
-            return previous
-    document = {"source": {"file": casting_path.name, "sha256": digest}}
-    document |= resolve(casting, root, previous, upgrade)
+            return Lock.model_validate(previous)
+    resolved = resolve(casting, root, previous, upgrade)
+    resolved.source = {"file": casting_path.name, "sha256": digest}
     lock_path.write_text(
         HEADER.format(source=casting_path.name)
-        + yaml.safe_dump(document, sort_keys=False),
+        + yaml.safe_dump(resolved.document(), sort_keys=False),
         encoding="utf-8",
     )
-    return document
+    return resolved

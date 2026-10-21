@@ -22,7 +22,7 @@ from pydantic_settings import (
     SettingsConfigDict,
 )
 
-from nexo.local_profiles import needs_reasoning_off, plan
+from nexo.local_profiles import apply as apply_profiles
 from nexo.secret_store import SecretStoreError, parse_dotenv, store_from_options
 
 ModelRole = Literal["agent", "extraction", "router", "judge"]
@@ -75,7 +75,9 @@ class Settings(BaseSettings):
     """All runtime settings, read from the environment, the secrets provider or `.env`."""
 
     # First match wins: the environment, generated secrets from the provider `nexo setup`
-    # chose (~/.config/nexo/config by default), .nexo/render/nexo.env, then .env.
+    # chose (~/.config/nexo/config by default), .nexo/render/nexo.env, then .env. After
+    # that, two validators still change values: `_per_stack_paths` fills the checkpoint
+    # path, and `_apply_local_profiles` fills the role models a LOCAL_PROFILE implies.
     model_config = SettingsConfigDict(
         env_file=(".env", RENDERED_ENV),
         env_file_encoding="utf-8",
@@ -251,10 +253,8 @@ class Settings(BaseSettings):
     # official GenAI instrumentation: one `chat {model}` CLIENT span per call.
     otel_instrument_openai: bool = True
     deployment_environment: str = "dev"
-    # Which user and which question a trace belongs to (ADR-0009, amended). user.id is
-    # NEXO_USER, else the login name; the question's length and a keyed hash (the key is
-    # generated into the secrets store, never exported) are always on the request span;
-    # its text only with TRACE_QUERY_TEXT=true (telemetry.queryText in nexo.yaml).
+    # Trace identity (ADR-0009): user.id, the question's length and keyed hash always;
+    # its text only with TRACE_QUERY_TEXT=true.
     nexo_user: str | None = None
     query_hash_key: SecretStr | None = None
     trace_query_text: bool = False
@@ -301,67 +301,21 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def _apply_local_profiles(self) -> Settings:
+        # The rule itself lives in local_profiles.apply: which model and server each
+        # role gets from LOCAL_PROFILE / REMOTE_PROFILE unless set explicitly.
         if not self.local_profile:
             if self.remote_profile:
                 raise ValueError(
                     "REMOTE_PROFILE needs LOCAL_PROFILE (the Mac that runs Nexo)"
                 )
             return self
-        explicit = set(self.model_fields_set)
-        if self.remote_profile:
-            heavy, light = plan(self.remote_profile, "heavy"), plan(
-                self.local_profile, "light"
-            )
-            placement = {
-                role: (heavy.roles[role], self.remote_base_url)
-                for role in ("agent", "extraction")
-            }
-            placement |= {
-                role: (light.roles[role], self.local_base_url)
-                for role in ("router", "judge", "embedding")
-            }
-            parallel = heavy.num_parallel
-        else:
-            single = plan(self.local_profile, "single")
-            placement = {
-                role: (model, self.local_base_url)
-                for role, model in single.roles.items()
-            }
-            parallel = single.num_parallel
-
-        def default(field: str, value: object) -> None:
-            if field not in explicit:
-                setattr(self, field, value)
-
-        for role in ("agent", "extraction", "router", "judge"):
-            model, base_url = placement[role]
-            # Role disabled by the profile (e.g. no judge on a small Mac), unless a
-            # model is set for it: that one runs on the profile's server too.
-            if model is None:
-                if f"{role}_model" not in explicit:
-                    continue
-                model = getattr(self, f"{role}_model")
-            default(f"{role}_model", model)
-            default(f"{role}_base_url", base_url)
-            # Ollama ignores the key; clients need one.
-            default(f"{role}_api_key", SecretStr("ollama"))
-            # Decide on the model that will run, which may be set explicitly.
-            effective = (
-                getattr(self, f"{role}_model") if f"{role}_model" in explicit else model
-            )
-            if role != "agent" and needs_reasoning_off(effective):
-                default(f"{role}_reasoning_effort", "none")
-        embedding_model, embedding_url = placement["embedding"]
-        default("embedding_provider", "openai_compatible")
-        default("embedding_model", embedding_model)
-        default("embedding_base_url", embedding_url)
-        default("embedding_api_key", SecretStr("ollama"))
-        default("embedding_dimensions", 1024)
-        # Local models are slower than a GPU server.
-        default("llm_timeout_s", 300.0)
-        default("agent_timeout_s", 900.0)
-        default("extraction_concurrency", parallel)
+        apply_profiles(self)
         return self
+
+    @property
+    def effective_mcp_clearance(self) -> str:
+        """The clearance `nexo mcp` serves at: MCP_CLEARANCE, else the default clearance."""
+        return self.mcp_clearance or self.default_clearance
 
     def endpoint(self, role: ModelRole) -> ModelEndpoint:
         """Model endpoint for a role, falling back to the VLLM_* defaults field by field."""

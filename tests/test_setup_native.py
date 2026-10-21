@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import os
+from dataclasses import replace
 import shutil
 import subprocess
 import sys
 from pathlib import Path
 
 import pytest
+import yaml
 
 from nexo import cli, config
 from nexo.config import Settings, explain, render_drift
@@ -29,20 +31,110 @@ def _render_dir(workdir: Path, path: Path, addons=frozenset()) -> Path:
     return render(casting, lock(casting, path, workdir), workdir, MAC, addons)
 
 
-def test_native_renders_only_nexo_env_and_removes_the_container_files(workdir):
-    """Switching to native leaves no compose file and no collector endpoint to apply."""
-    _render_dir(workdir, _setup(workdir, "mac-single"))
-    assert (workdir / RENDER_DIR / "compose.yaml").exists()
-    out = _render_dir(workdir, _setup(workdir, "mac-native"))
-    assert sorted(p.name for p in out.iterdir()) == ["nexo.env"]
-    env = read_env(out / "nexo.env")
+def _spec(**fields):
+    """An edit for _setup: set these fields under spec."""
+    return lambda data: data["spec"].update(fields)
+
+
+def _native(workdir, edit=None, addons=()):
+    """Render the mac-native preset (edited); (compose or None, collector or None, env)."""
+    out = _render_dir(workdir, _setup(workdir, "mac-native", edit), frozenset(addons))
+
+    def read(name):
+        path = out / name
+        return yaml.safe_load(path.read_text()) if path.exists() else None
+
+    return read("compose.yaml"), read("otel-collector.yaml"), read_env(out / "nexo.env")
+
+
+def test_native_renders_telemetry_containers_and_no_core(workdir):
+    """Nexo and Neo4j run on the host: only the collector and SigNoz are containers."""
+    compose, collector, env = _native(workdir)
+    services = set(compose["services"])
+    assert {
+        "otel-collector",
+        "signoz",
+        "signoz-ingester",
+        "signoz-clickhouse",
+    } <= services
+    assert all(n == "otel-collector" or n.startswith("signoz") for n in services)
+    assert not {"neo4j", "nexo"} & set(compose["services"])
+    assert "nexo-data" not in compose.get("volumes", {})
+    assert set(collector["service"]["pipelines"]) == {"traces", "metrics", "logs"}
+    # the content-stripping collector stays in front
+    assert "attributes/strip-content" in yaml.safe_dump(collector["service"])
     assert env["NEXO_SETUP_MODE"] == "native"
     assert env["NEO4J_URI"] == "bolt://localhost:7687"
-    assert env["OTEL_EXPORTER_OTLP_ENDPOINT"] == ""  # overrides one left in .env
-    assert env["OTEL_LOGS_EXPORTER"] == "none"
-    assert env["LANGFUSE_HOST"] == ""  # no add-ons: nexo eval stays off Langfuse
+    assert env["OTEL_EXPORTER_OTLP_ENDPOINT"] == "http://localhost:4318"
+    assert env["OTEL_LOGS_EXPORTER"] == "otlp"
+    assert env["LANGFUSE_HOST"] == ""
     assert env["NEXO_SECRETS_PROVIDER"] == "file" and env["NEXO_STACK"] == "nexo"
     assert "NEO4J_PASSWORD" not in env  # it stays in the store
+
+
+def test_native_telemetry_off_renders_no_containers_and_a_blank_endpoint(workdir):
+    """telemetry.enabled false: nexo.env alone, and no endpoint (it overrides .env's)."""
+    _render_dir(workdir, _setup(workdir, "mac-single"))
+    assert (workdir / RENDER_DIR / "compose.yaml").exists()
+    off = _spec(telemetry={"enabled": False})
+    compose, collector, env = _native(workdir, off)
+    assert compose is None and collector is None  # the earlier render's files are gone
+    assert sorted(p.name for p in (workdir / RENDER_DIR).iterdir()) == ["nexo.env"]
+    assert env["OTEL_EXPORTER_OTLP_ENDPOINT"] == ""
+    assert env["OTEL_LOGS_EXPORTER"] == "none"
+
+
+def test_telemetry_cannot_be_off_in_compose_mode(workdir):
+    """Compose runs the collector and SigNoz as core components."""
+    edit = _spec(telemetry={"enabled": False})
+    with pytest.raises(SetupError, match="needs target.mode native"):
+        load_casting(_setup(workdir, "mac-single", edit))
+
+
+@pytest.mark.parametrize(
+    "addon, services, pipeline",
+    [
+        ("langfuse", {"langfuse-web", "langfuse-worker"}, "traces/langfuse"),
+        ("jaeger", {"jaeger"}, "traces/jaeger"),
+        ("hostMetrics", set(), "metrics/infra"),
+        ("agentInbox", {"agent-inbox"}, None),
+    ],
+)
+def test_native_runs_each_addon_as_a_container(workdir, addon, services, pipeline):
+    """An add-on in nexo.yaml or per run joins the compose file; never neo4j or nexo."""
+
+    def enable(data):
+        data["spec"]["addons"] = {addon: {"enabled": True}}
+
+    for compose, collector, _ in (
+        _native(workdir, enable),
+        _native(workdir, None, {addon}),
+    ):
+        assert services <= set(compose["services"])
+        assert not {"neo4j", "nexo"} & set(compose["services"])
+        assert (pipeline in collector["service"]["pipelines"]) == bool(pipeline)
+
+
+def test_native_langfuse_points_nexo_eval_at_localhost(workdir):
+    """Nexo runs on the host, so LANGFUSE_HOST names the published port, not the service."""
+    edit = _spec(addons={"langfuse": {"enabled": True}}, ports={"langfuse": 13000})
+    compose, _, env = _native(workdir, edit)
+    assert env["LANGFUSE_HOST"] == "http://localhost:13000"
+    assert "nexo" not in compose["services"]
+    assert _native(workdir)[2]["LANGFUSE_HOST"] == ""
+
+
+def test_native_addons_need_telemetry_for_the_collector_only(workdir):
+    """Jaeger sends through the collector; Agent Inbox does not need it."""
+    off = _spec(telemetry={"enabled": False}, addons={"jaeger": {"enabled": True}})
+    with pytest.raises(SetupError, match="jaeger send through the collector"):
+        _native(workdir, off)
+    inbox = _spec(
+        telemetry={"enabled": False}, addons={"agentInbox": {"enabled": True}}
+    )
+    compose, collector, env = _native(workdir, inbox)
+    assert set(compose["services"]) == {"agent-inbox"} and collector is None
+    assert env["OTEL_EXPORTER_OTLP_ENDPOINT"] == ""
 
 
 def test_native_settings_read_the_neo4j_password_from_the_store(workdir, monkeypatch):
@@ -57,33 +149,75 @@ def test_native_settings_read_the_neo4j_password_from_the_store(workdir, monkeyp
     _render_dir(workdir, _setup(workdir, "mac-native"))
     settings = Settings()
     assert settings.neo4j_password.get_secret_value() == "from-the-store"
-    assert not settings.otel_exporter_otlp_endpoint
+    assert settings.otel_exporter_otlp_endpoint == "http://localhost:4318"
 
 
 @pytest.mark.parametrize(
     "edit, message",
     [
-        (lambda d: d["spec"].update(addons={"jaeger": {"enabled": True}}), "addons"),
         (
-            lambda d: d["spec"].update(patches=[{"target": "x", "operations": []}]),
-            "patches",
+            lambda d: d["spec"]["models"].update(provider="vllm"),
+            "native.*vllm needs NVIDIA containers",
+        ),
+        (
+            lambda d: d["spec"].update(
+                patches=[
+                    {
+                        "target": "compose.yaml",
+                        "operations": [
+                            {
+                                "op": "add",
+                                "path": "/services/neo4j/mem_limit",
+                                "value": "1g",
+                            }
+                        ],
+                    }
+                ]
+            ),
+            "patches.0 changes neo4j, which runs on this machine",
+        ),
+        (
+            lambda d: d["spec"].update(
+                patches=[
+                    {
+                        "target": "compose.yaml",
+                        "operations": [
+                            {
+                                "op": "move",
+                                "from": "/services/nexo",
+                                "path": "/services/x",
+                            }
+                        ],
+                    }
+                ]
+            ),
+            "patches.0 changes nexo",
         ),
     ],
 )
-def test_native_rejects_what_needs_containers(workdir, edit, message):
-    """Add-ons and patches need the compose stack; the error says so."""
-    with pytest.raises(SetupError, match=f"native runs no containers.*{message}"):
+def test_native_rejects_what_cannot_work(workdir, edit, message):
+    """vLLM needs NVIDIA containers; neo4j and nexo are not containers to patch."""
+    with pytest.raises(SetupError, match=message):
         load_casting(_setup(workdir, "mac-native", edit))
 
 
-def test_native_rejects_a_per_run_add_on(workdir):
-    """make up LANGFUSE=1 on a native setup fails instead of rendering nothing."""
-    with pytest.raises(SetupError, match="no add-ons"):
-        _render_dir(workdir, _setup(workdir, "mac-native"), frozenset({"langfuse"}))
+def test_native_patch_on_a_container_service_applies(workdir):
+    """Patches reach the telemetry and add-on containers."""
+    limit = {"op": "add", "path": "/services/signoz/mem_limit", "value": "2g"}
+    edit = _spec(patches=[{"target": "compose.yaml", "operations": [limit]}])
+    assert _native(workdir, edit)[0]["services"]["signoz"]["mem_limit"] == "2g"
+
+
+def test_native_patch_cannot_smuggle_in_a_core_container(workdir):
+    """Replacing /services with one that has neo4j is caught after the patches apply."""
+    add = {"op": "replace", "path": "/services", "value": {"neo4j": {"image": "x"}}}
+    edit = _spec(patches=[{"target": "compose.yaml", "operations": [add]}])
+    with pytest.raises(SetupError, match="run on this machine"):
+        _native(workdir, edit)
 
 
 def test_native_preflight_needs_this_machines_neo4j(workdir, monkeypatch):
-    """No engine check; Neo4j must answer, and the hint says how to start or initialise it."""
+    """No containers, no engine check; Neo4j must answer, with a hint to start or initialise it."""
     monkeypatch.chdir(workdir)
     path = _setup(workdir, "mac-native")
     casting = load_casting(path)
@@ -121,11 +255,43 @@ def _native_up(workdir, monkeypatch):
     return seen
 
 
-def test_native_up_starts_models_and_no_containers(native_up):
-    """up runs the model script and stops there; down has nothing to stop."""
+def test_native_up_starts_models_then_the_telemetry_containers(native_up):
+    """up runs the model script, then compose for the container services; down stops them."""
+    assert cli.main(["setup", "up"]) == 0
+    assert native_up[0][0].endswith("ollama-setup.sh")
+    up = next(c for c in native_up if "up" in c)
+    assert up[:2] == ["podman", "compose"] and "--connection" not in up
+    native_up.clear()
+    assert cli.main(["setup", "down"]) == 0
+    assert native_up[0][:2] == ["podman", "compose"] and "down" in native_up[0]
+
+
+def test_native_up_without_containers_runs_only_the_models(native_up, workdir):
+    """Telemetry off and no add-ons: nothing for compose to run, and down has nothing to stop."""
+    path = workdir / "nexo.yaml"
+    data = yaml.safe_load(path.read_text())
+    data["spec"]["telemetry"] = {"enabled": False}
+    path.write_text(yaml.safe_dump(data))
     assert cli.main(["setup", "up"]) == 0
     assert [c[0].endswith("ollama-setup.sh") for c in native_up] == [True]
-    assert cli.main(["setup", "down"]) == 2
+    assert cli.main(["setup", "down"]) == 0
+    assert len(native_up) == 1
+
+
+def test_native_check_warns_without_an_engine(workdir, monkeypatch):
+    """Telemetry on and no compose provider: a WARN that never stops check or up."""
+    monkeypatch.chdir(workdir)
+    path = _setup(workdir, "mac-native")
+    casting = load_casting(path)
+    locked = lock(casting, path, workdir)
+    store = store_from_options({"NEXO_STACK": "nexo"})
+    monkeypatch.setattr(check, "context_findings", lambda _c: [])
+    monkeypatch.setattr(check, "models_finding", lambda *_a: None)
+    monkeypatch.setattr(check, "_run", lambda *_a: "")
+    on = {n for n, enabled in locked.enabled.items() if enabled}
+    found = {f.name: f for f in check.preflight(casting, locked, on, MAC, store)}
+    assert not found["engine"].ok and found["engine"].advisory
+    assert "need it" in found["engine"].detail
 
 
 def test_neo4j_init_sets_the_stored_password(native_up, monkeypatch, caplog):
@@ -238,7 +404,7 @@ def test_init_writes_this_machines_profile(
     monkeypatch.chdir(workdir)
     (workdir / "examples").symlink_to(ROOT / "examples")
     monkeypatch.setattr(commands, "detect_profile", lambda: detected)
-    monkeypatch.setattr(commands.platform, "system", lambda: "Darwin")
+    monkeypatch.setattr(commands, "this_os", lambda: "macos")
     assert cli.main(["setup", "init", *argv]) == 0
     casting = load_casting(workdir / "nexo.yaml")
     assert casting.spec.models.local.profile == profile
@@ -300,11 +466,10 @@ def test_check_reports_models_up_will_pull_as_todo(workdir, monkeypatch, caplog)
     monkeypatch.chdir(workdir)
 
     def servers(_settings, rows):
-        for row in rows:
-            if row.get("model"):
-                row["check"] = "model not served here"
-                row["served"] = []
-        return rows
+        return [
+            replace(row, check="model not served here", served=[]) if row.model else row
+            for row in rows
+        ]
 
     monkeypatch.setattr(commands, "check_model_servers", servers)
     _render_dir(workdir, _setup(workdir, "mac-single"))
@@ -322,7 +487,7 @@ def test_podman_vm_finding_says_how_much_memory_to_set(workdir, monkeypatch):
     path = _setup(workdir, "mac-single")
     casting = load_casting(path)
     locked = lock(casting, path, workdir)
-    on = {n for n, e in locked["enabled"].items() if e} | {"langfuse", "jaeger"}
+    on = {n for n, e in locked.enabled.items() if e} | {"langfuse", "jaeger"}
     vm = {f.name: f for f in check.memory_findings(casting, locked, on, MAC)}[
         "podman vm"
     ]

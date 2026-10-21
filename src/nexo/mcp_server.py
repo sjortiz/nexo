@@ -123,7 +123,7 @@ def build_mcp_server(  # pylint: disable=too-many-locals,too-many-statements  # 
     MCP_REVIEW_TOOLS on) it also serves the review tools, whose only write needs
     the person's confirmation.
     """
-    clearance = Sensitivity(settings.mcp_clearance or settings.default_clearance)
+    clearance = Sensitivity(settings.effective_mcp_clearance)
     scope = ChunkFilter(max_sensitivity=clearance)
     redactor = redactor or (
         runtime.redactor if runtime is not None else ChunkRedactor(NoopDetector())
@@ -146,9 +146,7 @@ def build_mcp_server(  # pylint: disable=too-many-locals,too-many-statements  # 
             raise ToolError(f"{exc.code}: {exc.message}") from exc
 
     def source_of(record) -> str:
-        return " > ".join(
-            [p for p in [record.title or record.source_id, *record.section_path] if p]
-        )
+        return record.source_label
 
     @server.tool(annotations=READ_ONLY, structured_output=True)
     def nexo_index() -> dict[str, Any]:
@@ -402,6 +400,6 @@ def build_mcp_server(  # pylint: disable=too-many-locals,too-many-statements  # 
                 "chunk_ids_found": sorted(found),
             }
 
-    if runtime is not None and _review_on(runtime, settings):
+    if _review_on(runtime, settings):
         register_review_tools(server, runtime=runtime, settings=settings)
     return server

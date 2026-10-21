@@ -22,9 +22,8 @@ from opentelemetry import trace
 from strands import tool
 from strands.types.tools import ToolResult
 
-from nexo.agents.models import InvestigationScope, ToolCallSummary
+from nexo.agents.models import AgentBudget, InvestigationScope, ToolCallSummary
 from nexo.agents.redaction import ChunkRedactor
-from nexo.config import Settings
 from nexo.telemetry import record_exception
 from nexo.storage.graph_store import (
     GraphReader,
@@ -198,7 +197,7 @@ OPTIONAL MATCH p = SHORTEST {paths} (a)(()-[]-(:Entity)){{1,{hops}}}(b)
 RETURN [n IN nodes(p) | n {{.key, .name, .type, .sensitivity_rank}}] AS nodes,
        [r IN relationships(p) | r {{from: startNode(r).key, relation: type(r), to: endNode(r).key,
            predicate: properties(r)['predicate'], valid_at: properties(r)['valid_at'],
-           .certainty, .evidence, .evidence_rank, .chunk_ids,
+           certainty: properties(r)['certainty'], .evidence, .evidence_rank, .chunk_ids,
            sensitivity_rank: coalesce(r.sensitivity_rank, {unranked})}}] AS hops"""
 
 _NEIGHBOURS = f"""\
@@ -207,7 +206,8 @@ OPTIONAL MATCH (e)-[r]-(n:Entity)
 WITH e, r, n ORDER BY size(coalesce(r.chunk_ids, [])) DESC LIMIT $limit
 RETURN e {{.key, .name, .type, .sensitivity_rank}} AS entity,
        r {{relation: type(r), outgoing: startNode(r) = e, predicate: properties(r)['predicate'],
-          valid_at: properties(r)['valid_at'], .certainty, .evidence, .evidence_rank, .chunk_ids,
+          valid_at: properties(r)['valid_at'], certainty: properties(r)['certainty'],
+          .evidence, .evidence_rank, .chunk_ids,
           sensitivity_rank: coalesce(r.sensitivity_rank, {_UNKNOWN_RANK})}} AS edge,
        n {{.key, .name, .type, .sensitivity_rank}} AS neighbour"""
 
@@ -429,29 +429,32 @@ def _chunk_store_failure(exc: Exception) -> ToolFailure:
     return ToolFailure(name, _CHUNK_STORE_DOWN, error_type=name)
 
 
-def build_investigation_tools(
+def build_investigation_tools(  # pylint: disable=too-many-arguments  # keyword-only wiring
     *,
     graph: GraphReader,
     chunks: ChunkReader,
     ctx: InvestigationContext,
-    settings: Settings,
+    budget: AgentBudget | None = None,
+    settings: Any = None,
     redactor: ChunkRedactor | None = None,
 ) -> list[Any]:
     """Build the graph read, chunk fetch and chunk search tools for this investigation.
 
-    Without a redactor, chunks above the caller's clearance are withheld whole.
+    The budget comes from `settings` when not given. Without a redactor, chunks above
+    the caller's clearance are withheld whole.
     """
+    budget = budget or AgentBudget.from_settings(settings)
     redactor = redactor or ChunkRedactor(NoopDetector())
     return [
-        _query_tool(graph, ctx, settings),
-        *_lookup_tools(graph, ctx, settings),
-        _fetch_tool(chunks, ctx, settings, redactor),
-        _search_tool(chunks, ctx, settings, redactor),
+        _query_tool(graph, ctx, budget),
+        *_lookup_tools(graph, ctx, budget),
+        _fetch_tool(chunks, ctx, budget, redactor),
+        _search_tool(chunks, ctx, budget, redactor),
     ]
 
 
 def _query_tool(
-    graph: GraphReader, ctx: InvestigationContext, settings: Settings
+    graph: GraphReader, ctx: InvestigationContext, budget: AgentBudget
 ) -> Any:
     """The graph query tool."""
     clearance = ctx.scope.chunk_filter.max_sensitivity
@@ -499,18 +502,18 @@ def _query_tool(
             return call.reply(payload, "rows")
 
         return _run_tool(
-            ctx, "query_knowledge_graph", settings.tool_result_max_chars, run
+            ctx, "query_knowledge_graph", budget.tool_result_max_chars, run
         )
 
     return query_knowledge_graph
 
 
 def _lookup_tools(
-    graph: GraphReader, ctx: InvestigationContext, settings: Settings
+    graph: GraphReader, ctx: InvestigationContext, budget: AgentBudget
 ) -> list[Any]:
     """The fixed path and neighbour lookups, so small models need no Cypher."""
     clearance = ctx.scope.chunk_filter.max_sensitivity
-    max_chars = settings.tool_result_max_chars
+    max_chars = budget.tool_result_max_chars
 
     @tool
     def find_paths(
@@ -590,7 +593,7 @@ def _lookup_tools(
 def _fetch_tool(
     chunks: ChunkReader,
     ctx: InvestigationContext,
-    settings: Settings,
+    budget: AgentBudget,
     redactor: ChunkRedactor,
 ) -> Any:
     """The chunk fetch tool."""
@@ -611,7 +614,7 @@ def _fetch_tool(
         def run(call: _Call) -> dict[str, Any]:
             requested = list(dict.fromkeys(chunk_ids))
             well_formed = [c for c in requested if CHUNK_ID_RE.fullmatch(c)]
-            valid = well_formed[: settings.agent_max_chunks_per_call]
+            valid = well_formed[: budget.max_chunks_per_call]
             try:
                 records = chunks.get_by_ids(valid)
             except Exception as exc:  # pylint: disable=broad-exception-caught
@@ -644,9 +647,7 @@ def _fetch_tool(
             )
             return sent
 
-        return _run_tool(
-            ctx, "fetch_vector_chunks", settings.tool_result_max_chars, run
-        )
+        return _run_tool(ctx, "fetch_vector_chunks", budget.tool_result_max_chars, run)
 
     return fetch_vector_chunks
 
@@ -654,7 +655,7 @@ def _fetch_tool(
 def _search_tool(
     chunks: ChunkReader,
     ctx: InvestigationContext,
-    settings: Settings,
+    budget: AgentBudget,
     redactor: ChunkRedactor,
 ) -> Any:
     """The chunk text search tool."""
@@ -676,7 +677,7 @@ def _search_tool(
         """
 
         def run(call: _Call) -> dict[str, Any]:
-            limit = max(1, min(k, settings.agent_max_chunks_per_call))
+            limit = max(1, min(k, budget.max_chunks_per_call))
             try:
                 allowed = redactor.search(chunks, query, limit, ctx.scope.chunk_filter)
             except Exception as exc:  # pylint: disable=broad-exception-caught
@@ -693,17 +694,16 @@ def _search_tool(
             )
             return sent
 
-        return _run_tool(ctx, "search_chunks", settings.tool_result_max_chars, run)
+        return _run_tool(ctx, "search_chunks", budget.tool_result_max_chars, run)
 
     return search_chunks
 
 
 def _chunk_view(record: ChunkRecord) -> dict[str, Any]:
     """What the model sees of a chunk: id, source path, date and exact text."""
-    parts = [record.title or record.source_id, *record.section_path]
     return {
         "chunk_id": record.chunk_id,
-        "source": " > ".join(p for p in parts if p),
+        "source": record.source_label,
         "effective_date": record.effective_date,
         "text": record.text,
     }

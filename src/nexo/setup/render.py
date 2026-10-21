@@ -4,8 +4,9 @@
     otel-collector.yaml  the base collector config plus each enabled add-on's pipeline
     nexo.env             what Nexo reads after .env: model servers, profiles, endpoints
 
-target.mode native renders nexo.env alone: Neo4j on this machine, no containers, no telemetry
-export. Each render removes files the previous mode left, so nexo.env always matches nexo.yaml.
+target.mode native keeps Nexo, Neo4j and the models on this machine: compose.yaml then holds only
+the telemetry and add-on containers (none at all with telemetry off and no add-ons, and no
+compose file). Each render removes files the previous mode left, so nexo.env matches nexo.yaml.
 The folder holds machine-specific values (paths, the container socket) and no secrets.
 `make compose-file` also renders the mac-single preset portably (repo-relative paths, socket and
 host name left to compose) into the committed docker-compose.yml and deploy/rendered/.
@@ -23,8 +24,9 @@ import jsonpatch
 import yaml
 
 from nexo.setup.components import COMPONENTS, load_fragment, merge_compose, merge_patch
-from nexo.setup.lock import resolve, vllm_urls
-from nexo.setup.schema import Casting, Ports, SetupError
+from nexo.setup.lock import Lock, resolve, vllm_urls
+from nexo.setup.engine import PodmanMachine
+from nexo.setup.schema import NEEDS_COLLECTOR, Casting, Ports, SetupError
 
 COLLECTOR_BASE = "deploy/otel-collector.yaml"
 QUERY_TEXT = "nexo.query.text"
@@ -54,7 +56,9 @@ ORDER = (
     "vllm",
     "app",
 )
-COLLECTOR_ADDONS = ("hostMetrics", "langfuse", "jaeger", "langsmith")
+COLLECTOR_ADDONS = NEEDS_COLLECTOR
+# Components that run on the host, not in a container, in target.mode native.
+HOST_COMPONENTS = frozenset({"neo4j", "app"})
 # Each port a fragment publishes, by service and container port: the spec.ports field
 # that sets its host port.
 PUBLISHED = {
@@ -100,6 +104,18 @@ class Host:
     engine: str  # podman | docker
     socket: str  # the engine's API socket as containers see it
     hostname: str
+    # Podman machine facts (macOS, or when the setup names one); `connection` is set only
+    # for a named machine, so its commands do not depend on which machine is the default.
+    machine: PodmanMachine | None = None
+    running: tuple[str, ...] = ()
+    connection: str = ""
+
+    @property
+    def cli(self) -> list[str]:
+        """The engine's command line, pinned to the setup's machine when it names one."""
+        return [self.engine] + (
+            ["--connection", self.connection] if self.connection else []
+        )
 
     @property
     def gateway(self) -> str:
@@ -109,6 +125,13 @@ class Host:
             if self.engine == "podman"
             else "host.docker.internal"
         )
+
+
+def containers(casting: Casting, on: Collection[str]) -> set[str]:
+    """The components that run as containers: all, or in native mode all but Neo4j and Nexo."""
+    if casting.spec.target.mode == "native":
+        return set(on) - HOST_COMPONENTS
+    return set(on)
 
 
 def _substitute(value: Any, variables: dict[str, str]) -> Any:
@@ -214,18 +237,19 @@ def _apply_environment(
 ) -> None:
     """Each component's `env` override, and the credentials add-ons need on the collector."""
     overrides = casting.spec.components | casting.spec.addons
-    collector = services["otel-collector"].setdefault("environment", {})
+    collector = services.get("otel-collector")
+    collector_env = collector.setdefault("environment", {}) if collector else {}
     for name in on:
         component = COMPONENTS[name]
         if name in overrides and overrides[name].env:
             main = services[component.main].setdefault("environment", {})
             main.update(overrides[name].env)
-        collector.update(component.collector_env)
+        collector_env.update(component.collector_env)
     if "langsmith" in on:
         langsmith = casting.spec.addons.get("langsmith")
-        collector["LANGSMITH_PROJECT"] = (langsmith and langsmith.project) or "nexo"
-    if not collector:
-        del services["otel-collector"]["environment"]
+        collector_env["LANGSMITH_PROJECT"] = (langsmith and langsmith.project) or "nexo"
+    if collector is not None and not collector_env:
+        del collector["environment"]
 
 
 def publish_ports(services: dict[str, Any], ports: Ports) -> None:
@@ -250,24 +274,11 @@ def publish_ports(services: dict[str, Any], ports: Ports) -> None:
                 environment[variable] = f"http://localhost:{getattr(ports, field_name)}"
 
 
-def build_compose(
-    casting: Casting, lock: dict[str, Any], on: set[str], layout: Layout, host: Host
-) -> dict[str, Any]:
-    """The compose file for the enabled components; it mounts the files in layout.out."""
+def _configure_app(
+    app: dict[str, Any], casting: Casting, on: set[str], layout: Layout, host: Host
+) -> None:
+    """The nexo container: env files, the secrets it reads and how it reaches the host."""
     out = layout.root / layout.out
-    compose: dict[str, Any] = {"name": lock["name"]}
-    for name in ORDER:
-        if name in on and COMPONENTS[name].compose:
-            fragment = _compose_fragment(layout, name, lock["images"].get(name, {}))
-            compose = merge_compose(compose, fragment)
-    compose["volumes"] = {name: spec or {} for name, spec in compose["volumes"].items()}
-    services = compose["services"]
-    _apply_environment(services, casting, on)
-    publish_ports(services, casting.spec.ports)
-    services["otel-collector"].setdefault("volumes", []).insert(
-        0, f"{layout.path(out / 'otel-collector.yaml')}:/etc/otelcol/config.yaml:ro"
-    )
-    app = services["nexo"]
     app["env_file"] = [
         {"path": layout.path(layout.root / ".env"), "required": False},
         {"path": layout.path(out / "nexo.env"), "required": True},
@@ -279,6 +290,31 @@ def build_compose(
         app["network_mode"] = "host"
     else:
         app["environment"] |= _app_environment(casting, host, on)
+
+
+def build_compose(
+    casting: Casting, lock: Lock, on: set[str], layout: Layout, host: Host
+) -> dict[str, Any]:
+    """The compose file for the container components; it mounts the files in layout.out."""
+    out = layout.root / layout.out
+    on = containers(casting, on)
+    compose: dict[str, Any] = {"name": lock.name}
+    for name in ORDER:
+        if name in on and COMPONENTS[name].compose:
+            fragment = _compose_fragment(layout, name, lock.images.get(name, {}))
+            compose = merge_compose(compose, fragment)
+    if "volumes" in compose:
+        compose["volumes"] = {n: spec or {} for n, spec in compose["volumes"].items()}
+    services = compose["services"]
+    _apply_environment(services, casting, on)
+    publish_ports(services, casting.spec.ports)
+    if "otel-collector" in services:
+        services["otel-collector"].setdefault("volumes", []).insert(
+            0,
+            f"{layout.path(out / 'otel-collector.yaml')}:/etc/otelcol/config.yaml:ro",
+        )
+    if "app" in on:
+        _configure_app(services["nexo"], casting, on, layout, host)
     if casting.spec.models.provider == "vllm":
         _configure_vllm(services, casting.spec.models.vllm)
     if layout.portable:
@@ -388,23 +424,22 @@ def secrets_options(casting: Casting) -> dict[str, str]:
 def build_env(casting: Casting, on: Collection[str] = ()) -> dict[str, str]:
     """Settings Nexo reads after .env (so the setup file wins); endpoints as the host sees them."""
     spec = casting.spec
-    native = spec.target.mode == "native"
+    telemetry = spec.telemetry.enabled
     env = {
         "NEXO_SETUP_MODE": spec.target.mode,
         "NEO4J_URI": spec.ports.bolt,
-        # Native: no collector runs; blank also overrides an endpoint left in .env.
+        # Telemetry off: blank also overrides an endpoint left in .env. The collector's
+        # published port is on this machine's loopback, in native mode too.
         "OTEL_EXPORTER_OTLP_ENDPOINT": (
-            "" if native else f"http://localhost:{spec.ports.otlp}"
+            f"http://localhost:{spec.ports.otlp}" if telemetry else ""
         ),
-        "OTEL_LOGS_EXPORTER": "none" if native else spec.telemetry.logs,
+        "OTEL_LOGS_EXPORTER": spec.telemetry.logs if telemetry else "none",
         "TRACE_QUERY_TEXT": "true" if spec.telemetry.query_text else "false",
         # Always set, like REVIEW_POLICY: a stale value in .env must not widen what is logged.
         "TELEMETRY_CONTENT_MAX_SENSITIVITY": spec.telemetry.content,
-        # Always set (blank when off or native): nexo eval runs a Langfuse experiment when set.
+        # Always set (blank when off): nexo eval runs a Langfuse experiment when set.
         "LANGFUSE_HOST": (
-            f"http://localhost:{spec.ports.langfuse}"
-            if "langfuse" in on and not native
-            else ""
+            f"http://localhost:{spec.ports.langfuse}" if "langfuse" in on else ""
         ),
     }
     env |= secrets_options(casting)
@@ -462,7 +497,7 @@ def _apply_patches(casting: Casting, files: dict[str, Any]) -> None:
 
 def rendered_files(
     casting: Casting,
-    lock: dict[str, Any],
+    lock: Lock,
     layout: Layout,
     host: Host,
     extra_addons: frozenset[str] = frozenset(),
@@ -470,31 +505,41 @@ def rendered_files(
     """Repo-relative path -> content of every rendered file."""
     on = enabled_set(lock, extra_addons)
     header = PORTABLE_HEADER if layout.portable else HEADER
-    if source := lock.get("source"):
+    if source := lock.source:
         header += SOURCE_LINE.format(file=source["file"], digest=source["sha256"])
     env_lines = [f"{key}={value}" for key, value in build_env(casting, on).items()]
     env_file = {f"{layout.out}/nexo.env": header + "\n".join(env_lines) + "\n"}
-    if casting.spec.target.mode == "native":
-        if extra_addons:
-            addons = ", ".join(sorted(extra_addons))
-            raise SetupError(
-                f"target.mode native runs no containers: no add-ons ({addons})"
-            )
-        return env_file
+    needs_collector = on & set(NEEDS_COLLECTOR)
+    if "collector" not in on and needs_collector:
+        raise SetupError(
+            f"telemetry.enabled is false, but {', '.join(sorted(needs_collector))}"
+            " send through the collector"
+        )
+    if not any(COMPONENTS[name].compose for name in containers(casting, on)):
+        if casting.spec.patches:
+            raise SetupError("patches apply to container services, and none are on")
+        return env_file  # native, nothing in containers
     documents: dict[str, Any] = {
-        "compose.yaml": build_compose(casting, lock, on, layout, host),
-        "otel-collector.yaml": build_collector(casting, on, layout.root),
+        "compose.yaml": build_compose(casting, lock, on, layout, host)
     }
+    if "collector" in on:
+        documents["otel-collector.yaml"] = build_collector(casting, on, layout.root)
     _apply_patches(casting, documents)
-    validate_collector(documents["otel-collector.yaml"])
+    hosted = {"neo4j", "nexo"} & set(documents["compose.yaml"]["services"])
+    if casting.spec.target.mode == "native" and hosted:
+        raise SetupError(f"a patch added {sorted(hosted)}, which run on this machine")
+    if "otel-collector.yaml" in documents:
+        validate_collector(documents["otel-collector.yaml"])
 
     def dump(document: Any) -> str:
         return header + dump_yaml(document)
 
-    return {
-        layout.compose_file: dump(documents["compose.yaml"]),
-        f"{layout.out}/otel-collector.yaml": dump(documents["otel-collector.yaml"]),
-    } | env_file
+    files = {layout.compose_file: dump(documents["compose.yaml"])}
+    if "otel-collector.yaml" in documents:
+        files[f"{layout.out}/otel-collector.yaml"] = dump(
+            documents["otel-collector.yaml"]
+        )
+    return files | env_file
 
 
 def write_files(root: Path, files: dict[str, str]) -> None:
@@ -507,7 +552,7 @@ def write_files(root: Path, files: dict[str, str]) -> None:
 
 def render(
     casting: Casting,
-    lock: dict[str, Any],
+    lock: Lock,
     root: Path,
     host: Host,
     extra_addons: frozenset[str] = frozenset(),
@@ -536,6 +581,6 @@ def portable_files(casting: Casting, root: Path) -> dict[str, str]:
     return rendered_files(casting, resolve(casting, root, None, True), layout, host)
 
 
-def enabled_set(lock: dict[str, Any], extra_addons: frozenset[str]) -> set[str]:
+def enabled_set(lock: Lock, extra_addons: frozenset[str]) -> set[str]:
     """Components on for this run: the lock's plus per-run add-ons."""
-    return {name for name, enabled in lock["enabled"].items() if enabled} | extra_addons
+    return {name for name, enabled in lock.enabled.items() if enabled} | extra_addons

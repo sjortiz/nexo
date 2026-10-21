@@ -181,7 +181,7 @@ settings = Settings(
 <div class="prose"><p>Before anything else, confirm every model role has a server that answers and holds its model. This is what <code>nexo models --check</code> runs.</p></div>
 <div class="cell"><pre class="code"><code>show(
     [
-        {key: row.get(key) <span class="kw">for</span> key <span class="kw">in</span> (<span class="st">"role"</span>, <span class="st">"model"</span>, <span class="st">"check"</span>)}
+        {key: <span class="bi">getattr</span>(row, key) <span class="kw">for</span> key <span class="kw">in</span> (<span class="st">"role"</span>, <span class="st">"model"</span>, <span class="st">"check"</span>)}
         <span class="kw">for</span> row <span class="kw">in</span> check_model_servers(settings, resolved_models(settings))
     ]
 )</code></pre><div class="out-label">Output</div><pre class="output"><samp>[
@@ -594,7 +594,15 @@ show(
         <span class="st">"tool_calls"</span>: [<span class="st">f"</span>{c.tool}<span class="st">: </span>{c.detail}<span class="st">"</span> <span class="kw">for</span> c <span class="kw">in</span> output.tool_calls],
         <span class="st">"stop_reason"</span>: output.stop_reason,
     }
-)</code></pre><div class="out-label">Output</div><pre class="output"><samp>
+)</code></pre><div class="out-label">Output</div><pre class="output"><samp>Based on the knowledge graph, **Acme Holdings Inc.** is connected to **Gamma Clinics** indirectly through a two-hop corporate and commercial relationship involving **Beta Labs**:
+
+1. **Corporate Ownership Link**: Acme Holdings acquired Beta Labs in March 2024. 
+2. **Commercial Supply Link**: Beta Labs supplies respiratory test kits to Gamma Clinics (who purchases them from Beta Labs). 
+
+**Supporting Chain of Relationships:**
+`Acme Holdings Inc.` → `ACQUIRED` → `Beta Labs` ← `SUPPLIES`/buys from `Gamma Clinics`
+
+**Evidence Note:** The graph explicitly records this path with "asserted" certainty. However, the exact source documents containing these facts were withheld due to internal sensitivity restrictions (sensitivity_rank: 1), so the specific chunk texts cannot be cited directly. The connection is verified through the knowledge graph's relationship summaries and evidence rankings.
 {
   "citations": [],
   "tool_calls": [
@@ -602,9 +610,10 @@ show(
     "query_knowledge_graph: 1 rows",
     "find_paths: 1 paths",
     "fetch_vector_chunks: 0 chunks",
+    "search_chunks: 0 chunks",
     "search_chunks: 0 chunks"
   ],
-  "stop_reason": "max_tokens"
+  "stop_reason": "end_turn"
 }</samp></pre></div>
 <div class="prose"><p>The trace shows what the agent did. These are the Cypher queries it wrote, in order:</p></div>
 <div class="cell"><pre class="code"><code><span class="kw">for</span> span <span class="kw">in</span> spans.get_finished_spans():
@@ -613,8 +622,8 @@ show(
             json.loads(span.attributes[<span class="st">"gen_ai.tool.call.arguments"</span>])[
                 <span class="st">"cypher_query"</span>
             ].strip()
-        )</code></pre><div class="out-label">Output</div><pre class="output"><samp>MATCH (e:Entity) WHERE toLower(e.name) CONTAINS "acme holdings" OR any(a IN e.aliases WHERE toLower(a) CONTAINS "acme holdings") RETURN e.key, e.name, e.type LIMIT 5
-MATCH (e:Entity) WHERE toLower(e.name) CONTAINS "gamma clinics" OR any(a IN e.aliases WHERE toLower(a) CONTAINS "gamma clinics") RETURN e.key, e.name, e.type LIMIT 5</samp></pre></div>
+        )</code></pre><div class="out-label">Output</div><pre class="output"><samp>MATCH (e:Entity) WHERE toLower(e.name) CONTAINS "gamma clinics" OR any(a IN e.aliases WHERE toLower(a) CONTAINS "gamma clinics") RETURN e.key, e.name, e.type LIMIT 5
+MATCH (e:Entity) WHERE toLower(e.name) CONTAINS "acme holdings" OR any(a IN e.aliases WHERE toLower(a) CONTAINS "acme holdings") RETURN e.key, e.name, e.type LIMIT 5</samp></pre></div>
 <div class="prose"><h2 id="11-put-it-in-a-workflow-with-human-review">11. Put it in a workflow with human review</h2>
 <p>The agent is one step of a fixed LangGraph workflow. A <strong>router</strong> checks the request first. The <strong>investigator</strong> runs inside a retried task. <strong>Compliance</strong> checks the draft (uncited claims, citations to text the agent never read, sensitive data) and then, under the review policy this walkthrough sets to <code>always</code>, pauses the run until a person decides; the default <code>on-findings</code> releases a clean, cited answer without a pause. The pause is checkpointed, so the decision can come from another process, days later.</p></div>
 <div class="cell"><pre class="code"><code>show(workflow_mermaid())</code></pre><div class="out-label">Output</div><pre class="output"><samp>---
@@ -654,7 +663,7 @@ show(
   "routed_to": "investigator"
 }
 {
-  "draft_answer": "Acme Holdings is connected to Gamma Clinics through **Beta Labs** via a two-step chain:\n\n1. **Acme Holdings acquired Beta Labs** in March 2024 [chunk:chk_f9eb2281935d8305, chunk:chk_77404fc8e15193f8]\n2. **Beta Labs supplies Gamma Clinics** (Gamma Clinics buys its respiratory test kits from Beta Labs) [chunk:chk_783852d4e180e15a]\n\nThe full connection path is:\n**Acme Holdings Inc.** → *ACQUIRED* → **Beta Labs** ← *SUPPLIES* ← **Gamma Clinics**\n\nIn other words, Acme Holdings owns Beta Labs (through its March 2024 acquisition), and Beta Labs is a supplier to Gamma Clinics. This creates an indirect business relationship between Acme Holdings and Gamma Clinics through their shared connection with Beta Labs.",
+  "draft_answer": "**Acme Holdings is connected to Gamma Clinics through Beta Labs.**\n\nThe connection chain is:\n\n1. **Acme Holdings → ACQUIRED → Beta Labs**: Acme Holdings Inc. bought Beta Labs in March 2024 [chunk:chk_f9eb2281935d8305, chk_77404fc8e15193f8].\n\n2. **Beta Labs ↔ Gamma Clinics (SUPPLIES)**: There is a SUPPLIES relationship between Beta Labs and Gamma Clinics. The evidence states \"Gamma Clinics buys its respiratory test kits from Beta Labs\" [chunk:chk_783852d4e180e15a], indicating that Beta Labs supplies respiratory test kits to Gamma Clinics.\n\nThus, the full path is: **Acme Holdings → (acquired) → Beta Labs → (supplies) → Gamma Clinics**.\n\n*Note: The source chunks for this evidence were withheld due to sensitivity restrictions, but the relationship descriptions and certainty levels (\"asserted\") are confirmed in the knowledge graph.*",
   "citations": [
     "chk_f9eb2281935d8305",
     "chk_77404fc8e15193f8",
@@ -696,13 +705,19 @@ show(
     show(
         <span class="st">f"</span><span class="st">[</span>{clearance}<span class="st">] </span><span class="st">"</span>
         + (draft <span class="kw">or</span> <span class="st">f"</span><span class="st">no answer released (approval: </span>{result.approval_status}<span class="st">)</span><span class="st">"</span>)
-    )</code></pre><div class="out-label">Output</div><pre class="output"><samp>[internal] The documents do not mention the chief executive of Beta Labs. While the knowledge graph confirms that Beta Labs is an organization (acquired by Acme Holdings Inc. in March 2024) and produces rapid diagnostic kits for respiratory infections, there is no information about who serves as its chief executive or CEO.
-[pii] The chief executive of Beta Labs is **Jane Roe**, who has held that position since 2021.
+    )</code></pre><div class="out-label">Output</div><pre class="output"><samp>[internal] The provided documents do not mention who the chief executive of Beta Labs is. 
 
-**Supporting chain:**
-- Jane Roe (Person) is linked to Beta Labs (Organization) via an `EMPLOYED_BY` relationship with the evidence: *"Jane Roe has been chief executive of Beta Labs since 2021."* [chunk:chk_714c2e550aacdb8f]
+While the knowledge graph confirms that **Beta Labs** is an organization that produces rapid diagnostic kits for respiratory infections and was acquired by **Acme Holdings Inc.** in March 2024, there are no records linking a specific person to the role of chief executive or CEO for this entity.
 
-Note: The source text for this chunk was withheld due to sensitivity restrictions (PII level), but the knowledge graph relationship and its evidence summary are confirmed.</samp></pre></div>
+**Supporting Evidence:**
+*   **Beta Labs** is identified as an Organization [chunk:f9eb2281935d8305].
+*   **Acme Holdings Inc.** acquired Beta Labs in March 2024 [chunk:77404fc8e15193f8].
+*   Beta Labs produces rapid diagnostic kits for respiratory infections [chunk:783852d4e180e15a].
+[pii] Based on the knowledge graph, **Jane Roe** is the chief executive of Beta Labs. She has held this position since 2021.
+
+**Supporting Chain:**
+*   **Person:Jane Roe** is linked to **Organization:Beta Labs** via an `EMPLOYED_BY` relationship. The extracted evidence for this connection explicitly states that she "has been chief executive of Beta Labs since 2021" [chunk:chk_714c2e550aacdb8f].
+*   Prior to her role at Beta Labs, Jane Roe led product at **Organization:Delta Devices** [chunk:chk_714c2e550aacdb8f].</samp></pre></div>
 <div class="prose"><h2 id="13-use-the-graph-from-other-clients-over-mcp">13. Use the graph from other clients over MCP</h2>
 <p><code>nexo mcp</code> exposes the same graph to Claude Code or any MCP client as read-only tools, with the same clearance and Cypher safeguards. Here the server runs in-process.</p></div>
 <div class="cell"><pre class="code"><code>server = build_mcp_server(graph=graph, chunks=chunk_store, settings=settings)

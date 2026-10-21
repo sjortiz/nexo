@@ -24,11 +24,10 @@ from strands.models import Model
 from strands.types.agent import Limits
 from strands.types.exceptions import MaxTokensReachedException, ModelThrottledException
 
-from nexo.agents.models import AGENT_NAME, AgentOutput, InvestigationScope
+from nexo.agents.models import AGENT_NAME, AgentBudget, AgentOutput, InvestigationScope
 from nexo.agents.redaction import ChunkRedactor
 from nexo.agents.tools import InvestigationContext, build_investigation_tools
 from nexo.aio import run_sync
-from nexo.config import Settings
 from nexo.storage.graph_store import DATA_MODEL, GraphReader
 from nexo.storage.schemas import CHUNK_ID_RE, ChunkRecord
 from nexo.storage.sensitive_data import NoopDetector, SensitiveDataDetector
@@ -145,16 +144,18 @@ class Investigator:
         model: Model,
         graph: GraphReader,
         chunks: ChunkStore,
-        settings: Settings,
+        budget: AgentBudget | None = None,
+        settings: Any = None,
         schema_text: str | None = None,
         detector: SensitiveDataDetector | None = None,
     ) -> None:
-        """Without a detector nothing is masked: chunks above clearance stay withheld."""
+        """The budget comes from `settings` when not given; without a detector nothing is
+        masked and chunks above clearance stay withheld."""
         self._redactor = ChunkRedactor(detector or NoopDetector())
         self._model = model
         self._graph = graph
         self._chunks = chunks
-        self._settings = settings
+        self._budget = budget or AgentBudget.from_settings(settings)
         self._system_prompt = SYSTEM_PROMPT.format(schema=schema_text or DATA_MODEL)
 
     def _build_agent(self, ctx: InvestigationContext) -> Agent:
@@ -166,7 +167,7 @@ class Investigator:
                 graph=self._graph,
                 chunks=self._chunks,
                 ctx=ctx,
-                settings=self._settings,
+                budget=self._budget,
                 redactor=self._redactor,
             ),
             system_prompt=self._system_prompt,
@@ -185,10 +186,10 @@ class Investigator:
 
     def _seed(self, query: str, scope: InvestigationScope) -> list[ChunkRecord]:
         """Vector entry points for vector/hybrid intents (multi-retriever RAG)."""
-        if scope.strategy == "graph" or self._settings.seed_chunks == 0:
+        if scope.strategy == "graph" or self._budget.seed_chunks == 0:
             return []
         return self._redactor.search(
-            self._chunks, query, self._settings.seed_chunks, scope.chunk_filter
+            self._chunks, query, self._budget.seed_chunks, scope.chunk_filter
         )
 
     async def ainvestigate(
@@ -205,17 +206,13 @@ class Investigator:
             scope=scope,
             # Leave the last turn for writing the answer: with the budget spent one turn
             # early, the model is told to answer instead of hitting the turn limit.
-            max_tool_calls=min(
-                self._settings.agent_max_tool_calls, self._settings.agent_max_turns - 1
-            ),
+            max_tool_calls=min(self._budget.max_tool_calls, self._budget.max_turns - 1),
         )
         seeds = self._seed(query, scope)
         ctx.evidence.fetched.update({s.chunk_id: s.sensitivity.value for s in seeds})
         agent = self._build_agent(ctx)
 
-        # The Strands event loop drives vLLM: every turn sends the conversation
-        # plus tool specs; vLLM's tool-call parser turns Llama output into
-        # tool_calls; Strands executes them and feeds results back.
+        # Strands runs the tool loop against the OpenAI-compatible server (ADR-0012).
         started = time.monotonic()
         answer, stop_reason, usage = "", "max_tokens", {}
         try:
@@ -223,11 +220,11 @@ class Investigator:
                 agent.invoke_async(
                     _render_prompt(query, seeds, scope.chunk_filter),
                     limits=Limits(
-                        turns=self._settings.agent_max_turns,
-                        total_tokens=self._settings.agent_max_total_tokens,
+                        turns=self._budget.max_turns,
+                        total_tokens=self._budget.max_total_tokens,
                     ),
                 ),
-                timeout=self._settings.agent_timeout_s,
+                timeout=self._budget.timeout_s,
             )
             answer, stop_reason = str(result).strip(), str(result.stop_reason)
             usage = _usage(result)
@@ -241,7 +238,7 @@ class Investigator:
         # evidence already gathered; compliance still checks it. Token caps are
         # cost limits, so they get no follow-up.
         follow_up = _follow_up(answer, ctx)
-        remaining = self._settings.agent_timeout_s - (time.monotonic() - started)
+        remaining = self._budget.timeout_s - (time.monotonic() - started)
         if follow_up and stop_reason in ("end_turn", "limit_turns") and remaining > 5:
             log.info("investigation %s: asking for %s", ctx.request_id, follow_up[0])
             try:
@@ -249,7 +246,7 @@ class Investigator:
                     agent.invoke_async(
                         follow_up[1],
                         limits=Limits(
-                            turns=2, total_tokens=self._settings.agent_max_total_tokens
+                            turns=2, total_tokens=self._budget.max_total_tokens
                         ),
                     ),
                     timeout=remaining,
@@ -321,7 +318,7 @@ def _render_prompt(
     if seeds:
         passages = "\n\n".join(
             f'<passage chunk_id="{s.chunk_id}" '
-            f"source=\"{' > '.join([s.title or s.source_id, *s.section_path])}\">\n"
+            f'source="{s.source_label}">\n'
             f"{s.text}\n</passage>"
             for s in seeds
         )

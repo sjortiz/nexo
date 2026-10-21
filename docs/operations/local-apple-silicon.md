@@ -49,10 +49,10 @@ Two independent choices:
 |---|---|---|
 | Models | Ollama, native (Metal GPU) | Ollama, native (Metal GPU) |
 | Neo4j | container (`neo4j:5.26-community`) | Homebrew (`neo4j` 2026.09) |
-| Telemetry | collector (strips content) + SigNoz containers; Langfuse, Jaeger optional | none (export off) |
+| Telemetry | collector (strips content) + SigNoz containers; Langfuse, Jaeger optional | the same containers, in a small Podman machine; or off |
 | Nexo | container (`make app`) or `uv sync` | `uv sync` |
 | Preset | `mac-single`, `mac-two-machines` | `mac-native` (`target.mode: native`) |
-| Good for | matching the server setup; clean teardown | fewest moving parts; no VM |
+| Good for | matching the server setup; clean teardown | the core and models get all the memory |
 
 | | **One Mac** | **Two Macs** |
 |---|---|---|
@@ -115,9 +115,10 @@ with half the tool calls, at about 3× the time per question.
 
 # Native path
 
-No containers and no VM: Ollama and Homebrew's Neo4j run on the Mac and Nexo from the `.venv`.
-`target.mode: native` in `nexo.yaml` declares it, so `nexo setup` stays the single entry point and
-`.env` needs no edits.[^adr-0020]
+A bare-metal core: Ollama, Homebrew's Neo4j and Nexo (from the `.venv`) run on the Mac. Containers
+are only for telemetry (the collector and SigNoz) and add-ons, which Nexo reaches on `localhost`
+ports. `target.mode: native` in `nexo.yaml` declares it, so `nexo setup` stays the single entry
+point and `.env` needs no edits.[^adr-0020]
 
 1. `brew install ollama neo4j uv` (Neo4j 2026.09 Community, Java 21; Nexo's Neo4j tests pass on it),
    then `uv sync && source .venv/bin/activate` (uv installs Python 3.12).
@@ -126,11 +127,35 @@ No containers and no VM: Ollama and Homebrew's Neo4j run on the Mac and Nexo fro
 3. A Neo4j that has never started: `make neo4j-init` sets its initial password to the stored one;
    then `brew services start neo4j`. A Neo4j already in use keeps its password: change it to the
    stored one in `cypher-shell` (`ALTER CURRENT USER SET PASSWORD FROM '<old>' TO '<stored>'`).
-4. `make up`: pulls and preloads the profile's models and renders `.nexo/render/nexo.env` alone:
-   `NEO4J_URI` on `localhost`, telemetry export off, and `NEXO_SECRETS_*` naming the store that
-   holds the password. No compose file is written, so nothing from the Podman path applies.[^compose]
-5. `make check`: secrets, Neo4j's login with the stored password, memory, and each role's model.
-   Then `nexo ...` in the activated `.venv`.
+4. `make up`: pulls and preloads the profile's models, renders `.nexo/render/` and runs compose for
+   the container services (the collector, SigNoz and any add-ons; never Neo4j or Nexo).
+   `nexo.env` has `NEO4J_URI` on `localhost`, `OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318`
+   and `NEXO_SECRETS_*` naming the store that holds the password.[^compose]
+5. `make check`: secrets, Neo4j's login with the stored password, the container engine, memory, and
+   each role's model. Then `nexo ...` in the activated `.venv`.
+
+Add-ons are opt-in under `addons:` (or `make up LANGFUSE=1`); `telemetry: { enabled: false }`
+leaves no container and a blank endpoint. Patches apply to container services only, and vLLM needs
+`compose`.
+
+## Telemetry in its own Podman machine
+
+Containers compete with the models for memory, so give them a small machine of their own. Podman
+5.6 runs one machine at a time: keep the full setup in `podman-machine-default` (for example 12 GiB)
+and the telemetry in a second one, rootful so the host-metrics add-on can read the container socket:
+
+```bash
+podman machine init --rootful --cpus 2 --memory 3072 nexo-telemetry
+# nexo.yaml: spec.target.machine: nexo-telemetry
+make up SWITCH=1      # stops the running machine, and every container on it, then starts this one
+```
+
+Without `SWITCH=1`, `make up` stops with a message when another machine is running. `make check`
+reports the active machine against `nexo-telemetry`, and warns when the machine's memory is far
+above what the containers need (about 1.5 GB for the collector and SigNoz). On a rootless machine
+the host-metrics add-on fails with `mkdir /run/podman/podman.sock: permission denied`; `check`
+catches it and prints the fix: `podman machine stop nexo-telemetry && podman machine set --rootful
+nexo-telemetry && podman machine start nexo-telemetry`.
 
 Switching between paths is a change to `target.mode`; every render removes the files the other mode
 wrote. If `nexo.yaml` changes after the last render, Nexo warns that `nexo.env` is stale until
@@ -139,7 +164,7 @@ wrote. If `nexo.yaml` changes after the last render, Nexo warns that `nexo.env` 
 
 # Two Macs
 
-Uses the `mac-two-machines` preset (Podman path); for no containers, set `target.mode: native` in it and drop its `addons`. Example: M1 Max 64 GB as the agent Mac, M5 Pro 24 GB running Nexo.
+Uses the `mac-two-machines` preset (Podman path); for a bare-metal core, set `target.mode: native` in it (its add-ons then run as containers beside the collector). Example: M1 Max 64 GB as the agent Mac, M5 Pro 24 GB running Nexo.
 
 ```
  M1 Max (models.remote: m1-max-64)         M5 Pro (models.local: m5-pro-24)

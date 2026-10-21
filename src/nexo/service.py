@@ -25,14 +25,20 @@ from langgraph.types import Command
 from pydantic import BaseModel, ValidationError
 
 from nexo.agents.investigator import Investigator
+from nexo.agents.models import AgentBudget
 from nexo.agents.redaction import ChunkRedactor
 from nexo.config import Settings
 from nexo.logging_setup import CONTENT_LOGGER
 from nexo.llm import build_chat_model, build_embeddings, build_strands_model
-from nexo.orchestration.graph import GraphDependencies, build_graph
+from nexo.orchestration.graph import WORKFLOW_NAME, GraphDependencies, build_graph
 from nexo.orchestration.state import ReviewDecision, ReviewPacket, ReviewPassage
 from nexo.storage.graph_store import GraphStore
-from nexo.storage.ingest import ExtractionAids, IngestionTargets, KnowledgeGraphIngestor
+from nexo.storage.ingest import (
+    ExtractionAids,
+    IngestionLimits,
+    IngestionTargets,
+    KnowledgeGraphIngestor,
+)
 from nexo.storage.ontology import Ontology
 from nexo.storage.resolution import EntityResolver, ResolutionLimits
 from nexo.storage.schemas import ChunkRecord, Sensitivity
@@ -50,7 +56,6 @@ from nexo.telemetry import (
     traced_span,
 )
 
-WORKFLOW_NAME = "nexo-investigation"
 CONTENT_EVENT = "nexo.content"
 _INTERRUPT_CHANNEL = "__interrupt__"  # where LangGraph stores a pending interrupt
 
@@ -239,9 +244,7 @@ class Runtime:
     def _drive(
         self, payload: Any, thread_id: str, operation: str, identity: dict[str, Any]
     ) -> RunResult:
-        # GenAI workflow span (OTel GenAI conventions): one per graph run; the
-        # LangGraph thread id is the conversation id that ties start and review, and
-        # identity says who asked (user.id, session.id) and which question.
+        # One workflow span per graph run; the thread id ties start and review (ADR-0009).
         attributes = {
             "gen_ai.operation.name": "invoke_workflow",
             "gen_ai.workflow.name": WORKFLOW_NAME,
@@ -254,7 +257,7 @@ class Runtime:
                 payload, self._config(thread_id), stream_mode="updates"
             ):
                 for node, delta in update.items():
-                    if node == "__interrupt__":
+                    if node == _INTERRUPT_CHANNEL:
                         span.add_event("graph.interrupt", {"node": "compliance"})
                     else:  # every state transition is visible on the request span
                         span.add_event(
@@ -425,12 +428,17 @@ def _passage(
     shown = redactor.visible(record, scope)
     return ReviewPassage(
         chunk_id=chunk_id,
-        source=" > ".join(
-            p for p in [record.title or record.source_id, *record.section_path] if p
-        ),
+        source=record.source_label,
         text=shown.text if shown else None,
         classification=record.sensitivity.value,
         status="shown" if shown else "withheld",
+    )
+
+
+def detector_from_settings(settings: Settings) -> SensitiveDataDetector:
+    """The configured sensitive-data detector (regex by default)."""
+    return build_detector(
+        settings.sensitive_data_provider, aws_region=settings.aws_region
     )
 
 
@@ -462,11 +470,9 @@ def build_investigator(
         model=build_strands_model(settings),
         graph=graph_store,
         chunks=chunk_store,
-        settings=settings,
+        budget=AgentBudget.from_settings(settings),
         schema_text=graph_store.describe_schema(),
-        detector=build_detector(
-            settings.sensitive_data_provider, aws_region=settings.aws_region
-        ),
+        detector=detector_from_settings(settings),
     )
 
 
@@ -483,9 +489,7 @@ def open_runtime(settings: Settings) -> Iterator[Runtime]:
         deps = GraphDependencies(
             settings=settings,
             investigator=investigator,
-            detector=build_detector(
-                settings.sensitive_data_provider, aws_region=settings.aws_region
-            ),
+            detector=detector_from_settings(settings),
             router_llm=build_chat_model(settings, role="router"),
         )
         yield Runtime(
@@ -514,9 +518,7 @@ def open_review_runtime(settings: Settings, chunks: ChunkStore) -> Iterator[Runt
     """
     with ExitStack() as stack:
         checkpointer = stack.enter_context(open_checkpointer(settings))
-        detector = build_detector(
-            settings.sensitive_data_provider, aws_region=settings.aws_region
-        )
+        detector = detector_from_settings(settings)
         deps = GraphDependencies(
             settings=settings, investigator=_NoInvestigator(), detector=detector
         )
@@ -551,10 +553,8 @@ def open_ingestor(
         llm = build_chat_model(settings, role="extraction")
         yield KnowledgeGraphIngestor(
             llm=llm,
-            detector=build_detector(
-                settings.sensitive_data_provider, aws_region=settings.aws_region
-            ),
-            settings=settings,
+            detector=detector_from_settings(settings),
+            limits=IngestionLimits.from_settings(settings),
             targets=IngestionTargets(
                 chunk_store=chunk_store,
                 graph_writer=graph_store,

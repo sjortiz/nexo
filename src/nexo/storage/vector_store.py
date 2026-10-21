@@ -9,10 +9,8 @@ Search is hybrid by default: BM25 keyword ranking (exact names, codes, IDs
 that embeddings blur) and vector similarity (paraphrases), fused with
 Reciprocal Rank Fusion. Both run in-process with no extra dependency.
 
-For production, PostgreSQL + pgvector fits this access pattern (primary-key
-lookup, SQL metadata filters, ACID writes so a chunk is readable as soon as
-Neo4j references it); OpenSearch fits very high query rates. Both are open
-source and run self-hosted or managed. Implement `ChunkStore` against either.
+The default store keeps chunks in Neo4j next to the graph (ADR-0018,
+`neo4j_chunk_store.py`); `LocalChunkStore` is for single-node and offline runs.
 """
 
 from __future__ import annotations

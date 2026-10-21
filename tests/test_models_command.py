@@ -14,7 +14,7 @@ from pydantic import SecretStr
 from nexo import cli
 from nexo import local_profiles as lp
 from nexo.config import Settings, get_settings
-from nexo.llm import check_model_servers, resolved_models
+from nexo.llm import ModelRow, check_model_servers, resolved_models
 
 
 class _ModelsAPI(BaseHTTPRequestHandler):
@@ -99,6 +99,7 @@ def _closed_port_url() -> str:
 
 
 def _by_role(rows):
+    rows = [row.as_dict() if isinstance(row, ModelRow) else row for row in rows]
     return {row["role"]: row for row in rows}
 
 
@@ -189,7 +190,7 @@ def test_output_never_contains_api_keys():
         agent_api_key=SecretStr("sk-agent-secret"),
         embedding_api_key=SecretStr("sk-embed-secret"),
     )
-    text = json.dumps(resolved_models(settings))
+    text = json.dumps([row.as_dict() for row in resolved_models(settings)])
     assert "secret" not in text
 
 

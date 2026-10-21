@@ -7,6 +7,7 @@ operations on the rendered files as the escape hatch.
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from typing import Annotated, Any, Literal
 
@@ -19,6 +20,10 @@ API_VERSION = "nexo/v1alpha1"
 CORE = ("neo4j", "collector", "signoz")
 ADDONS = ("langfuse", "jaeger", "langsmith", "hostMetrics", "agentInbox")
 ROLES = ("agent", "extraction", "router", "judge", "embedding")
+# Add-ons that send through the collector: they need telemetry on.
+NEEDS_COLLECTOR = ("hostMetrics", "langfuse", "jaeger", "langsmith")
+# In target.mode native these run on this machine, so patches cannot reach them.
+HOST_SERVICES = re.compile(r"^/services/(neo4j|nexo)(/|$)")
 Port = Annotated[int, Field(ge=1, le=65535)]
 
 
@@ -34,11 +39,19 @@ class _Strict(BaseModel):
 class Target(_Strict):
     """Where Nexo's services run."""
 
-    # compose: Neo4j and telemetry in containers. native: Neo4j already runs on this machine
-    # (Homebrew, a package), nothing in containers, no telemetry export. Kubernetes comes later.
+    # compose: Neo4j and telemetry in containers. native: a bare-metal core (Nexo, Neo4j and the
+    # models run on this machine); only telemetry and add-ons are containers. Kubernetes later.
     mode: Literal["compose", "native"] = "compose"
     engine: Literal["auto", "podman", "docker"] = "auto"
     host: Literal["auto", "macos", "linux"] = "auto"
+    # The Podman machine the containers run in (macOS): up and check use its connection.
+    machine: str | None = None
+
+    @model_validator(mode="after")
+    def _machine_is_podman(self) -> Target:
+        if self.machine and self.engine == "docker":
+            raise ValueError("machine names a Podman machine; engine docker has none")
+        return self
 
 
 class Machine(_Strict):
@@ -108,6 +121,8 @@ class Component(_Strict):
 class Telemetry(_Strict):
     """What Nexo itself sends to the collector."""
 
+    # false (native mode only): no collector, no SigNoz, nothing exported.
+    enabled: bool = True
     logs: Literal["otlp", "none"] = "otlp"
     # The question's text on traces (self-hosted backends only; LangSmith never gets it).
     query_text: bool = Field(default=False, alias="queryText")
@@ -208,19 +223,33 @@ class Spec(_Strict):
         return self
 
     @model_validator(mode="after")
-    def _native_has_no_containers(self) -> Spec:
+    def _telemetry_off_is_native(self) -> Spec:
+        if not self.telemetry.enabled and self.target.mode != "native":
+            raise ValueError(
+                "telemetry.enabled false needs target.mode native: compose runs the"
+                " collector and SigNoz"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _native_cannot_run(self) -> Spec:
         if self.target.mode != "native":
             return self
-        problems = [f"addons.{n}" for n, a in self.addons.items() if a.enabled]
+        problems = []
         if self.models.provider == "vllm":
-            problems.append("models.provider vllm")
-        if self.patches:
-            problems.append("patches")
+            problems.append("models.provider vllm needs NVIDIA containers")
+        for number, patch in enumerate(self.patches):
+            for operation in patch.operations:
+                for pointer in (operation.get("path"), operation.get("from")):
+                    if isinstance(pointer, str) and (
+                        hit := HOST_SERVICES.match(pointer)
+                    ):
+                        problems.append(
+                            f"patches.{number} changes {hit[1]}, which runs on this machine"
+                            " in native mode (patch container services only)"
+                        )
         if problems:
-            raise ValueError(
-                f"target.mode native runs no containers: remove {', '.join(problems)}"
-                " or use target.mode compose"
-            )
+            raise ValueError("; ".join(problems))
         return self
 
     @model_validator(mode="after")

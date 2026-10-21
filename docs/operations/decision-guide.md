@@ -53,7 +53,7 @@ The profile's memory picks a tier: the largest one that fits. The same tiers app
 | Linux, 4x 80 GB NVIDIA | `linux-vllm` | Llama 3.3 70B (vLLM) | off until `models.roles.judge` is set | 32k | on the GPUs | A shared server; many users; the production path |
 
 `make env` picks the profile from this machine's chip and memory (or GPU VRAM, or RAM);
-`PROFILE=` overrides it. For no containers use `mac-native` or `linux-native` (section 7).
+`PROFILE=` overrides it. For a bare-metal core (containers only for telemetry and add-ons) use `mac-native` or `linux-native` (section 7).
 `python3 src/nexo/local_profiles.py plan <profile>` prints the exact models. An explicit
 `models.roles` entry in `nexo.yaml` overrides any role, e.g. a larger agent model on a 24 GB Mac, or a
 judge where the profile has none or a stronger one elsewhere ([Judge scores](evaluation.md#judge-scores)).
@@ -133,7 +133,7 @@ Both end in the same rendered stack; the flags exist so trying an add-on never n
 |---|---|---|---|
 | Uses | `nexo.yaml`: any preset, add-ons, patches | The committed `docker-compose.yml` (the `mac-single` preset) | `mac-native` or `linux-native`; Neo4j from Homebrew or a package |
 | Models | Started for you (`ollama-setup.sh`) | Start them yourself: `make models` | Started for you (`ollama-setup.sh`) |
-| Checks | Preflight: engine, secrets, memory | None | Preflight: secrets, Neo4j login, memory |
+| Checks | Preflight: engine, secrets, memory | None | Preflight: engine (if containers), secrets, Neo4j login, memory |
 | Observability | Everything in section 4 | SigNoz and host metrics | None (export off) |
 | Choose it when | Almost always | You want plain Compose, or to read the stack on GitHub | You cannot run containers |
 

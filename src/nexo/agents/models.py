@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from typing import Literal
+from dataclasses import dataclass
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
@@ -11,6 +12,32 @@ from nexo.storage.vector_store import ChunkFilter
 RetrievalStrategy = Literal["graph", "vector", "hybrid"]
 
 AGENT_NAME = "relationship-investigator"
+
+
+@dataclass(frozen=True)
+class AgentBudget:
+    """What one investigation may spend; the service builds it once from Settings."""
+
+    max_turns: int
+    max_tool_calls: int
+    max_total_tokens: int
+    timeout_s: float
+    seed_chunks: int
+    max_chunks_per_call: int
+    tool_result_max_chars: int
+
+    @classmethod
+    def from_settings(cls, settings: Any) -> AgentBudget:
+        """The budget the AGENT_* and SEED_CHUNKS settings describe."""
+        return cls(
+            max_turns=settings.agent_max_turns,
+            max_tool_calls=settings.agent_max_tool_calls,
+            max_total_tokens=settings.agent_max_total_tokens,
+            timeout_s=settings.agent_timeout_s,
+            seed_chunks=settings.seed_chunks,
+            max_chunks_per_call=settings.agent_max_chunks_per_call,
+            tool_result_max_chars=settings.tool_result_max_chars,
+        )
 
 
 class InvestigationScope(BaseModel):

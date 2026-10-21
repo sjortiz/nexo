@@ -80,7 +80,7 @@ graph TD;
 | Runtime and CLI | [`service.py`](src/nexo/service.py), [`cli.py`](src/nexo/cli.py), [`llm.py`](src/nexo/llm.py), [`aio.py`](src/nexo/aio.py) | Resource lifetimes, model roles, ingest/ask/review/status, servers and sync-to-async bridging. |
 | MCP and review surfaces | [`mcp_server.py`](src/nexo/mcp_server.py), [`mcp_review.py`](src/nexo/mcp_review.py), [`review_ui.py`](src/nexo/review_ui.py), [`review_inbox.py`](src/nexo/review_inbox.py) | Retrieval, confirmed MCP reviews, demo page and Agent Inbox adapter. |
 | Setup | [`setup/`](src/nexo/setup/), [`config.py`](src/nexo/config.py), [`secret_store.py`](src/nexo/secret_store.py), [`local_profiles.py`](src/nexo/local_profiles.py) | Setup schema, lock/render/check/up, settings, secrets and hardware profiles. |
-| Telemetry and evaluation | [`telemetry.py`](src/nexo/telemetry.py), [`logging_setup.py`](src/nexo/logging_setup.py), [`evaluation.py`](src/nexo/evaluation.py) | OpenTelemetry, correlated logs and retrieval/generation/extraction scores. |
+| Telemetry and evaluation | [`telemetry.py`](src/nexo/telemetry.py), [`logging_setup.py`](src/nexo/logging_setup.py), [`evaluation.py`](src/nexo/evaluation.py), [`experiments.py`](src/nexo/experiments.py) | OpenTelemetry, correlated logs, retrieval/generation/extraction scores and Langfuse experiments. |
 
 Full documentation lives in [`docs/`](docs/index.md) as an [Open Knowledge Format](docs/references/open-knowledge-format.md)
 bundle: architecture, components, operations, decisions and references.
@@ -92,7 +92,7 @@ From the checkout, with `uv`, a container engine (Podman or Docker) and model se
 | Machine | Preset | Guide |
 | --- | --- | --- |
 | Apple Silicon Mac, services in Podman | `mac-single` (`mac-two-machines` for two Macs) | [Local on Apple Silicon](docs/operations/local-apple-silicon.md) |
-| Apple Silicon Mac, no containers | `mac-native` | [Native path](docs/operations/local-apple-silicon.md#native-path) |
+| Apple Silicon Mac, bare-metal core | `mac-native` | [Native path](docs/operations/local-apple-silicon.md#native-path) |
 | Linux, GPU or CPU, Ollama | `linux-gpu`, `linux-cpu`, `linux-native` | [Local on Linux](docs/operations/local-linux.md) |
 | Linux GPU server, vLLM (4x80 GB) | `linux-vllm` | below, and [Compose stack with vLLM](docs/operations/local-stack.md) |
 
@@ -204,7 +204,8 @@ The CLI manages store and runtime lifetimes; server commands keep them open whil
 ## Run locally (macOS and Linux)
 
 Ollama runs natively; Neo4j, the collector and SigNoz run in containers, or with `target.mode: native`
-(`mac-native`, `linux-native`) as Homebrew or system services with no containers. `spec.models.local.profile`
+(`mac-native`, `linux-native`) Neo4j is a Homebrew or system service and Nexo runs from the `.venv`: a
+bare-metal core, with containers only for telemetry and add-ons. `spec.models.local.profile`
 in `nexo.yaml` matches the machine: for example `m1-max-64` / `m5-pro-24` on Apple Silicon,
 `gpu-24` (VRAM) or `cpu-64` (RAM) on Linux. `make env` detects it; pass `PROFILE=` to override.
 
@@ -213,7 +214,7 @@ make env PRESET=mac-single                   # or linux-cpu / linux-gpu; PROFILE
 make up                                     # pull/start the profile's models and container services
 make check
 
-# One Mac, no containers: Homebrew's Neo4j, Ollama and Nexo from the .venv
+# One Mac, bare-metal core: Homebrew's Neo4j, Ollama and Nexo from the .venv (telemetry in containers)
 make env PRESET=mac-native && make neo4j-init && brew services start neo4j
 make up && make check
 ```
