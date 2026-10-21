@@ -14,7 +14,7 @@ from socketserver import BaseServer
 from typing import NamedTuple
 
 from langchain_core.language_models import BaseChatModel
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 
 from nexo.agents.investigator import Investigator
 from nexo.agents.models import InvestigationScope
@@ -39,6 +39,7 @@ from nexo.llm import (
 from nexo.logging_setup import configure_logging
 from nexo.mcp_server import build_mcp_server
 from nexo.orchestration.graph import workflow_mermaid
+from nexo.orchestration.state import ReviewDecision, describe_errors
 from nexo.review_inbox import InboxAdapter, build_server
 from nexo.review_ui import ReviewApp, check_loopback, make_server
 from nexo.setup.commands import add_parser as add_setup_parser
@@ -134,12 +135,16 @@ def _summary(result: RunResult) -> str:
 
 def _review(args: argparse.Namespace) -> int:
 
-    decision = {
-        "approval_status": "approved" if args.approve else "rejected",
-        "reviewer": args.reviewer,
-        "comment": args.comment,
-        "acknowledged_findings": args.acknowledge_findings,
-    }
+    try:
+        decision = ReviewDecision(
+            approval_status="approved" if args.approve else "rejected",
+            reviewer=args.reviewer,
+            comment=args.comment,
+            acknowledged_findings=args.acknowledge_findings,
+        )
+    except ValidationError as exc:
+        log.error("invalid decision: %s", describe_errors(exc))
+        return 2
     with open_runtime(get_settings()) as runtime:
         result = runtime.review(args.thread_id, decision)
         _emit(result, "%s", _summary(result))

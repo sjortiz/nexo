@@ -13,7 +13,7 @@ sources:
     title: build_graph
   - id: state
     resource: ../../src/nexo/orchestration/state.py
-    title: GraphState, RouteDecision, ReviewDecision
+    title: GraphState, RouteDecision, ReviewDecision, ReviewPacket
   - id: test-graph
     resource: ../../tests/test_graph.py
     title: Orchestration tests
@@ -68,7 +68,7 @@ under the default, `on-findings`, an answer with any finding pauses. State keys 
 
 **compliance** — runs [compliance checks](compliance-checks.md). Unless the
 [review policy](../operations/human-review.md#review-policy) approves the answer as `system:auto`, it
-then pauses with `interrupt()`:
+then pauses with `interrupt()`, passing a `ReviewPacket` as JSON:[^state]
 
 ```json
 {"request_id": "...", "user_query": "...", "draft_answer": "...", "citations": ["chk_..."],
@@ -93,5 +93,5 @@ a transient vLLM error retries the investigation once; a review survives a proce
 SQLite checkpointer; one trace covers request, nodes and the agent.[^test-graph]
 
 [^graph]: build_graph
-[^state]: GraphState, RouteDecision, ReviewDecision
+[^state]: GraphState, RouteDecision, ReviewDecision, ReviewPacket
 [^test-graph]: Orchestration tests

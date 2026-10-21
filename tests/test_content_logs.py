@@ -15,6 +15,7 @@ from opentelemetry.sdk._logs.export import (
 
 from nexo.config import Settings
 from nexo.logging_setup import CONTENT_LOGGER, JsonFormatter, configure_logging
+from nexo.orchestration.state import ReviewDecision
 from nexo.service import content_gate, run_sensitivity
 from nexo.setup import check
 from nexo.setup.render import build_env
@@ -95,7 +96,7 @@ def _answered(settings, level, question=QUESTION, **review):
         "reviewer": "ana",
         "acknowledged_findings": True,
     }
-    return rt.review("c1", decision | review)
+    return rt.review("c1", ReviewDecision(**(decision | review)))
 
 
 @pytest.mark.parametrize("threshold", THRESHOLDS)

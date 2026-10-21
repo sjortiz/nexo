@@ -18,6 +18,7 @@ from langchain_core.language_models.fake_chat_models import GenericFakeChatModel
 from langchain_core.messages import AIMessage
 from langchain_openai import ChatOpenAI
 from langgraph.checkpoint.memory import InMemorySaver
+from langgraph.types import Command
 from opentelemetry.sdk._logs import LoggerProvider
 from opentelemetry.sdk._logs.export import (
     InMemoryLogRecordExporter,
@@ -34,6 +35,7 @@ from nexo.orchestration.graph import (
     workflow_mermaid,
     traced_node,
 )
+from nexo.orchestration.state import ReviewDecision
 from nexo.service import RunResult, Runtime, _outcome, open_checkpointer
 from nexo.storage.sensitive_data import RegexDetector
 from nexo.telemetry import OtelLogHandler, SESSION_ID, get_tracer, query_attributes
@@ -102,10 +104,9 @@ def runtime(settings, investigator, router_replies=None, checkpointer=None) -> R
 
 
 def _review(result: RunResult) -> dict[str, Any]:
-    """Return the pending review payload, failing if the thread is not paused for review."""
+    """Return the pending review packet as JSON, failing if the thread is not paused."""
     assert result.pending_review is not None, result
-    # dict(): pylint reads the field's default (None), not its declared type.
-    return dict(result.pending_review)
+    return result.pending_review.model_dump(mode="json")
 
 
 def _state(rt: Runtime, thread_id: str) -> dict[str, Any]:
@@ -124,7 +125,9 @@ def test_happy_path_pauses_for_review_then_releases_answer(settings):
     assert _review(paused)["draft_answer"].startswith("Acme acquired Beta")
     assert _review(paused)["compliance_report"]["blocking"] is False
 
-    done = rt.review("t1", {"approval_status": "approved", "reviewer": "analyst@corp"})
+    done = rt.review(
+        "t1", ReviewDecision(approval_status="approved", reviewer="analyst@corp")
+    )
     assert done.status == "completed" and done.approval_status == "approved"
     assert done.final_response == grounded_output().answer
     assert len(investigator.calls) == 1  # resume did not re-run the agent
@@ -141,20 +144,24 @@ def test_rejected_review_withholds_answer(settings):
     rt.start("q", thread_id="t2")
     done = rt.review(
         "t2",
-        {"approval_status": "rejected", "reviewer": "a", "comment": "insufficient"},
+        ReviewDecision(
+            approval_status="rejected", reviewer="a", comment="insufficient"
+        ),
     )
     assert done.approval_status == "rejected" and done.final_response is None
 
 
 def test_invalid_review_input_re_interrupts(settings):
-    """An invalid decision re-pauses with an error and a valid one then completes."""
+    """A raw resume the graph cannot validate re-pauses with an error; a valid one completes."""
     rt = runtime(settings, FakeInvestigator([grounded_output()]))
     rt.start("q", thread_id="t3")
-    again = rt.review("t3", {"approval_status": "maybe"})
+    config = {"configurable": {"thread_id": "t3"}}
+    rt.graph.invoke(Command(resume={"approval_status": "maybe"}), config)
+    again = rt.status("t3")
     assert again.status == "awaiting_review" and _review(again)["error"]
     assert (
         rt.review(
-            "t3", {"approval_status": "approved", "reviewer": "a"}
+            "t3", ReviewDecision(approval_status="approved", reviewer="a")
         ).approval_status
         == "approved"
     )
@@ -169,14 +176,16 @@ def test_blocking_findings_require_acknowledgement(settings):
     paused = rt.start("q", thread_id="t4")
     codes = {f["code"] for f in _review(paused)["compliance_report"]["findings"]}
     assert "ungrounded_citations" in codes
-    blocked = rt.review("t4", {"approval_status": "approved", "reviewer": "a"})
+    blocked = rt.review("t4", ReviewDecision(approval_status="approved", reviewer="a"))
     assert (
         blocked.status == "awaiting_review"
         and "acknowledged_findings" in _review(blocked)["error"]
     )
     ok = rt.review(
         "t4",
-        {"approval_status": "approved", "reviewer": "a", "acknowledged_findings": True},
+        ReviewDecision(
+            approval_status="approved", reviewer="a", acknowledged_findings=True
+        ),
     )
     assert ok.approval_status == "approved"
 
@@ -242,7 +251,9 @@ def test_outcome_says_who_approved(settings):
     """An approved thread names its reviewer; status stays the lifecycle state."""
     rt = runtime(settings, FakeInvestigator([grounded_output()]))
     assert rt.start("q", thread_id="o1").outcome == "awaiting review"
-    done = rt.review("o1", {"approval_status": "approved", "reviewer": "analyst@corp"})
+    done = rt.review(
+        "o1", ReviewDecision(approval_status="approved", reviewer="analyst@corp")
+    )
     assert done.status == "completed" and done.outcome == "approved by analyst@corp"
     assert rt.status("o1").outcome == "approved by analyst@corp"
 
@@ -252,7 +263,8 @@ def test_outcome_says_a_reviewer_rejected(settings):
     rt = runtime(settings, FakeInvestigator([grounded_output()]))
     rt.start("q", thread_id="o2")
     done = rt.review(
-        "o2", {"approval_status": "rejected", "reviewer": "a", "comment": "unverified"}
+        "o2",
+        ReviewDecision(approval_status="rejected", reviewer="a", comment="unverified"),
     )
     assert done.status == "completed" and done.outcome == "rejected by a"
     assert _state(rt, "o2")["review"]["comment"] == "unverified"
@@ -263,7 +275,7 @@ def test_outcome_names_a_reviewer_called_system(settings, decision):
     """A person named `system` is a reviewer, not the compliance node's auto-reject."""
     rt = runtime(settings, FakeInvestigator([grounded_output()]))
     rt.start("q", thread_id="o6")
-    done = rt.review("o6", {"approval_status": decision, "reviewer": "system"})
+    done = rt.review("o6", ReviewDecision(approval_status=decision, reviewer="system"))
     assert done.approval_status == decision
     assert done.outcome == f"{decision} by system"
 
@@ -272,7 +284,9 @@ def test_outcome_shows_a_policy_approval_as_an_approval(settings):
     """The review policy's `system:auto` approval reads as approved, not system-rejected."""
     rt = runtime(settings, FakeInvestigator([grounded_output()]))
     rt.start("q", thread_id="o7")
-    done = rt.review("o7", {"approval_status": "approved", "reviewer": "system:auto"})
+    done = rt.review(
+        "o7", ReviewDecision(approval_status="approved", reviewer="system:auto")
+    )
     assert done.outcome == "approved by system:auto"
 
 
@@ -384,7 +398,7 @@ def test_review_of_unknown_thread_is_refused(settings):
     """Reviewing a thread that is not paused raises ValueError."""
     with pytest.raises(ValueError, match="not awaiting review"):
         runtime(settings, FakeInvestigator([grounded_output()])).review(
-            "nope", {"approval_status": "approved"}
+            "nope", ReviewDecision(approval_status="approved", reviewer="a")
         )
 
 
@@ -398,7 +412,7 @@ def test_review_survives_process_restart_with_sqlite(settings):
     investigator = FakeInvestigator([grounded_output()])
     with open_checkpointer(settings) as saver:  # new "process"
         done = runtime(settings, investigator, checkpointer=saver).review(
-            "t11", {"approval_status": "approved", "reviewer": "a"}
+            "t11", ReviewDecision(approval_status="approved", reviewer="a")
         )
     assert done.approval_status == "approved" and not investigator.calls
 
@@ -542,7 +556,9 @@ def test_the_request_span_says_who_asked_and_which_question(settings, spans):
     )
     rt = runtime(keyed, FakeInvestigator([grounded_output()]))
     started = rt.start(question, thread_id="t-id", user="ana")
-    rt.review(started.thread_id, {"approval_status": "approved", "reviewer": "rev"})
+    rt.review(
+        started.thread_id, ReviewDecision(approval_status="approved", reviewer="rev")
+    )
     workflows = [
         s
         for s in spans.get_finished_spans()
@@ -590,3 +606,20 @@ def test_a_failing_node_still_records_its_error(spans):
     )
     assert span.status.status_code == StatusCode.ERROR
     assert [e for e in span.events if e.name == "exception"]
+
+
+def test_cli_review_reports_an_invalid_decision_without_opening_the_runtime(
+    settings, capsys
+):
+    """`nexo review` validates the decision first and says what is wrong."""
+
+    def no_runtime(_settings):
+        raise AssertionError("the runtime must not open for an invalid decision")
+
+    with (
+        patch("nexo.cli.get_settings", lambda: settings),
+        patch("nexo.cli.open_runtime", no_runtime),
+    ):
+        code = main(["review", "t1", "--approve", "--reviewer", ""])
+    assert code == 2
+    assert "invalid decision: reviewer:" in capsys.readouterr().err

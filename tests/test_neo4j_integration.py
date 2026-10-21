@@ -32,6 +32,7 @@ from nexo.agents.tools import (
 )
 from nexo.mcp_server import build_mcp_server
 from nexo.orchestration.graph import GraphDependencies, build_graph
+from nexo.orchestration.state import ReviewDecision
 from nexo.service import Runtime
 from nexo.storage.graph_store import GraphStore, QueryLimits, _refresh_derived
 from nexo.storage.ingest import (
@@ -637,17 +638,17 @@ def test_end_to_end_ingest_investigate_approve(store, settings, chunk_store):
     )
     assert paused.status == "awaiting_review"
     assert paused.pending_review is not None
-    # dict(): pylint reads the field's default (None), not its declared type.
-    review = dict(paused.pending_review)
-    assert review["citations"] == [chunk_id]
-    assert review["compliance_report"]["blocking"] is False
+    assert paused.pending_review.citations == [chunk_id]
+    assert paused.pending_review.blocking is False
     assert _last_tool_payload(client.requests[1])["rows"][0]["path"] == [
         "Acme Holdings",
         "Beta Labs",
         "Gamma Clinics",
     ]
 
-    done = rt.review("e2e", {"approval_status": "approved", "reviewer": "analyst"})
+    done = rt.review(
+        "e2e", ReviewDecision(approval_status="approved", reviewer="analyst")
+    )
     assert done.final_response.startswith("Acme owns Beta Labs")
 
 

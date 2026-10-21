@@ -39,10 +39,16 @@ from nexo.config import Settings
 from nexo.llm import invoke_structured
 from nexo.orchestration.compliance import (
     AUTO_REVIEWER,
+    ComplianceReport,
     auto_approves,
     run_compliance_checks,
 )
-from nexo.orchestration.state import GraphState, ReviewDecision, RouteDecision
+from nexo.orchestration.state import (
+    GraphState,
+    ReviewDecision,
+    ReviewPacket,
+    RouteDecision,
+)
 from nexo.storage.schemas import Sensitivity
 from nexo.storage.sensitive_data import NoopDetector, SensitiveDataDetector
 from nexo.storage.vector_store import ChunkFilter
@@ -167,10 +173,10 @@ def _router_node(deps: GraphDependencies) -> Callable[..., dict[str, Any]]:
                     max_attempts=2,
                     config=config,
                 )
+            except GraphBubbleUp:
+                raise
             # Fail closed: whatever goes wrong, an unvalidated request never reaches the agent.
             except Exception as exc:  # pylint: disable=broad-exception-caught
-                if isinstance(exc, GraphBubbleUp):
-                    raise
                 return reject(f"router unavailable ({type(exc).__name__})")
         if decision.target == "rejected":
             return reject(decision.reason)
@@ -247,6 +253,23 @@ def _investigator_node(deps: GraphDependencies) -> Callable[..., dict[str, Any]]
     return investigator
 
 
+def _decision_error(
+    raw: Any, report: ComplianceReport
+) -> str | list[dict[str, Any]] | None:
+    """Why the compliance node cannot accept this resume value, or None if it can."""
+    try:
+        decision = ReviewDecision.model_validate(raw)
+    except ValidationError as exc:
+        return exc.errors(include_url=False, include_input=False)
+    if (
+        decision.approval_status == "approved"
+        and report.blocking
+        and not decision.acknowledged_findings
+    ):
+        return "blocking findings: set acknowledged_findings=true to approve"
+    return None
+
+
 def _compliance_node(deps: GraphDependencies) -> Callable[..., dict[str, Any]]:
     """Node 3: check the draft and pause for a person's decision (or the review policy's)."""
     policy = deps.settings.review_policy
@@ -290,37 +313,21 @@ def _compliance_node(deps: GraphDependencies) -> Callable[..., dict[str, Any]]:
                 "final_response": latest.answer,
             }
 
-        request = {
-            "request_id": state.get("request_id"),
-            "user_query": state.get("user_query"),
-            "draft_answer": latest.answer,
-            "citations": latest.citations,
-            "compliance_report": report.as_state(),
-            "resume_with": ReviewDecision.model_json_schema(),
-        }
-        while True:
-            # Pauses the run and persists state; resumes with Command(resume=...).
-            raw = interrupt(request)
-            try:
-                decision = ReviewDecision.model_validate(raw)
-            except ValidationError as exc:
-                request = {
-                    **request,
-                    "error": exc.errors(include_url=False, include_input=False),
-                }
-                continue
-            if (
-                decision.approval_status == "approved"
-                and report.blocking
-                and not decision.acknowledged_findings
-            ):
-                request = {
-                    **request,
-                    "error": "blocking findings: set acknowledged_findings=true to approve",
-                }
-                continue
-            break
+        packet = ReviewPacket(
+            request_id=state["request_id"],
+            user_query=state["user_query"],
+            draft_answer=latest.answer,
+            citations=latest.citations,
+            compliance_report=report,
+            resume_with=ReviewDecision.model_json_schema(),
+        )
+        # Pauses the run and persists state; resumes with Command(resume=...).
+        raw = interrupt(packet.model_dump(mode="json"))
+        while (error := _decision_error(raw, report)) is not None:
+            packet.error = error
+            raw = interrupt(packet.model_dump(mode="json"))
 
+        decision = ReviewDecision.model_validate(raw)
         approved = decision.approval_status == "approved"
         return {
             "approval_status": decision.approval_status,

@@ -5,6 +5,7 @@ from __future__ import annotations
 import pytest
 
 from nexo.agents.redaction import ChunkRedactor
+from nexo.orchestration.state import ReviewDecision
 from nexo.service import Runtime, open_checkpointer
 from nexo.storage.schemas import Sensitivity
 from nexo.storage.sensitive_data import RegexDetector
@@ -12,7 +13,7 @@ from tests.conftest import make_chunk
 from tests.test_graph import CHUNK, FakeInvestigator, grounded_output, runtime
 
 EMAIL = "jane.roe@beta.example"
-APPROVE = {"approval_status": "approved", "reviewer": "a"}
+APPROVE = ReviewDecision(approval_status="approved", reviewer="a")
 
 
 def _paused(settings, saver, *thread_ids, chunks=None) -> Runtime:
@@ -33,7 +34,16 @@ def test_pending_reviews_lists_paused_threads_newest_first(settings, backend):
         assert [r.thread_id for r in listed] == ["t3", "t2", "t1"]
         assert all(r.status == "awaiting_review" for r in listed)
         assert listed[0] == rt.status("t3")
-        assert "draft_answer" in (listed[0].pending_review or {})
+        assert listed[0].pending_review is not None
+        assert listed[0].paused_at > listed[1].paused_at > listed[2].paused_at
+
+
+def test_paused_at_is_set_only_while_a_thread_waits(settings):
+    """A paused thread says when it paused; a reviewed one does not."""
+    with open_checkpointer(settings) as saver:
+        rt = _paused(settings, saver, "t1")
+        assert rt.status("t1").paused_at is not None
+        assert rt.review("t1", APPROVE).paused_at is None
 
 
 @pytest.mark.parametrize("backend", ["memory", "sqlite"])
@@ -102,8 +112,8 @@ def test_review_passages_reads_cited_chunks_within_clearance(settings, chunk_sto
     with open_checkpointer(settings) as saver:
         rt = _paused(settings, saver, "t1", chunks=chunk_store)
         [passage] = rt.review_passages("t1", "internal")
-    assert passage["status"] == "shown" and passage["text"] == "Acme bought Beta."
-    assert passage["classification"] == "internal" and passage["source"] == "Deal"
+    assert passage.status == "shown" and passage.text == "Acme bought Beta."
+    assert passage.classification == "internal" and passage.source == "Deal"
 
 
 def test_review_passages_withholds_chunks_above_clearance(settings, chunk_store):
@@ -116,8 +126,8 @@ def test_review_passages_withholds_chunks_above_clearance(settings, chunk_store)
         rt = _redacting(_paused(settings, saver, "t1", chunks=chunk_store))
         [low] = rt.review_passages("t1", Sensitivity.INTERNAL)
         [high] = rt.review_passages("t1", "phi")
-    assert low["status"] == "withheld" and low["text"] is None
-    assert high["status"] == "shown" and high["text"] == "Acme bought Beta."
+    assert low.status == "withheld" and low.text is None
+    assert high.status == "shown" and high.text == "Acme bought Beta."
 
 
 def test_review_passages_masks_pii_below_clearance(settings, chunk_store):
@@ -133,8 +143,8 @@ def test_review_passages_masks_pii_below_clearance(settings, chunk_store):
         rt = _redacting(_paused(settings, saver, "t1", chunks=chunk_store))
         [masked] = rt.review_passages("t1", "internal")
         [whole] = rt.review_passages("t1", "pii")
-    assert masked["status"] == "shown" and EMAIL not in masked["text"]
-    assert "[EMAIL]" in masked["text"] and whole["text"] == text
+    assert masked.status == "shown" and EMAIL not in masked.text
+    assert "[EMAIL]" in masked.text and whole.text == text
 
 
 def test_review_passages_without_detector_withholds_instead_of_leaking(
@@ -154,7 +164,7 @@ def test_review_passages_without_detector_withholds_instead_of_leaking(
     with open_checkpointer(settings) as saver:
         rt = _paused(settings, saver, "t1", chunks=chunk_store)
         [passage] = rt.review_passages("t1", "internal")
-    assert passage["status"] == "withheld" and passage["text"] is None
+    assert passage.status == "withheld" and passage.text is None
 
 
 def test_review_passages_reports_missing_chunks_and_refuses_bad_threads(
@@ -163,7 +173,7 @@ def test_review_passages_reports_missing_chunks_and_refuses_bad_threads(
     """A chunk missing from the store is not_found; unpaused threads and missing stores raise."""
     with open_checkpointer(settings) as saver:
         rt = _paused(settings, saver, "t1", chunks=chunk_store)
-        assert rt.review_passages("t1", "phi")[0]["status"] == "not_found"
+        assert rt.review_passages("t1", "phi")[0].status == "not_found"
         with pytest.raises(ValueError, match="not awaiting review"):
             rt.review_passages("nope", "phi")
         rt.chunks = None

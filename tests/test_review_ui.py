@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import threading
 from datetime import datetime, timedelta, timezone
-from types import SimpleNamespace
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -13,6 +12,7 @@ import pytest
 
 from nexo.cli import main
 from nexo.config import Settings
+from nexo.orchestration.state import ReviewDecision, ReviewPassage
 from nexo.review_ui import ReviewApp, make_server
 from nexo.service import RunResult
 
@@ -23,6 +23,7 @@ def packet(question="Who owns A?", blocking=False, answer="B owns A."):
     """Test helper."""
     findings = [{"severity": "block", "code": "phi", "detail": "PHI in draft"}]
     return {
+        "request_id": THREAD,
         "user_query": question,
         "draft_answer": answer,
         "citations": ["chk_1"],
@@ -30,14 +31,8 @@ def packet(question="Who owns A?", blocking=False, answer="B owns A."):
             "findings": findings if blocking else [],
             "blocking": blocking,
         },
+        "resume_with": {},
     }
-
-
-def fake_saver():
-    """A saver whose newest checkpoint is two hours old."""
-    then = datetime.now(timezone.utc) - timedelta(hours=2, minutes=1)
-    stamp = SimpleNamespace(checkpoint={"ts": then.isoformat()})
-    return SimpleNamespace(get_tuple=lambda _config: stamp)
 
 
 class FakeRuntime:
@@ -54,7 +49,6 @@ class FakeRuntime:
                 "text": "A is owned by B",
             }
         ]
-        self.graph = SimpleNamespace(checkpointer=fake_saver())
         self.decisions = []
 
     def pending_reviews(self, limit=50):
@@ -63,7 +57,7 @@ class FakeRuntime:
 
     def review_passages(self, _thread_id, _clearance):
         """Test helper."""
-        return self.passages
+        return [ReviewPassage.model_validate(p) for p in self.passages]
 
     def status(self, thread_id):
         """Test helper."""
@@ -77,14 +71,17 @@ class FakeRuntime:
         return RunResult(
             thread_id=thread_id,
             status="completed",
-            approval_status=decision["approval_status"],
+            approval_status=decision.approval_status,
         )
 
 
 def paused(thread_id=THREAD, **kwargs):
     """Test helper."""
     return RunResult(
-        thread_id=thread_id, status="awaiting_review", pending_review=packet(**kwargs)
+        thread_id=thread_id,
+        status="awaiting_review",
+        pending_review=packet(**kwargs),
+        paused_at=datetime.now(timezone.utc) - timedelta(hours=2, minutes=1),
     )
 
 
@@ -188,12 +185,9 @@ def test_decision_calls_review_with_decision_and_reviewer(button, expected):
     assert runtime.decisions == [
         (
             THREAD,
-            {
-                "approval_status": expected,
-                "reviewer": "ana",
-                "comment": "looks right",
-                "acknowledged_findings": False,
-            },
+            ReviewDecision(
+                approval_status=expected, reviewer="ana", comment="looks right"
+            ),
         )
     ]
 
@@ -202,7 +196,7 @@ def test_reviewer_cannot_be_chosen_by_the_form():
     """Reviewer cannot be chosen by the form."""
     app, runtime = make_app(paused())
     post(app, {"decision": "approve", "reviewer": "mallory"})
-    assert runtime.decisions[0][1]["reviewer"] == "ana"
+    assert runtime.decisions[0][1].reviewer == "ana"
 
 
 def test_blocked_report_cannot_be_approved_without_acknowledgement():
@@ -217,9 +211,9 @@ def test_blocked_report_approves_when_acknowledged_and_rejects_freely():
     """Blocked report approves when acknowledged and rejects freely."""
     app, runtime = make_app(paused(blocking=True))
     assert post(app, {"decision": "approve", "acknowledge": "1"})[0] == 200
-    assert runtime.decisions[0][1]["acknowledged_findings"] is True
+    assert runtime.decisions[0][1].acknowledged_findings is True
     assert post(app, {"decision": "reject"})[0] == 200
-    assert runtime.decisions[1][1]["approval_status"] == "rejected"
+    assert runtime.decisions[1][1].approval_status == "rejected"
 
 
 def test_decision_on_a_thread_not_paused_is_not_sent():
@@ -295,3 +289,11 @@ def test_served_over_http_on_loopback_and_foreign_host_header_refused():
     finally:
         server.shutdown()
         server.server_close()
+
+
+def test_an_invalid_decision_is_shown_on_the_page_and_not_sent():
+    """A decision ReviewDecision refuses (here, an overlong reviewer) is reported, not sent."""
+    app, runtime = make_app(paused(), user="x" * 201)
+    status, page = post(app, {"decision": "approve"})
+    assert status == 400 and "reviewer: String should have at most 200" in page
+    assert not runtime.decisions

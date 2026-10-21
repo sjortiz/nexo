@@ -52,9 +52,8 @@ class ChunkReader(Protocol):  # pylint: disable=too-few-public-methods  # protoc
 
 @dataclass
 class Evidence:
-    """Chunk ids the agent found in graph rows, read, or was refused."""
+    """Chunk ids the agent read, or was refused."""
 
-    discovered: set[str] = field(default_factory=set)
     fetched: dict[str, str] = field(default_factory=dict)  # chunk_id -> sensitivity
     withheld: set[str] = field(default_factory=set)
 
@@ -105,11 +104,6 @@ class InvestigationContext:
         """The finished calls, without slots still reserved by running ones."""
         with self._lock:
             return [c for c in self.calls if c.tool != _RESERVED]
-
-    def record_discovered(self, chunk_ids: set[str]) -> None:
-        """Chunk ids that appeared in graph rows."""
-        with self._lock:
-            self.evidence.discovered |= chunk_ids
 
     def record_fetched(self, sensitivity: dict[str, str], withheld: list[str]) -> None:
         """Chunks whose text the model received, and those withheld from it."""
@@ -328,9 +322,8 @@ class _Call:
         return sent
 
     def reply(self, payload: dict[str, Any], counted: str) -> dict[str, Any]:
-        """Record the chunk ids in a graph result as discovered, then finish."""
+        """List the chunk ids in a graph result for the model, then finish."""
         found = collect_chunk_ids(payload)
-        self.ctx.record_discovered(found)
         trace.get_current_span().set_attribute("nexo.graph.chunk_ids_found", len(found))
         return self.finish({**payload, "chunk_ids_found": sorted(found)}, counted)
 
