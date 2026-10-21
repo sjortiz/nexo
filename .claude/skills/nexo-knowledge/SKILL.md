@@ -29,7 +29,7 @@ Check: you have at least one entity key or chunk id. If not, report what you sea
 
 - Direct relationships, including one entity's roles, owners and suppliers:
   `nexo_neighbors(entity_key)`. It returns both directions.
-- How two entities connect: `nexo_find_paths(from_key, to_key)`, shortest paths of up to 4 hops
+- How two entities connect: `nexo_find_paths(from_key, to_key)`, shortest paths of 3 hops by default, up to 4
   through entities only. Each hop gives its direction and chunk ids.
 - Anything else multi-hop: `nexo_graph_query` with bounded paths (`*1..3`) and a `LIMIT`; exclude
   the lexical relationships `MENTIONED_IN`, `PART_OF`, `NEXT_CHUNK`, `FIRST_CHUNK`.

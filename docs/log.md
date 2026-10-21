@@ -1,5 +1,8 @@
 # Bundle Update Log
 
+## 2026-10-21
+* **Update**: An edge's `evidence` quote keeps the rank of the chunk it came from (`evidence_rank`), and the graph tools drop it above the caller's clearance, so an `internal` edge first stated in a PHI note no longer quotes the note; the quote goes when its chunk stops supporting the edge, and edges written before have no evidence until re-ingested ([Graph store](components/graph-store.md#read-only-enforcement), ADR-0006 amended). An entity whose rank is projected as null counts as PHI. ADR-0006 accepts `withheld` counts as a pairwise oracle for hidden direct edges.
+
 ## 2026-10-20
 * **Update**: `nexo mcp` serves `nexo_find_paths(from_key, to_key, max_hops, max_paths)`, the investigator's path lookup and clearance filter, so MCP clients no longer write multi-hop Cypher; an unknown key and a key above clearance get the same error ([MCP server](components/mcp-server.md)). The investigator's prompt sends one entity's roles, owners and suppliers to `entity_neighbours` ([find_paths and entity_neighbours](components/graph-lookup-tools.md)).
 * **Update**: `GraphStore` is a context manager and every `nexo` command opens the graph with `with`; `review-ui` and `review-inbox` serve through one helper, `--sensitivity` and `--clearance` take their choices from `Sensitivity`, and `nexo eval` builds the redactor only when a judge is set. Commands and output are unchanged.

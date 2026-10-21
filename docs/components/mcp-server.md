@@ -82,7 +82,9 @@ forms automatically, without a person, defeats the check: use a client that asks
   with no rank counts as PHI, and paths traverse entities only and never carry chunk text. A hop's
   `evidence` is a verbatim quote from one chunk: it is shown only when that chunk's rank (`evidence_rank`)
   is within the clearance, so a visible edge can come back without it
-  ([graph store](graph-store.md#read-only-enforcement)).
+  ([graph store](graph-store.md#read-only-enforcement)). `withheld` is a count, so it says that something
+  is hidden: with `max_hops=1` and two visible keys it tells whether a hidden edge joins them. That is
+  accepted as a residual in [ADR-0006](../decisions/adr-0006-sensitivity-and-caller-clearance.md).
 - **Identity.** MCP over stdio has no per-user identity, so run one server per clearance.
 - **Errors.** Anticipated failures (unsafe Cypher, unknown entity type, graph unavailable) come back as
   tool errors with a message; unexpected exceptions are masked and logged on the server.
