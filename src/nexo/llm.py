@@ -152,7 +152,7 @@ def invoke_structured(
 
 
 @dataclass(frozen=True)
-class ModelRow:
+class ModelRow:  # pylint: disable=too-many-instance-attributes  # one report row
     """One role's model and server, and what `--check` found out about them. No secrets."""
 
     role: str

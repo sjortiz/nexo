@@ -217,7 +217,7 @@ def _setup_with(workdir, monkeypatch, machines, addons=None):
     )
     casting = load_casting(path)
     locked = lock(casting, path, workdir)
-    on = {n for n, enabled in locked["enabled"].items() if enabled}
+    on = {n for n, enabled in locked.enabled.items() if enabled}
     host = detect_host(casting, Machines(FakePodman(**machines)))
     return casting, host, on
 

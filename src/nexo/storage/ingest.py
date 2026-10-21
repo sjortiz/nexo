@@ -185,7 +185,7 @@ class _Kept(NamedTuple):
 class KnowledgeGraphIngestor:
     """Chunk, classify, extract, ground, resolve and write one document at a time."""
 
-    def __init__(
+    def __init__(  # pylint: disable=too-many-arguments  # keyword-only wiring
         self,
         *,
         llm: BaseChatModel,

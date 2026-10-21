@@ -429,7 +429,7 @@ def _chunk_store_failure(exc: Exception) -> ToolFailure:
     return ToolFailure(name, _CHUNK_STORE_DOWN, error_type=name)
 
 
-def build_investigation_tools(
+def build_investigation_tools(  # pylint: disable=too-many-arguments  # keyword-only wiring
     *,
     graph: GraphReader,
     chunks: ChunkReader,

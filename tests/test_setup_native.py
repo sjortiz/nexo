@@ -288,7 +288,7 @@ def test_native_check_warns_without_an_engine(workdir, monkeypatch):
     monkeypatch.setattr(check, "context_findings", lambda _c: [])
     monkeypatch.setattr(check, "models_finding", lambda *_a: None)
     monkeypatch.setattr(check, "_run", lambda *_a: "")
-    on = {n for n, enabled in locked["enabled"].items() if enabled}
+    on = {n for n, enabled in locked.enabled.items() if enabled}
     found = {f.name: f for f in check.preflight(casting, locked, on, MAC, store)}
     assert not found["engine"].ok and found["engine"].advisory
     assert "need it" in found["engine"].detail
