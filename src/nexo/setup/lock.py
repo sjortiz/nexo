@@ -30,13 +30,16 @@ def casting_hash(path: Path) -> str:
 def enabled_components(casting: Casting) -> dict[str, bool]:
     """Every component and whether this setup turns it on."""
     spec = casting.spec
-    if spec.target.mode == "native":  # Neo4j on the host; it still needs its password
-        return {name: name == "neo4j" for name in COMPONENTS}
     overrides = {
         name: c.enabled for name, c in spec.addons.items() if c.enabled is not None
     }
-    enabled = {name: name in DEFAULT_ON for name in COMPONENTS}
-    enabled |= overrides
+    if spec.target.mode == "native":
+        # Neo4j runs on the host but still needs its password; telemetry is containers.
+        telemetry = {"collector", "signoz"} if spec.telemetry.enabled else set()
+        default = {"neo4j"} | telemetry
+    else:
+        default = DEFAULT_ON
+    enabled = {name: name in default for name in COMPONENTS} | overrides
     enabled["vllm"] = spec.models.provider == "vllm"
     return enabled
 

@@ -9,10 +9,9 @@ import platform
 import re
 import shutil
 import socket
-import subprocess
 import urllib.request
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
@@ -31,7 +30,8 @@ from nexo.local_profiles import (
 from nexo.secret_store import SecretStore, SecretStoreError
 from nexo.setup.components import MEMORY_GB
 from nexo.setup.envfile import generated_keys, missing_required, read_env
-from nexo.setup.render import RENDER_DIR, Host
+from nexo.setup.engine import ROOTFUL_SOCKET, Machines, run_command
+from nexo.setup.render import RENDER_DIR, Host, containers
 from nexo.setup.schema import Casting
 from nexo.setup.status import parse_ps
 
@@ -39,6 +39,8 @@ from nexo.setup.status import parse_ps
 MEMORY_SHARE, VM_SHARE = 0.85, 0.9
 CDI_DIRS = ("/etc/cdi", "/var/run/cdi")
 # Findings that stop check and up unless --force: the machine may still cope.
+# A Podman VM this many times larger than the containers (and 4 GiB more) is oversized.
+OVERSIZE_RATIO, OVERSIZE_GB = 3, 4
 FORCEABLE = {"profile", "memory", "podman vm", "host", "gpu", "ports"}
 
 
@@ -54,17 +56,17 @@ class Finding:
 
 
 def _run(*command: str) -> str:
-    try:
-        result = subprocess.run(
-            command, capture_output=True, text=True, timeout=30, check=False
-        )
-    except (OSError, subprocess.TimeoutExpired):
-        return ""
-    return result.stdout.strip() if result.returncode == 0 else ""
+    """A command's stdout; blank when it fails or is missing."""
+    ran = run_command(command)
+    return ran.out if ran.code == 0 else ""
 
 
-def detect_host(casting: Casting) -> Host:
-    """The OS, container engine and its socket, unless the setup file fixes them."""
+def detect_host(casting: Casting, machines: Machines | None = None) -> Host:
+    """The OS, container engine and its socket, unless the setup file fixes them.
+
+    With a Podman machine named in the setup, its connection is pinned; on macOS the
+    default machine is described too (memory, rootful), without pinning anything.
+    """
     target = casting.spec.target
     os_name = target.host
     if os_name == "auto":
@@ -72,16 +74,27 @@ def detect_host(casting: Casting) -> Host:
     engine = target.engine
     if engine == "auto":
         engine = "podman" if shutil.which("podman") else "docker"
-    sock = "/var/run/docker.sock"
-    if engine == "podman":
-        path = _run("podman", "info", "--format", "{{.Host.RemoteSocket.Path}}")
-        sock = path.removeprefix("unix://") or sock
-    return Host(
+    host = Host(
         os=os_name,
         engine=engine,
-        socket=sock,
+        socket="/var/run/docker.sock",
         hostname=socket.gethostname().split(".")[0],
     )
+    if engine != "podman":
+        return host
+    if target.machine or os_name == "macos":
+        machines = machines or Machines()
+        machine = machines.inspect(target.machine or "")
+        host = replace(
+            host,
+            machine=machine,
+            running=machines.running(),
+            connection=machine.connection if machine and target.machine else "",
+        )
+    if host.machine and host.connection and host.machine.rootful:
+        return replace(host, socket=ROOTFUL_SOCKET)
+    path = _run(*host.cli, "info", "--format", "{{.Host.RemoteSocket.Path}}")
+    return replace(host, socket=path.removeprefix("unix://") or host.socket)
 
 
 def machine_memory_gb() -> float | None:
@@ -137,11 +150,8 @@ def detect_profile(
 
 
 def engine_memory_gb(host: Host) -> float | None:
-    """The Podman VM's memory limit on macOS (containers cannot use more)."""
-    if host.engine != "podman" or host.os != "macos":
-        return None
-    mib = _run("podman", "machine", "inspect", "--format", "{{.Resources.Memory}}")
-    return int(mib.splitlines()[0]) / 1024 if mib else None
+    """The Podman VM's memory limit (containers cannot use more); None without a VM."""
+    return host.machine.memory_gb if host.machine else None
 
 
 def ollama_models(port: int) -> set[str] | None:
@@ -317,10 +327,10 @@ def _listening(port: int) -> bool:
         return probe.connect_ex(("127.0.0.1", port)) == 0
 
 
-def _container_ports(engine: str) -> dict[int, tuple[str, str]]:
+def _container_ports(host: Host) -> dict[int, tuple[str, str]]:
     """Host port -> (compose project, container) for the engine's running containers."""
     owners: dict[int, tuple[str, str]] = {}
-    for container in parse_ps(_run(engine, "ps", "--format", "json")):
+    for container in parse_ps(_run(*host.cli, "ps", "--format", "json")):
         labels = container.get("Labels") or {}
         if isinstance(labels, str):  # docker: "key=value,key=value"
             labels = dict(item.partition("=")[::2] for item in labels.split(","))
@@ -354,7 +364,7 @@ def ports_finding(compose: dict[str, Any], host: Host) -> Finding:
             if not _listening(port):
                 continue
             if owners is None:
-                owners = _container_ports(host.engine)
+                owners = _container_ports(host)
             project, name = owners.get(port, ("", ""))
             if project != compose["name"]:
                 owner = f"{name}, stack {project}" if name else _process_on(port)
@@ -465,15 +475,21 @@ def preflight(
         review_finding(casting),
         content_finding(casting),
     ]
-    if not native:
+    if containers(
+        casting, on
+    ):  # native with no telemetry and no add-ons needs no engine
+        compose_ok = bool(_run(host.engine, "compose", "version"))
         findings.insert(
             0,
             Finding(
                 "engine",
-                bool(_run(host.engine, "compose", "version")),
-                f"{host.engine} compose ({host.os})",
+                compose_ok,
+                f"{host.engine} compose ({host.os})"
+                + ("" if compose_ok else "; telemetry and add-ons need it"),
+                advisory=native,  # native: Nexo itself runs without containers
             ),
         )
+        findings[1:1] = machine_findings(casting, host, on)
     bolt = casting.spec.ports.bolt
     if "neo4j" in on and (
         neo4j := neo4j_finding(store, host, lock["name"], bolt, native=native)
@@ -567,8 +583,15 @@ def memory_findings(
     casting: Casting, lock: dict[str, Any], on: set[str], host: Host
 ) -> list[Finding]:
     """Does the setup fit this machine (its real memory) and the Podman VM?"""
+    native = casting.spec.target.mode == "native"
     budget = memory_budget(casting, lock, on)
-    containers = round(sum(v for k, v in budget.items() if k != "models"), 1)
+    # What the VM holds: not the models, and in native mode not Neo4j (the host runs it).
+    in_vm = {
+        k: v
+        for k, v in budget.items()
+        if k != "models" and not (native and k == "neo4j")
+    }
+    containers_gb = round(sum(in_vm.values()), 1)
     total = round(sum(budget.values()), 1)
     parts = ", ".join(f"{k} {v}" for k, v in budget.items())
     machine = machine_memory_gb()
@@ -596,22 +619,77 @@ def memory_findings(
             ),
         )
     )
-    if casting.spec.target.mode != "native" and (vm := vm_finding(containers, host)):
+    if in_vm and (vm := vm_finding(containers_gb, host, oversize=native)):
         findings.append(vm)
     return findings
 
 
-def vm_finding(containers: float, host: Host) -> Finding | None:
-    """The containers fit the Podman VM; if not, the --memory to set (whole GiB)."""
+def vm_finding(
+    containers_gb: float, host: Host, *, oversize: bool = False
+) -> Finding | None:
+    """The containers fit the Podman VM; if not, the --memory to set (whole GiB).
+
+    oversize: also say when the VM is far larger than they need (it competes with the models).
+    """
     vm = engine_memory_gb(host)
     if vm is None:
         return None
-    fits = containers <= vm * VM_SHARE
-    detail = f"containers {containers} GB of {vm:.1f} GB"
+    fits = containers_gb <= vm * VM_SHARE
+    detail = f"containers {containers_gb} GB of {vm:.1f} GB"
+    needed = math.ceil(containers_gb / VM_SHARE) * 1024
+    command = f"podman machine stop && podman machine set --memory {needed} && podman machine start"
     if not fits:
-        needed = math.ceil(containers / VM_SHARE) * 1024
-        detail += (
-            f"; raise it: podman machine stop && podman machine set --memory {needed}"
-            " && podman machine start"
+        return Finding("podman vm", False, f"{detail}; raise it: {command}")
+    if (
+        oversize
+        and vm >= OVERSIZE_RATIO * containers_gb
+        and vm - containers_gb >= OVERSIZE_GB
+    ):
+        return Finding(
+            "podman vm",
+            False,
+            f"{detail}: far more than they need, and that memory is not for the models;"
+            f" shrink it: {command}",
+            advisory=True,
         )
-    return Finding("podman vm", fits, detail)
+    return Finding("podman vm", True, detail)
+
+
+def machine_findings(casting: Casting, host: Host, on: set[str]) -> list[Finding]:
+    """Which Podman machine is active against the one the setup names, and its socket."""
+    name = casting.spec.target.machine
+    machine = host.machine
+    findings = []
+    if name and machine is None:
+        return [
+            Finding(
+                "podman machine",
+                False,
+                f"{name} does not exist: podman machine init --rootful {name}",
+            )
+        ]
+    if name:
+        others = [other for other in host.running if other != name]
+        if machine.running:
+            detail, ok = f"{name} is active, as configured", True
+        elif others:
+            detail, ok = (
+                f"{', '.join(others)} is active, {name} is configured: up --switch-machine"
+                f" stops {others[0]} (and every container on it) and starts {name}",
+                False,
+            )
+        else:
+            detail, ok = f"{name} is configured and stopped; up starts it", True
+        findings.append(Finding("podman machine", ok, detail))
+    if machine and "hostMetrics" in on and not machine.rootful:
+        findings.append(
+            Finding(
+                "podman socket",
+                False,
+                f"hostMetrics mounts {ROOTFUL_SOCKET}, which only a rootful machine has"
+                f" (rootless fails: mkdir {ROOTFUL_SOCKET}: permission denied):"
+                f" podman machine stop {machine.name} && podman machine set --rootful"
+                f" {machine.name} && podman machine start {machine.name}",
+            )
+        )
+    return findings

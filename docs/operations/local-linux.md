@@ -41,7 +41,7 @@ sources:
 | Nexo code and test suite | Verified: the full suite passes in `python:3.12-slim` (Linux, aarch64) with Neo4j 5.26. |
 | Models with Ollama | Same catalog as macOS, with `gpu-<VRAM GB>` or `cpu-<RAM GB>` profiles. |
 | Podman path | Supported: `nexo setup` puts the Nexo container on the host network. |
-| Native path | `target.mode: native` (`linux-native` preset): Neo4j from Neo4j's Debian repository, telemetry off. |
+| Native path | `target.mode: native` (`linux-native` preset): Neo4j from Neo4j's Debian repository; telemetry and add-ons in containers. |
 | Production vLLM on NVIDIA (`linux-vllm` preset) | Linux is the target platform; GPU passthrough is not tested by this project. |
 
 How the pieces fit together, and how to check them with `nexo models --check`:
@@ -87,9 +87,10 @@ Langfuse or Jaeger for one run; `addons:` in `nexo.yaml` keeps them on.[^presets
 
 # Native path
 
-No containers: `target.mode: native` in `nexo.yaml` (the `linux-native` preset) renders only
-`.nexo/render/nexo.env`, with Neo4j on `localhost`, telemetry export off and the password left in
-the secrets store; see [Local on Apple Silicon](local-apple-silicon.md#native-path) for the details.[^native]
+A bare-metal core: `target.mode: native` in `nexo.yaml` (the `linux-native` preset) keeps Nexo,
+Neo4j and Ollama on the machine, with the password in the secrets store. The collector and SigNoz
+(and add-ons) run in containers; `telemetry: { enabled: false }` removes them. See
+[Local on Apple Silicon](local-apple-silicon.md#native-path) for the details.[^native]
 
 1. Neo4j from Neo4j's Debian repository (Ubuntu/Debian; RPM and tarball installs also work).[^neo4j-debian]
 2. Install uv (`curl -LsSf https://astral.sh/uv/install.sh | sh`), then `uv sync && source .venv/bin/activate`.

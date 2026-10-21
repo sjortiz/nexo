@@ -78,19 +78,28 @@ rejected with the field named.[^schema]
 | Setup | Preset (`make env PRESET=...`) |
 |---|---|
 | One Apple Silicon Mac | `mac-single` (the default on macOS) |
-| One Apple Silicon Mac, no containers | `mac-native` (`target.mode: native`) |
+| One Apple Silicon Mac, bare-metal core | `mac-native` (`target.mode: native`) |
 | Two machines over an SSH tunnel | `mac-two-machines` |
 | Linux, CPU only | `linux-cpu` (the default on Linux without an NVIDIA GPU) |
 | Linux, one GPU, Ollama | `linux-gpu` (the default with one) |
-| Linux, no containers | `linux-native` (`target.mode: native`) |
+| Linux, bare-metal core | `linux-native` (`target.mode: native`) |
 | Linux, NVIDIA GPUs, vLLM | `linux-vllm` |
 
 `make env` (`nexo setup init`) fills in `models.local.profile` from this machine's chip and memory
 (Apple Silicon), GPU VRAM or RAM (Linux); `PROFILE=` (`--profile`) chooses another. `target.mode:
-native` runs no containers: Neo4j is this machine's own service, telemetry export is off and
-`.nexo/render/` holds only `nexo.env`; add-ons and patches need `compose`
-([ADR-0020](../decisions/adr-0020-native-target-mode.md)). Kubernetes comes after the compose
-target. Presets live in `examples/setups/`.[^presets]
+native` is a bare-metal core: Nexo, Neo4j and the models run on this machine, and containers hold
+only telemetry (on by default; `telemetry.enabled: false` turns it off) and add-ons. Patches apply
+to container services only, and vLLM needs `compose`. `target.machine` names the Podman machine for
+those containers ([ADR-0020](../decisions/adr-0020-native-target-mode.md)). Kubernetes comes after
+the compose target. Presets live in `examples/setups/`.[^presets]
+
+| Preset | Models | Neo4j | Nexo | Collector, SigNoz | Add-ons |
+|---|---|---|---|---|---|
+| `mac-single`, `mac-two-machines` | host (Ollama) | container | `.venv` or container | containers | containers |
+| `mac-native` | host (Ollama) | host (Homebrew) | `.venv` | containers (Podman machine optional) | containers, opt-in |
+| `linux-cpu`, `linux-gpu` | host (Ollama) | container | `.venv` or container | containers | containers |
+| `linux-native` | host (Ollama) | host (package) | `.venv` | containers | containers, opt-in |
+| `linux-vllm` | containers (NVIDIA) | container | container | containers | containers |
 
 # What the targets do
 
@@ -169,7 +178,7 @@ Langfuse logins are in `~/.config/nexo/config` under `[nexo]`. Secrets found in 
 
 This is per field: `AGENT_MODEL=my-model` keeps the profile's agent URL. Profiles also default
 `LLM_TIMEOUT_S` (300), `AGENT_TIMEOUT_S` (900) and `EXTRACTION_CONCURRENCY`, unless set. Native
-Neo4j and no containers is `target.mode: native`, not hand-edited `.env` settings.
+Neo4j and a bare-metal core is `target.mode: native`, not hand-edited `.env` settings.
 `nexo config --explain` prints each effective setting and where it came from (environment, secrets
 store, `.nexo/render/nexo.env`, `.env`, derived from a profile, or default), secret values redacted.
 `nexo.env` records the `nexo.yaml` it was rendered from; when that file has changed since, every

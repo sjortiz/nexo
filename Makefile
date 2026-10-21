@@ -17,6 +17,7 @@ LANGSMITH ?=
 AGENT_INBOX ?=
 UPGRADE   ?=
 FORCE     ?=
+SWITCH    ?=
 NEXO_SETUP = $(RUN)nexo setup -f $(SETUP)
 ADDONS     = $(if $(LANGFUSE),--addon langfuse) $(if $(JAEGER),--addon jaeger) \
              $(if $(LANGSMITH),--addon langsmith) $(if $(AGENT_INBOX),--addon agentInbox)
@@ -61,8 +62,8 @@ models: ## Pull and start the profile's models in Ollama (PROFILE=m1-max-64 ROLE
 
 ##@ Run
 
-up: ## Start the models and the stack in nexo.yaml (one run: LANGFUSE=1 JAEGER=1 LANGSMITH=1 AGENT_INBOX=1; FORCE=1)
-	$(NEXO_SETUP) up $(ADDONS) $(if $(FORCE),--force)
+up: ## Start the models and the stack in nexo.yaml (one run: LANGFUSE=1 JAEGER=1 LANGSMITH=1 AGENT_INBOX=1; FORCE=1; SWITCH=1 stops the running Podman machine for target.machine)
+	$(NEXO_SETUP) up $(ADDONS) $(if $(FORCE),--force) $(if $(SWITCH),--switch-machine)
 
 down: ## Stop the stack (data volumes are kept)
 	$(NEXO_SETUP) down
