@@ -179,6 +179,21 @@ def test_single_mac_profile_serves_every_role_locally():
     assert settings.embedding_base_url == "http://localhost:11434/v1"
 
 
+def test_reasoning_follows_an_explicitly_set_model():
+    """An explicit model decides reasoning for its JSON role, not the profile's model."""
+    settings = Settings(
+        _env_file=None, local_profile="m1-max-32", extraction_model="gemma4:31b"
+    )
+    assert settings.endpoint("extraction").model == "gemma4:31b"
+    assert settings.endpoint("extraction").reasoning_effort == "none"
+    non_thinking = Settings(
+        _env_file=None,
+        local_profile="m1-max-64",
+        extraction_model="qwen3:30b-a3b-instruct-2507-q4_K_M",
+    )
+    assert non_thinking.endpoint("extraction").reasoning_effort is None
+
+
 def test_small_single_mac_disables_the_judge():
     """A 16 GB Mac profile disables the judge and shares one model for router and agent."""
     settings = Settings(_env_file=None, local_profile="m1-pro-16")

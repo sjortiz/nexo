@@ -340,7 +340,11 @@ class Settings(BaseSettings):
             default(f"{role}_base_url", base_url)
             # Ollama ignores the key; clients need one.
             default(f"{role}_api_key", SecretStr("ollama"))
-            if role != "agent" and needs_reasoning_off(model):
+            # Decide on the model that will run, which may be set explicitly.
+            effective = (
+                getattr(self, f"{role}_model") if f"{role}_model" in explicit else model
+            )
+            if role != "agent" and needs_reasoning_off(effective):
                 default(f"{role}_reasoning_effort", "none")
         embedding_model, embedding_url = placement["embedding"]
         default("embedding_provider", "openai_compatible")
