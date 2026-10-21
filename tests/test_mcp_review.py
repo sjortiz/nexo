@@ -221,7 +221,7 @@ def test_approving_blocked_findings_needs_acknowledgement(settings, chunk_store)
     refused = submit(server, Person(decision="approve"), acknowledge_findings=True)
     assert refused.is_error and "acknowledge" in refused.content[0].text
     assert rt.status("t1").status == "awaiting_review"
-    assert "error" not in (rt.status("t1").pending_review or {})  # graph never saw it
+    assert rt.status("t1").pending_review.error is None  # graph never saw it
     ok = submit(server, Person(decision="approve", acknowledge_findings=True))
     assert ok.structured_content["approval_status"] == "approved"
     other = _paused(settings, blocking=True)
