@@ -160,6 +160,12 @@ class GraphStore:
         """Close the driver and its connections."""
         self._driver.close()
 
+    def __enter__(self) -> GraphStore:
+        return self
+
+    def __exit__(self, *_exc) -> None:
+        self.close()
+
     def session(self, *, write: bool) -> Session:
         """A session on this store's database (the chunk store shares the driver)."""
         return self._driver.session(
