@@ -44,5 +44,19 @@ evidence; and MCP over stdio carries no user identity.
 Tests keep the skill's tool list and `.mcp.json` in sync with the server. Any write access, or an
 investigation tool, would need a new decision.
 
+# Amendment: user-scoped Claude Code installation
+
+The shipped `.mcp.json` and project skill remain unchanged. `nexo mcp install` now offers
+project or user scope (also selected with `--scope`); `uninstall` reverses the chosen scope.
+Registration belongs beside the MCP server command rather than stack setup because it configures
+a client and does not provision services. User scope pins an absolute checkout/runtime and
+settings directory, one explicit clearance, and `MCP_REVIEW_TOOLS=false`. It therefore exposes
+only this decision's read-only retrieval set, even when the settings directory enables the
+review extension from ADR-0019. The optional user skill is an unchanged copy with the same
+pre-approved tool list. Scope changes availability across projects, not authorization.
+
+Claude's CLI owns user configuration writes. Existing entries/skills require an explicit
+update choice, and removal is scoped. See the [installation playbook](../operations/claude-code.md#use-nexo-in-every-project).
+
 [^server]: MCP server
 [^playbook]: Use from Claude Code

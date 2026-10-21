@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import os
 import sys
 from collections.abc import Iterator
 from contextlib import ExitStack, contextmanager, suppress
@@ -39,6 +40,7 @@ from nexo.llm import (
     resolved_models,
 )
 from nexo.logging_setup import configure_logging
+from nexo.mcp_install import add_parser as add_mcp_parser
 from nexo.mcp_server import build_mcp_server
 from nexo.orchestration.graph import workflow_mermaid
 from nexo.orchestration.state import ReviewDecision, describe_errors
@@ -853,15 +855,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     models.set_defaults(handler=_models)
 
-    serve = sub.add_parser(
-        "mcp", help="serve the knowledge graph as read-only MCP tools"
-    )
-    serve.add_argument(
-        "--transport", choices=["stdio", "streamable-http"], default="stdio"
-    )
-    serve.add_argument("--host", default="127.0.0.1")
-    serve.add_argument("--port", type=int, default=8765)
-    serve.set_defaults(handler=_mcp)
+    add_mcp_parser(sub, _mcp)
 
     inbox = sub.add_parser(
         "review-inbox", help="serve the Agent Inbox adapter (opt-in review page)"
@@ -889,6 +883,15 @@ def main(argv: list[str] | None = None) -> int:
     _add_entity_commands(sub)
 
     args = parser.parse_args(argv)
+    if args.command == "mcp":
+        if args.mcp_action:
+            return args.handler(args)
+        if args.directory is not None:
+            try:
+                os.chdir(args.directory.expanduser().resolve(strict=True))
+            except OSError as exc:
+                parser.error(str(exc))
+            get_settings.cache_clear()
     # Logs go to stderr: stdout is the command's JSON, or the protocol for MCP over stdio.
     configure_logging(get_settings())
     # setup renders before it reads; everything else would run on stale settings.
