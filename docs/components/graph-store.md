@@ -47,9 +47,19 @@ Agent-authored Cypher passes three independent layers:
 Rows then pass `redact_above_clearance` (shared by the investigator's query, path and neighbour tools
 and the MCP graph tools). It redacts any map above the caller's clearance, ranked by `sensitivity_rank`
 (entities, edges) or `sensitivity` (chunks, documents). A `MENTIONED_IN` map holds a verbatim `surface`
-and no rank, so it counts as `phi`, as does a level it cannot read. It drops `text`, `search_text` and
-`embedding` from every map at any clearance. Scalar projections (`RETURN e.name`, `RETURN m.surface`)
-carry no rank and pass through.
+and no rank, so it counts as `phi`, as does a level it cannot read or a rank projected as null. It
+drops `text`, `search_text` and `embedding` from every map at any clearance. Scalar projections
+(`RETURN e.name`, `RETURN m.surface`) carry no rank and pass through.
+
+An edge's `evidence` is a verbatim quote from one chunk, while its `sensitivity_rank` is the least
+sensitive of all its chunks: a PHI note and an internal memo stating the same fact make an `internal`
+edge whose quote may be the note's. So each edge also stores `evidence_rank`, the rank of the chunk the
+quote came from (that chunk is its `chunk_id`). New sources lower `sensitivity_rank` but never touch the
+quote; when the quoted chunk stops supporting the edge (its document re-ingested, reclassified or
+withdrawn) the quote and its rank are removed, and the next chunk that states the edge supplies both.
+The redaction drops `evidence` from any map whose `evidence_rank` is missing or above the clearance,
+while the edge itself stays visible. Edges written before this change have no `evidence_rank`, so they
+show no evidence, at any clearance, until a document that states them is ingested again.[^graph-store]
 
 See [ADR-0002](../decisions/adr-0002-read-only-defense-in-depth.md).
 

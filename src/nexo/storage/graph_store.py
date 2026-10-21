@@ -6,11 +6,14 @@ Neo4j's LLM Graph Builder):
     (:Document {source_id, title, doc_type, source_uri, effective_date, sensitivity})
     (:Document)-[:FIRST_CHUNK]->(:Chunk)-[:NEXT_CHUNK]->(:Chunk)-[:PART_OF]->(:Document)
     (:Entity:<EntityType>[:PII][:PHI])-[:MENTIONED_IN {surface, resolution}]->(:Chunk)
-    (:Entity)-[:<RELATION> {chunk_id, chunk_ids, evidence, certainty, valid_at,
-                            extracted_as}]->(:Entity)
+    (:Entity)-[:<RELATION> {chunk_id, chunk_ids, evidence, evidence_rank, certainty,
+                            valid_at, extracted_as}]->(:Entity)
 
-`chunk_id` is the chunk where an entity/edge was first extracted;
-`chunk_ids` accumulates every supporting chunk across documents. Derived
+`chunk_id` is the chunk where an entity was first extracted, and for an edge
+the chunk its `evidence` quotes, with `evidence_rank` that chunk's rank; when
+that chunk stops supporting the edge the quote goes, and the next chunk that
+states the edge supplies one. `chunk_ids` accumulates every supporting chunk
+across documents. Derived
 properties are recomputed for every touched entity and edge on each replace:
 entity `aliases` from the surfaces on MENTIONED_IN (withdrawing a document
 withdraws the aliases and merges it contributed), and `sensitivity_rank` as
@@ -68,8 +71,8 @@ DATA_MODEL = (
 chunk_id, chunk_ids, source_ids,
                                   sensitivity_rank, proposed_codes_json})
 (:Entity)-[:MENTIONED_IN {surface, resolution}]->(:Chunk)
-(:Entity)-[:<RELATION> {chunk_id, chunk_ids, evidence, certainty, valid_at, extracted_as, \
-sensitivity_rank}]->(:Entity)
+(:Entity)-[:<RELATION> {chunk_id, chunk_ids, evidence, evidence_rank, certainty, valid_at, \
+extracted_as, sensitivity_rank}]->(:Entity)
 (:Entity)-[:RELATED_TO {predicate, ...same properties}]->(:Entity)   \
 # predicate outside the ontology
 EntityType is one of: """
@@ -460,11 +463,18 @@ def _write_domain(tx: ManagedTransaction, entities, mentions, relations) -> None
                 f"""
                 UNWIND $rows AS row
                 MATCH (h:Entity {{key: row.head_key}}), (t:Entity {{key: row.tail_key}})
+                OPTIONAL MATCH (c:Chunk {{chunk_id: row.chunk_id}})
                 MERGE (h)-[r:`{rel_type}` {identity}]->(t)
-                  ON CREATE SET r.chunk_id = row.chunk_id, r.chunk_ids = [], r.extracted_as = [],
-                                r.evidence = row.evidence, r.certainty = row.certainty, r.valid_at = row.valid_at,
+                  ON CREATE SET r.chunk_ids = [], r.extracted_as = [],
+                                r.certainty = row.certainty, r.valid_at = row.valid_at,
                                 r.created_at = datetime()
-                SET r.chunk_ids = CASE WHEN row.chunk_id IN r.chunk_ids THEN r.chunk_ids ELSE r.chunk_ids + row.chunk_id END,
+                // The quote keeps its own chunk's rank: sensitivity_rank falls as
+                // sources are added, but the quote is still that chunk's text.
+                WITH r, row, r.evidence_rank IS NULL AS quote, {_RANK} AS rank
+                SET r.chunk_id = CASE WHEN quote THEN row.chunk_id ELSE r.chunk_id END,
+                    r.evidence = CASE WHEN quote THEN row.evidence ELSE r.evidence END,
+                    r.evidence_rank = CASE WHEN quote THEN rank ELSE r.evidence_rank END,
+                    r.chunk_ids = CASE WHEN row.chunk_id IN r.chunk_ids THEN r.chunk_ids ELSE r.chunk_ids + row.chunk_id END,
                     r.extracted_as = CASE WHEN row.predicate IN r.extracted_as THEN r.extracted_as
                                           ELSE r.extracted_as + row.predicate END
                 """,
@@ -504,9 +514,11 @@ def _delete_source(
         "MATCH (c:Chunk {source_id: $source_id}) WHERE NOT c.chunk_id IN $keep DETACH DELETE c",
         "MATCH (d:Document {source_id: $source_id}) DETACH DELETE d",
         "MATCH (e:Entity) WHERE e.chunk_ids = [] DETACH DELETE e",
-        # ... and re-point first-seen chunk_id where that chunk is gone.
+        # ... and re-point first-seen chunk_id where that chunk is gone. An edge's
+        # quote goes with its chunk; the next chunk that states the edge re-quotes.
         "MATCH (e:Entity) WHERE NOT e.chunk_id IN e.chunk_ids SET e.chunk_id = e.chunk_ids[0]",
-        "MATCH ()-[r]->() WHERE NOT r.chunk_id IN r.chunk_ids SET r.chunk_id = r.chunk_ids[0]",
+        """MATCH ()-[r]->() WHERE NOT r.chunk_id IN r.chunk_ids
+           SET r.chunk_id = r.chunk_ids[0] REMOVE r.evidence, r.evidence_rank""",
     )
     for statement in statements:
         tx.run(statement, stale=stale, source_id=source_id, keep=list(keep)).consume()

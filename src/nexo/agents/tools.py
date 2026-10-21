@@ -147,13 +147,29 @@ def _rank(value: dict[str, Any]) -> int:
     return rank
 
 
+def _hidden_key(value: dict[str, Any], key: str, clearance_rank: int) -> bool:
+    """True for chunk text, and for an edge's evidence quoted from above clearance.
+
+    An edge's `sensitivity_rank` is its least sensitive source, but `evidence`
+    is verbatim text from one chunk, ranked by `evidence_rank`; an edge written
+    before that rank existed has none, so its evidence is hidden.
+    """
+    if key in CHUNK_TEXT_KEYS:
+        return True
+    if key == "evidence":
+        rank = value.get("evidence_rank")
+        return not isinstance(rank, int) or rank > clearance_rank
+    return False
+
+
 def redact_above_clearance(value: Any, clearance_rank: int) -> Any:
     """Redact node/relationship maps above the caller's clearance; drop chunk text.
 
     A map is redacted whole when its rank (see `_rank`) exceeds the clearance.
     Chunk text, search text and embeddings are dropped from every map whatever
-    the clearance. Only catches values projected as maps; scalar projections
-    (RETURN e.name) need database-side RBAC on the :PII/:PHI labels.
+    the clearance, and an edge's `evidence` unless its `evidence_rank` is within
+    it. Only catches values projected as maps; scalar projections (RETURN
+    e.name) need database-side RBAC on the :PII/:PHI labels.
     """
     if isinstance(value, dict):
         if _rank(value) > clearance_rank:
@@ -161,7 +177,7 @@ def redact_above_clearance(value: Any, clearance_rank: int) -> Any:
         return {
             k: redact_above_clearance(v, clearance_rank)
             for k, v in value.items()
-            if k not in CHUNK_TEXT_KEYS
+            if not _hidden_key(value, k, clearance_rank)
         }
     if isinstance(value, (list, tuple)):  # the driver returns relationships as tuples
         return [redact_above_clearance(v, clearance_rank) for v in value]
@@ -176,7 +192,7 @@ MATCH (a:Entity {{key: $from_key}}), (b:Entity {{key: $to_key}})
 OPTIONAL MATCH p = SHORTEST {paths} (a)(()-[]-(:Entity)){{1,{hops}}}(b)
 RETURN [n IN nodes(p) | n {{.key, .name, .type, .sensitivity_rank}}] AS nodes,
        [r IN relationships(p) | r {{from: startNode(r).key, relation: type(r), to: endNode(r).key,
-           .predicate, .certainty, .valid_at, .evidence, .chunk_ids,
+           .predicate, .certainty, .valid_at, .evidence, .evidence_rank, .chunk_ids,
            sensitivity_rank: coalesce(r.sensitivity_rank, 3)}}] AS hops"""
 
 _NEIGHBOURS = """\
@@ -185,7 +201,8 @@ OPTIONAL MATCH (e)-[r]-(n:Entity)
 WITH e, r, n ORDER BY size(coalesce(r.chunk_ids, [])) DESC LIMIT $limit
 RETURN e {.key, .name, .type, .sensitivity_rank} AS entity,
        r {relation: type(r), outgoing: startNode(r) = e, .predicate, .certainty,
-          .valid_at, .evidence, .chunk_ids, sensitivity_rank: coalesce(r.sensitivity_rank, 3)} AS edge,
+          .valid_at, .evidence, .evidence_rank, .chunk_ids,
+          sensitivity_rank: coalesce(r.sensitivity_rank, 3)} AS edge,
        n {.key, .name, .type, .sensitivity_rank} AS neighbour"""
 
 _UNKNOWN_KEY = {

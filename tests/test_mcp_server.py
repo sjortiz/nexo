@@ -17,7 +17,7 @@ from neo4j.exceptions import ServiceUnavailable
 
 from pydantic import SecretStr
 from nexo.agents.redaction import ChunkRedactor
-from nexo.agents.tools import redact_above_clearance
+from nexo.agents.tools import redact_above_clearance, visible_paths
 from nexo.telemetry import SESSION_ID, query_attributes
 from nexo.mcp_server import build_mcp_server
 from nexo.storage.graph_store import ReadResult
@@ -429,6 +429,34 @@ def test_graph_query_never_returns_chunk_text(settings, chunk_store, clearance):
     assert CONTACT not in json.dumps(out) and "0.1" not in json.dumps(out)
     if clearance == "internal":
         assert EMAIL not in json.dumps(out)
+
+
+@pytest.mark.parametrize(
+    ("evidence_rank", "clearance", "shown"),
+    [
+        (1, Sensitivity.INTERNAL, True),
+        (3, Sensitivity.INTERNAL, False),  # quoted from a PHI chunk
+        (3, Sensitivity.PHI, True),
+        (None, Sensitivity.PHI, False),  # written before evidence_rank: fail closed
+        ("1", Sensitivity.PHI, False),  # a rank that cannot be read
+    ],
+)
+def test_edge_evidence_shows_only_within_the_rank_it_was_quoted_at(
+    evidence_rank, clearance, shown
+):
+    """An internal edge can quote a PHI chunk; its evidence follows evidence_rank, not the edge."""
+    hop = {
+        **_hop(A, C, P1),
+        "evidence": "Jane Roe's ward notes",
+        "evidence_rank": evidence_rank,
+    }
+    out = visible_paths(
+        [{"nodes": [_node(A), _node(C)], "hops": [hop]}], clearance.rank
+    )
+    assert out["path_count"] == 1 and out["withheld"] == 0  # the edge stays visible
+    assert ("evidence" in out["paths"][0]["hops"][0]) is shown
+    row = redact_above_clearance({"r": hop, "evidence": "x"}, clearance.rank)
+    assert ("evidence" in row["r"]) is shown and "evidence" not in row
 
 
 def test_relationship_tuples_from_the_driver_are_redacted_too():

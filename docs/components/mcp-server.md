@@ -79,7 +79,10 @@ forms automatically, without a person, defeats the check: use a client that asks
   ([graph lookup tools](graph-lookup-tools.md)). Both keys are checked through the same redaction first, so
   an unknown key and a key above clearance get the same "unknown entity key" error and the entity's
   existence stays hidden. A path through any node or edge above clearance is withheld and counted, an edge
-  with no rank counts as PHI, and paths traverse entities only and carry chunk ids, never chunk text.
+  with no rank counts as PHI, and paths traverse entities only and never carry chunk text. A hop's
+  `evidence` is a verbatim quote from one chunk: it is shown only when that chunk's rank (`evidence_rank`)
+  is within the clearance, so a visible edge can come back without it
+  ([graph store](graph-store.md#read-only-enforcement)).
 - **Identity.** MCP over stdio has no per-user identity, so run one server per clearance.
 - **Errors.** Anticipated failures (unsafe Cypher, unknown entity type, graph unavailable) come back as
   tool errors with a message; unexpected exceptions are masked and logged on the server.

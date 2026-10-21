@@ -11,7 +11,8 @@ READ transactions, and one clearance (MCP_CLEARANCE). Chunks above it are masked
 by the same ChunkRedactor as the agent (detected PII replaced by [EMAIL] and the
 like) or withheld; search returns a masked chunk only when the query matches its
 masked text. Graph rows are redacted when a map's rank (entities, edges) or level
-(chunks, documents) is above it, and never carry chunk text. Scalar projections
+(chunks, documents) is above it, and never carry chunk text, nor an edge's
+evidence quote unless the chunk it was quoted from is within clearance. Scalar projections
 (RETURN e.name) are not caught; on Neo4j Enterprise, database roles close that.
 The server has no per-user authentication: run it locally over stdio, or behind
 something that authenticates.

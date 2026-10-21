@@ -55,6 +55,9 @@ access.
   matches its masked text, without words that masking removed; ranking among matching chunks still
   uses the original text and embedding, so their order can shift with the masked words
   ([read-time redaction](../components/sensitive-data-detection.md#read-time-redaction)).
+- **Amended 2026-10-21 (edge evidence):** an edge's `evidence` is verbatim text from one chunk, so it is
+  ranked by that chunk (`evidence_rank`), not by the edge's least sensitive source; graph tools drop it
+  above clearance, and from edges written before the rank existed.
 
 # Consequences
 
