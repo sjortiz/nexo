@@ -1,12 +1,13 @@
 """`nexo setup`: check, render and run the stack a setup file describes.
 
-nexo setup init [--preset mac-single]   write nexo.yaml from a preset
-nexo setup secrets                      fill missing secrets in .env
+nexo setup init [--preset mac-single]   write nexo.yaml from a preset, with this machine's profile
+nexo setup secrets                      fill missing secrets in the provider
 nexo setup lock [--upgrade]             resolve nexo.yaml into nexo.lock
 nexo setup render [--addon NAME]        write .nexo/render/
 nexo setup check [--no-models]          preflight, then ask each model server
-nexo setup up [--addon NAME]            secrets, render, models, compose up
+nexo setup up [--addon NAME]            secrets, render, models, compose up (native: no compose)
 nexo setup down                         compose down (volumes kept)
+nexo setup neo4j-init                   native: give a new Neo4j the stored password
 nexo setup compose ARGS...              the container engine's compose on the render
 """
 
@@ -17,6 +18,7 @@ import contextlib
 import logging
 import os
 import platform
+import re
 import shutil
 import subprocess
 import time
@@ -27,10 +29,12 @@ import yaml
 
 from nexo.config import Settings
 from nexo.llm import build_embeddings, check_model_servers, resolved_models
+from nexo.local_profiles import MODEL_SIZES_GB, ProfileError, parse_profile
 from nexo.secret_store import SecretStore, SecretStoreError, store_from_options
 from nexo.setup.check import (
     FORCEABLE,
     detect_host,
+    detect_profile,
     neo4j_login,
     preflight,
     stale_neo4j_hint,
@@ -167,13 +171,26 @@ def _neo4j_accepts(stack: _Stack, store: SecretStore, name: str, uri: str) -> in
     return 1
 
 
+def _native(casting: Casting) -> bool:
+    return casting.spec.target.mode == "native"
+
+
 def _ensure_render(args: argparse.Namespace) -> _Stack:
     """The rendered stack with the secrets already in the provider (nothing generated)."""
     casting, lock = _context(args)
+    if _native(casting):
+        raise SetupError(
+            "target.mode native runs no containers: Neo4j is this machine's service"
+            " (brew services stop neo4j) and Ollama runs on its own"
+        )
     host = detect_host(casting)
     if not (Path.cwd() / RENDER_DIR / "compose.yaml").exists():
         render(casting, lock, Path.cwd(), host)
     return _Stack(host, stack_secrets(store_for(casting), COMPONENTS))
+
+
+# The local machine's profile line in a preset (models.local.profile).
+LOCAL_PROFILE_LINE = re.compile(r"^(\s+local:\n\s+profile:\s*)([\w-]+)", re.MULTILINE)
 
 
 def _init(args: argparse.Namespace) -> int:
@@ -181,19 +198,46 @@ def _init(args: argparse.Namespace) -> int:
     if target.exists() and not args.force:
         log.info("%s exists; keeping it (--force to replace)", target)
         return 0
+    detected = None if args.profile else detect_profile()
     preset = args.preset or (
-        "mac-single" if platform.system() == "Darwin" else "linux-cpu"
+        "mac-single"
+        if platform.system() == "Darwin"
+        else "linux-gpu" if detected and detected[0].startswith("gpu-") else "linux-cpu"
     )
     source = Path.cwd() / PRESETS / preset / "nexo.yaml"
     if not source.exists():
         names = sorted(p.name for p in (Path.cwd() / PRESETS).iterdir() if p.is_dir())
         raise SetupError(f"no preset {preset!r}; presets: {', '.join(names)}")
-    shutil.copyfile(source, target)
-    log.info(
-        "wrote %s from preset %s: set models.local.profile for this machine",
-        target,
-        preset,
-    )
+    text = source.read_text(encoding="utf-8")
+    profile = args.profile or (detected and detected[0])
+    if args.profile:
+        try:
+            parse_profile(args.profile)
+        except ProfileError as exc:
+            raise SetupError(str(exc)) from exc
+    if not LOCAL_PROFILE_LINE.search(text):
+        target.write_text(text, encoding="utf-8")
+        log.info("wrote %s from preset %s", target, preset)
+    elif profile:
+        target.write_text(
+            LOCAL_PROFILE_LINE.sub(rf"\g<1>{profile}", text, count=1), encoding="utf-8"
+        )
+        how = f"detected: {detected[1]}" if detected else "--profile"
+        log.info(
+            "wrote %s from preset %s with profile %s (%s; --profile to choose another)",
+            target,
+            preset,
+            profile,
+            how,
+        )
+    else:
+        target.write_text(text, encoding="utf-8")
+        log.warning(
+            "wrote %s from preset %s; this machine's profile is unknown: set"
+            " models.local.profile (e.g. m1-max-64, gpu-24, cpu-64) or pass --profile",
+            target,
+            preset,
+        )
     return 0
 
 
@@ -235,14 +279,16 @@ def _report(
     findings = preflight(casting, lock, on, host, store_for(casting))
     blocked = False
     for finding in findings:
-        forced = not finding.ok and force and finding.name in FORCEABLE
+        forced = not finding.ok and (
+            finding.advisory or (force and finding.name in FORCEABLE)
+        )
         status = "ok  " if finding.ok else "WARN" if forced else "FAIL"
         (log.info if finding.ok else log.warning)(
             "%s %s: %s%s",
             status,
             finding.name,
             finding.detail,
-            " (--force)" if forced else "",
+            " (--force)" if forced and not finding.advisory else "",
         )
         blocked = blocked or (not finding.ok and not forced)
     if blocked and any(not f.ok and f.name in FORCEABLE for f in findings):
@@ -269,10 +315,39 @@ def model_lines(rows: list[dict]) -> list[tuple[bool, str]]:
     return lines
 
 
-def _models_reachable() -> bool:
-    """Ask each role's server for its model, as `nexo models --check` does."""
+def pulled_by_up(casting: Casting, lock: dict) -> set[str]:
+    """Models `up` pulls into this machine's Ollama (not a remote machine's)."""
+    models = casting.spec.models
+    if models.provider != "ollama":
+        return set()
+    local = f"http://localhost:{models.local.port}/v1"
+    return {
+        entry["model"]
+        for entry in lock["models"].values()
+        if entry["server"] == local and entry["model"]
+    }
+
+
+def _models_reachable(pending: set[str] = frozenset()) -> bool:
+    """Ask each role's server for its model, as `nexo models --check` does.
+
+    A model in pending that the server lacks is not a failure: `up` pulls it.
+    """
     settings = Settings()  # fresh: render just rewrote nexo.env
-    lines = model_lines(check_model_servers(settings, resolved_models(settings)))
+    rows = check_model_servers(settings, resolved_models(settings))
+    later = [
+        row
+        for row in rows
+        if row.get("check") == "model not served here" and row["model"] in pending
+    ]
+    for row in later:
+        log.info(
+            "todo model %s: %s not pulled yet; up pulls it (%s GB)",
+            row["role"],
+            row["model"],
+            MODEL_SIZES_GB.get(row["model"], "?"),
+        )
+    lines = model_lines([row for row in rows if row not in later])
     for ok, text in lines:
         (log.info if ok else log.warning)("%s %s", "ok  " if ok else "FAIL", text)
     return all(ok for ok, _ in lines)
@@ -284,7 +359,7 @@ def _check(args: argparse.Namespace) -> int:
     render(casting, lock, Path.cwd(), host, _addons(args))
     ok = _report(casting, lock, enabled_set(lock, _addons(args)), host, args.force)
     if not args.no_models:
-        ok = _models_reachable() and ok
+        ok = _models_reachable(pulled_by_up(casting, lock)) and ok
     return 0 if chunks_have_text() and ok else 1
 
 
@@ -365,6 +440,13 @@ def _up(args: argparse.Namespace) -> int:
     if casting.spec.models.provider == "ollama" and not args.skip_models:
         if code := _start_models(casting):
             return code
+    if _native(casting):  # the preflight logged in to this machine's Neo4j
+        log.info(
+            "native: Neo4j at %s, nothing in containers; run nexo in the .venv"
+            " (nexo config --explain shows where each setting comes from)",
+            ports.bolt,
+        )
+        return 0
     if code := (
         _compose(stack, UP)
         or _wait_for_services(stack)
@@ -389,6 +471,41 @@ def _down(args: argparse.Namespace) -> int:
 
 def _passthrough(args: argparse.Namespace) -> int:
     return _compose(_ensure_render(args), args.compose_args)
+
+
+def _neo4j_init(args: argparse.Namespace) -> int:
+    """target.mode native: set a new Neo4j's initial password to the stored one.
+
+    neo4j-admin takes the password as an argument only, so it is briefly visible to this
+    machine's process list; it is never logged.
+    """
+    casting, _ = _context(args)
+    if not _native(casting):
+        raise SetupError(
+            "neo4j-init is for target.mode native; the Neo4j container gets the stored"
+            " password when it is created"
+        )
+    store = store_for(casting)
+    password = ensure_secrets(Path.cwd() / ".env", Path.cwd(), {"neo4j"}, store)[
+        "NEO4J_PASSWORD"
+    ]
+    admin = shutil.which("neo4j-admin")
+    if admin is None:
+        raise SetupError("neo4j-admin not found: brew install neo4j (or your package)")
+    code = subprocess.run(
+        [admin, "dbms", "set-initial-password", password], check=False
+    ).returncode
+    if code == 0:
+        log.info(
+            "Neo4j's initial password is the one in %s; start it: brew services start"
+            " neo4j (Linux: sudo systemctl start neo4j), then make check",
+            store.label,
+        )
+    else:
+        log.error(
+            "neo4j-admin failed; it only works before Neo4j's first start (stop it first)"
+        )
+    return code
 
 
 def run(args: argparse.Namespace) -> int:
@@ -427,6 +544,10 @@ def add_parser(
 
     init = verb("init", _init, "write nexo.yaml from a preset in examples/setups")
     init.add_argument("--preset")
+    init.add_argument(
+        "--profile",
+        help="models.local.profile (default: detected from the chip and memory)",
+    )
     init.add_argument("--force", action="store_true")
     verb("secrets", _secrets, "fill missing secrets in .env for the enabled components")
     verb("lock", _lock, "resolve nexo.yaml into nexo.lock").add_argument(
@@ -452,6 +573,11 @@ def add_parser(
             help="go ahead although the memory or profile checks fail",
         )
     verb("down", _down, "stop the stack; volumes are kept")
+    verb(
+        "neo4j-init",
+        _neo4j_init,
+        "target.mode native: set a new Neo4j's initial password to the stored one",
+    )
     verb("compose", _passthrough, "run compose on the rendered stack").add_argument(
         "compose_args", nargs=argparse.REMAINDER
     )

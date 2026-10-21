@@ -54,6 +54,18 @@ bundle: architecture, components, operations, decisions and references.
 
 ## Run
 
+Pick your path first:
+
+| Machine | Preset | Guide |
+| --- | --- | --- |
+| Apple Silicon Mac, services in Podman | `mac-single` (`mac-two-machines` for two Macs) | [Local on Apple Silicon](docs/operations/local-apple-silicon.md) |
+| Apple Silicon Mac, no containers | `mac-native` | [Native path](docs/operations/local-apple-silicon.md#native-path) |
+| Linux, GPU or CPU, Ollama | `linux-gpu`, `linux-cpu`, `linux-native` | [Local on Linux](docs/operations/local-linux.md) |
+| Linux GPU server, vLLM (4x80 GB) | `linux-vllm` | below, and [Compose stack with vLLM](docs/operations/local-stack.md) |
+
+`make env PRESET=...` writes `nexo.yaml` with this machine's hardware profile; `make up` starts it;
+`make check` says what is missing. The GPU-server flow:
+
 ```bash
 uv sync && source .venv/bin/activate                  # Python 3.12 + deps from uv.lock
 make env PRESET=linux-vllm                             # nexo.yaml + secrets in ~/.config/nexo; HF_TOKEN in .env
@@ -86,9 +98,13 @@ add-ons, the container engine), foundry-style; `make` runs it through `nexo setu
 
 ```bash
 # One Mac
-make env PRESET=mac-single                   # nexo.yaml (set models.local.profile) + secrets
+make env PRESET=mac-single                   # nexo.yaml (profile detected; PROFILE= to override) + secrets
 make up                                      # Ollama's models, Neo4j, collector, SigNoz
 make check                                   # preflight + each role's model and server
+
+# One Mac, no containers: Homebrew's Neo4j, Ollama and Nexo from the .venv
+make env PRESET=mac-native && make neo4j-init && brew services start neo4j
+make up && make check
 
 # Two Macs: the remote Mac serves agent + extraction, this one router/embeddings/judge + Nexo
 deploy/local/ollama-setup.sh m1-max-64 heavy  # on the M1 Max
@@ -99,7 +115,7 @@ make up && make check
 NEXO_LIVE=1 pytest -m live -v                 # exercise the real models
 ```
 
-Presets: `mac-single`, `mac-two-machines`, `linux-cpu`, `linux-gpu`, `linux-vllm`
+Presets: `mac-single`, `mac-two-machines`, `mac-native`, `linux-cpu`, `linux-gpu`, `linux-native`, `linux-vllm`
 (`examples/setups/`). `docker-compose.yml` is generated from `mac-single` (`make compose-file`) for
 plain `podman compose up -d`.
 
@@ -112,7 +128,7 @@ network there).
 
 | Platform | Status |
 | --- | --- |
-| macOS (Apple Silicon) | Test suite passes; Podman and native paths verified up to the model server. |
+| macOS (Apple Silicon) | Test suite passes; Podman and native paths verified up to the model server (`target.mode: native` is covered by tests, not yet run end to end). |
 | Linux | Test suite passes (verified on aarch64); Podman path uses host networking; vLLM GPU passthrough untested here. |
 | Windows | Not tested; WSL2 with the Linux instructions is the likely path. |
 | Neo4j 5.26 (Community) | Supported; the compose and CI default. Chunk search uses the `db.index.*.queryNodes` procedures. |

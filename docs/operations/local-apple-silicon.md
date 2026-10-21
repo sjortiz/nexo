@@ -5,7 +5,7 @@ description: Run Nexo on one or two Apple Silicon Macs, with services in Podman 
 resource: ../../src/nexo/local_profiles.py
 tags: [operations, local, apple-silicon, ollama, podman]
 status: draft
-generated: { by: claude-code/claude-opus-5-5, at: 2026-10-19T20:14:37Z }
+generated: { by: claude-code/claude-opus-5-5, at: 2026-10-20T21:00:00Z }
 stale_after: 2027-01-19T00:00:00Z
 sources:
   - id: profiles
@@ -23,6 +23,15 @@ sources:
   - id: preset
     resource: ../../examples/setups/mac-single/nexo.yaml
     title: mac-single preset
+  - id: native
+    resource: ../../examples/setups/mac-native/nexo.yaml
+    title: mac-native preset
+  - id: check
+    resource: ../../src/nexo/setup/check.py
+    title: nexo setup preflight
+  - id: adr-0020
+    resource: ../decisions/adr-0020-native-target-mode.md
+    title: "ADR-0020: Native mode in the setup file"
   - id: ollama
     resource: ../references/ollama.md
     title: Ollama
@@ -40,8 +49,9 @@ Two independent choices:
 |---|---|---|
 | Models | Ollama, native (Metal GPU) | Ollama, native (Metal GPU) |
 | Neo4j | container (`neo4j:5.26-community`) | Homebrew (`neo4j` 2026.09) |
-| Telemetry | collector (strips content) + SigNoz containers; Langfuse, Jaeger optional | none, or the collector and SigNoz containers |
+| Telemetry | collector (strips content) + SigNoz containers; Langfuse, Jaeger optional | none (export off) |
 | Nexo | container (`make app`) or `uv sync` | `uv sync` |
+| Preset | `mac-single`, `mac-two-machines` | `mac-native` (`target.mode: native`) |
 | Good for | matching the server setup; clean teardown | fewest moving parts; no VM |
 
 | | **One Mac** | **Two Macs** |
@@ -85,8 +95,8 @@ with half the tool calls, at about 3× the time per question.
 1. `brew install ollama podman` and `podman machine init` (first time only), `podman machine start`.
 2. `make env PRESET=mac-single` (or `mac-two-machines`, see "Two Macs" below): writes `nexo.yaml`
    and generates `NEO4J_PASSWORD` and the SigNoz secrets into `~/.config/nexo/config` (`.env` keeps
-   personal settings).[^env] Set
-   `models.local.profile` in `nexo.yaml` to this Mac's profile.[^preset]
+   personal settings).[^env] It sets `models.local.profile` to this Mac's profile, read from the chip
+   and memory (an M1 Max with 64 GB gets `m1-max-64`); `make env PROFILE=m5-pro-24` chooses another.[^preset]
 3. `make check`: the container engine, secrets and a memory budget for the models and containers
    against this Mac and the Podman VM.
 4. `make up` - pulls and preloads the profile's models and starts Ollama with the right context
@@ -96,26 +106,40 @@ with half the tool calls, at about 3× the time per question.
    cover the Podman VM, not the Mac. Add Langfuse (evaluation) or Jaeger with `make up LANGFUSE=1` /
    `make up JAEGER=1` for one run, or under `addons:` in `nexo.yaml` ([Observability](observability.md#backends)).
    The default stack measured about 1.9 GB of containers plus 6.5 GB of models on a 24 GB M5 Pro;
-   with every add-on about 5.1 GB of containers, within the Podman VM's default 8 GiB.
+   with every add-on about 5.1 GB of containers. The Podman VM's memory depends on the Podman version
+   and how the machine was created (one M1 Max's VM had 5.6 GiB): `make check` compares the containers
+   with it and, when they do not fit, prints the `podman machine set --memory` value to use.[^check]
 5. Run Nexo either natively (`uv sync`, then `nexo ...` in the activated `.venv`) or in a container:
    `make app ARGS="ingest /corpus/memo.md"` with documents in `./corpus`.
    The container's `LOCAL_BASE_URL`/`REMOTE_BASE_URL` already point at `host.containers.internal`.
 
 # Native path
 
-1. `brew install ollama neo4j` (Neo4j 2026.09 Community, Java 21; Nexo's Neo4j tests pass on it).
-2. `neo4j-admin dbms set-initial-password <password>` then `brew services start neo4j`.
-3. Models: `deploy/local/ollama-setup.sh m1-max-64`.
-4. `cp deploy/local/local.env.example .env`, set `LOCAL_PROFILE` (and `REMOTE_PROFILE`),
-   `NEO4J_URI` and `NEO4J_PASSWORD` there: without `nexo setup`, `.env` holds everything.
-5. Telemetry (optional): leave `OTEL_EXPORTER_OTLP_ENDPOINT` unset to rely on logs only, or run just
-   the collector and SigNoz containers: `make env && make render`, then
-   `podman compose -f .nexo/render/compose.yaml up -d otel-collector signoz`.
-6. `brew install uv && uv sync && source .venv/bin/activate`, then `nexo ...` (uv installs Python 3.12).
+No containers and no VM: Ollama and Homebrew's Neo4j run on the Mac and Nexo from the `.venv`.
+`target.mode: native` in `nexo.yaml` declares it, so `nexo setup` stays the single entry point and
+`.env` needs no edits.[^adr-0020]
+
+1. `brew install ollama neo4j uv` (Neo4j 2026.09 Community, Java 21; Nexo's Neo4j tests pass on it),
+   then `uv sync && source .venv/bin/activate` (uv installs Python 3.12).
+2. `make env PRESET=mac-native`: writes `nexo.yaml` with this Mac's profile and generates
+   `NEO4J_PASSWORD` into `~/.config/nexo/config`.[^native]
+3. A Neo4j that has never started: `make neo4j-init` sets its initial password to the stored one;
+   then `brew services start neo4j`. A Neo4j already in use keeps its password: change it to the
+   stored one in `cypher-shell` (`ALTER CURRENT USER SET PASSWORD FROM '<old>' TO '<stored>'`).
+4. `make up`: pulls and preloads the profile's models and renders `.nexo/render/nexo.env` alone:
+   `NEO4J_URI` on `localhost`, telemetry export off, and `NEXO_SECRETS_*` naming the store that
+   holds the password. No compose file is written, so nothing from the Podman path applies.[^compose]
+5. `make check`: secrets, Neo4j's login with the stored password, memory, and each role's model.
+   Then `nexo ...` in the activated `.venv`.
+
+Switching between paths is a change to `target.mode`; every render removes the files the other mode
+wrote. If `nexo.yaml` changes after the last render, Nexo warns that `nexo.env` is stale until
+`make render` (or `make up`) runs again. `nexo config --explain` prints each setting with its source
+(environment, secrets store, `.nexo/render/nexo.env`, `.env`, profile or default), secrets redacted.
 
 # Two Macs
 
-Applies to either path. Example: M1 Max 64 GB as the agent Mac, M5 Pro 24 GB running Nexo.
+Uses the `mac-two-machines` preset (Podman path); for no containers, set `target.mode: native` in it and drop its `addons`. Example: M1 Max 64 GB as the agent Mac, M5 Pro 24 GB running Nexo.
 
 ```
  M1 Max (models.remote: m1-max-64)         M5 Pro (models.local: m5-pro-24)
@@ -137,7 +161,8 @@ Never bind Ollama to `0.0.0.0` on a shared network: it has no authentication.
 # Verify
 
 `make check` (or `nexo models --check`) confirms each role's server answers and serves its model
-([what failures mean](local-setup.md#when-it-does-not-work)). `NEXO_LIVE=1 pytest -m live -v` checks the real models: schema-valid JSON from the extraction and router
+([what failures mean](local-setup.md#when-it-does-not-work)); before the first `make up`, models it
+has yet to pull show as `todo`, not `FAIL`. `NEXO_LIVE=1 pytest -m live -v` checks the real models: schema-valid JSON from the extraction and router
 models, embeddings that rank related text (English and Spanish) above unrelated text, and an agent model
 that calls its tools over the OpenAI protocol.[^live] `ollama ps` on each Mac should list the profile's
 models at 100% GPU.
@@ -146,8 +171,11 @@ models at 100% GPU.
 
 - **Context length.** Below about 23 GiB of GPU memory Ollama defaults to a 4096-token context and
   truncates longer prompts silently; the setup script sets `OLLAMA_CONTEXT_LENGTH` from the profile.
-  If Ollama already runs (e.g. the menu-bar app), the script prints the settings instead: apply them
-  with `launchctl setenv KEY VALUE` and reopen the app.
+  If Ollama already runs (e.g. the menu-bar app), its settings stay at the defaults and the script
+  says so in a banner. `make models APPLY=1` (`ollama-setup.sh --apply`) runs `launchctl setenv` for
+  each setting and installs a LaunchAgent that repeats it at login, since `launchctl setenv` does not
+  survive a reboot; then quit and reopen the app.[^setup] `make check` and `nexo models --check` warn
+  when a loaded model runs with less context than the profile sets.[^check]
 - **GPU memory limit.** If a model does not fit, raise macOS's GPU wired-memory limit until reboot with
   `sudo sysctl iogpu.wired_limit_mb=<MB>`, or pick a smaller profile.
 - **Speed.** Expect tens of tokens per second; profiles raise `LLM_TIMEOUT_S` (300) and
@@ -166,5 +194,8 @@ See [ADR-0012](../decisions/adr-0012-local-apple-silicon.md).
 [^env]: Local Nexo environment
 [^compose]: nexo setup renderer
 [^preset]: mac-single preset
+[^native]: mac-native preset
+[^check]: nexo setup preflight
+[^adr-0020]: "ADR-0020: Native mode in the setup file"
 [^ollama]: Ollama
 [^live]: Live model checks

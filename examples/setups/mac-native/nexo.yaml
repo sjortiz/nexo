@@ -1,0 +1,17 @@
+# One Apple Silicon Mac, no containers: Ollama's models and Homebrew's Neo4j run natively,
+# Nexo runs from the .venv. Secrets stay in ~/.config/nexo/config; nothing goes in .env.
+#   brew install ollama neo4j uv && uv sync
+#   make env PRESET=mac-native     (this file, with this Mac's profile, and the secrets)
+#   make neo4j-init                (a Neo4j that has never started: the stored password)
+#   brew services start neo4j && make up && make check
+apiVersion: nexo/v1alpha1
+kind: Setup
+metadata:
+  name: nexo
+spec:
+  target:
+    mode: native  # no containers: Neo4j on this machine, telemetry export off
+  models:
+    provider: ollama
+    local:
+      profile: m5-pro-24  # <chip>-<unified memory GB>: m1-pro-16, m5-pro-24, m1-max-64

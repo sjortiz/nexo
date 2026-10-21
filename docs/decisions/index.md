@@ -19,3 +19,4 @@
 * [ADR-0017: Secrets from a provider, not a file you copy](adr-0017-secrets-from-a-provider.md) - A private per-user file by default, keychain, SOPS or Vault opt-in; clusters mount secrets as files, never environment variables.
 * [ADR-0018: Chunk text and embeddings in Neo4j](adr-0018-chunks-in-neo4j.md) - Chunks on the graph's (:Chunk) nodes with vector and full-text indexes; review checkpoints per stack.
 * [ADR-0019: Review surfaces](adr-0019-review-surfaces.md) - One review core in `Runtime`; MCP is the supported default, Agent Inbox opt-in, a local web page demo only.
+* [ADR-0020: Native mode in the setup file](adr-0020-native-target-mode.md) - `target.mode: native` runs against this machine's Neo4j and Ollama with no containers; the render always matches the mode.

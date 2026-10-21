@@ -5,7 +5,7 @@ description: The mechanism behind local runs - one setup file (nexo.yaml) render
 resource: ../../src/nexo/setup/commands.py
 tags: [operations, local, ollama, profiles, podman, setup]
 status: draft
-generated: { by: claude-code/claude-opus-5-5, at: 2026-10-20T16:00:00Z }
+generated: { by: claude-code/claude-opus-5-5, at: 2026-10-20T21:00:00Z }
 stale_after: 2027-01-20T00:00:00Z
 sources:
   - id: setup-cli
@@ -50,7 +50,7 @@ one declarative file, a lock and rendered plain files.[^adr-0016]
 apiVersion: nexo/v1alpha1
 kind: Setup
 spec:
-  target: { mode: compose, engine: auto, host: auto }   # podman or docker; macos or linux
+  target: { mode: compose, engine: auto, host: auto }   # compose | native; podman or docker; macos or linux
   models:
     provider: ollama                                    # ollama | vllm | openai-compatible
     local:  { profile: m5-pro-24 }                      # this machine's roles
@@ -78,12 +78,19 @@ rejected with the field named.[^schema]
 | Setup | Preset (`make env PRESET=...`) |
 |---|---|
 | One Apple Silicon Mac | `mac-single` (the default on macOS) |
+| One Apple Silicon Mac, no containers | `mac-native` (`target.mode: native`) |
 | Two machines over an SSH tunnel | `mac-two-machines` |
-| Linux, CPU only | `linux-cpu` (the default on Linux) |
-| Linux, one GPU, Ollama | `linux-gpu` |
+| Linux, CPU only | `linux-cpu` (the default on Linux without an NVIDIA GPU) |
+| Linux, one GPU, Ollama | `linux-gpu` (the default with one) |
+| Linux, no containers | `linux-native` (`target.mode: native`) |
 | Linux, NVIDIA GPUs, vLLM | `linux-vllm` |
 
-Kubernetes comes after the compose target. Presets live in `examples/setups/`.[^presets]
+`make env` (`nexo setup init`) fills in `models.local.profile` from this machine's chip and memory
+(Apple Silicon), GPU VRAM or RAM (Linux); `PROFILE=` (`--profile`) chooses another. `target.mode:
+native` runs no containers: Neo4j is this machine's own service, telemetry export is off and
+`.nexo/render/` holds only `nexo.env`; add-ons and patches need `compose`
+([ADR-0020](../decisions/adr-0020-native-target-mode.md)). Kubernetes comes after the compose
+target. Presets live in `examples/setups/`.[^presets]
 
 # What the targets do
 
@@ -161,8 +168,12 @@ Langfuse logins are in `~/.config/nexo/config` under `[nexo]`. Secrets found in 
 `make env`.
 
 This is per field: `AGENT_MODEL=my-model` keeps the profile's agent URL. Profiles also default
-`LLM_TIMEOUT_S` (300), `AGENT_TIMEOUT_S` (900) and `EXTRACTION_CONCURRENCY`, unless set. Without
-`nexo setup` (native Neo4j, no containers), set `LOCAL_PROFILE` and the endpoints in `.env`.
+`LLM_TIMEOUT_S` (300), `AGENT_TIMEOUT_S` (900) and `EXTRACTION_CONCURRENCY`, unless set. Native
+Neo4j and no containers is `target.mode: native`, not hand-edited `.env` settings.
+`nexo config --explain` prints each effective setting and where it came from (environment, secrets
+store, `.nexo/render/nexo.env`, `.env`, derived from a profile, or default), secret values redacted.
+`nexo.env` records the `nexo.yaml` it was rendered from; when that file has changed since, every
+`nexo` command except `nexo setup` warns until `make render` (or `make up`) runs.
 
 # Who listens where
 
@@ -206,13 +217,18 @@ authentication, SSH provides it.
 | `FAIL secrets: ...; set: HF_TOKEN` | A key only you can provide, or a read-only mount that lacks a secret | Add it to `.env`, or to the mounted secret. |
 | `FAIL secrets: secrets file ... not found`, `keychain ...` or `vault ...: HTTP 403` | The provider cannot be read (no mount, a locked keychain, a wrong token, no `sops` key) | Mount it, unlock it or fix its credentials; the message names the provider. |
 | `FAIL neo4j: Neo4j refused the password` | The `neo4j-data` volume was made with other secrets | Put the old password back in the store, or delete the named volume (its data goes). |
+| `FAIL neo4j: no Neo4j at bolt://localhost:7687` (native) | This machine's Neo4j is not running | `brew services start neo4j` (Linux: `sudo systemctl start neo4j`). |
+| `FAIL neo4j: Neo4j at ... refused the password in ...` (native) | Neo4j was given another password | A Neo4j that never started: `make neo4j-init`; one in use: set its password to the stored one. |
+| `todo model agent: ... not pulled yet` | Before the first `make up` | Nothing: `up` pulls it. |
+| `WARN ollama context: ... runs ... with 4096 tokens of context` | Ollama started outside the setup script (the macOS app, a systemd unit) with its defaults | `make models APPLY=1` on macOS, the printed systemd drop-in on Linux; restart Ollama. |
+| `... changed since .nexo/render/nexo.env was rendered` | `nexo.yaml` was edited after the last render | `make render` (or `make up`). |
 | `FAIL ports: in use: 7687 (nexo-neo4j-1, stack nexo)` | Another stack or process holds a port this setup publishes | Set `spec.ports` (and another `metadata.name` for a second stack); `FORCE=1` to go ahead anyway. |
 | `FAIL profile: ... is for 64 GB; this machine has 24 GB` | The profile names more memory than the machine has | Set the profile for this machine; `FORCE=1` to go ahead anyway. |
 | `FAIL host: rendered for linux; this machine runs macos` | A Linux preset on a Mac (or the reverse) | Use a preset for this OS, or set `target.host`; `FORCE=1` to render anyway. |
 | `FAIL gpu` | A `gpu-*` profile without `nvidia-smi`/`rocm-smi`, or vLLM without NVIDIA GPUs usable by containers | Install the driver tools; for vLLM the NVIDIA Container Toolkit (Docker) or a CDI spec (Podman). |
 | `signoz did not start` ... `refused the password from your secrets` | A data volume made with other secrets (a regenerated password) | Put the old value back in the store, or delete the named volume (its data goes) and `make up` again. |
 | `FAIL memory` | Models plus containers need more than 85% of this machine's memory | A smaller profile, fewer add-ons, or `FORCE=1`. |
-| `FAIL podman vm` | The enabled containers need more than 90% of the Podman VM | `podman machine set --memory 10240`, turn off an add-on, or `FORCE=1`. |
+| `FAIL podman vm` | The enabled containers need more than 90% of the Podman VM | The printed `podman machine stop && podman machine set --memory N && podman machine start`, turn off an add-on, or `FORCE=1`. |
 | `unreachable ... Connection refused` on 11434 | Ollama is not running | `make up` (or `make models`), or start the service. |
 | The same on 11435 | The SSH tunnel is down | Re-run the `ssh -N -L ...` command. |
 | `model not served here` | Role sets do not match, the model was not pulled, or an explicit `*_MODEL` has a typo | Re-run the setup with the role set from the table; the output lists what the server has. |

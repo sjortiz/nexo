@@ -30,6 +30,8 @@ def casting_hash(path: Path) -> str:
 def enabled_components(casting: Casting) -> dict[str, bool]:
     """Every component and whether this setup turns it on."""
     spec = casting.spec
+    if spec.target.mode == "native":  # Neo4j on the host; it still needs its password
+        return {name: name == "neo4j" for name in COMPONENTS}
     overrides = {
         name: c.enabled for name, c in spec.addons.items() if c.enabled is not None
     }

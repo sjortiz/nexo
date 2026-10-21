@@ -1,0 +1,18 @@
+# Linux, no containers: Ollama (GPU or CPU) and Neo4j from its package repository run natively,
+# Nexo runs from the .venv. Secrets stay in ~/.config/nexo/config; nothing goes in .env.
+#   Ollama: curl -fsSL https://ollama.com/install.sh | sh; Neo4j: docs/operations/local-linux.md
+#   make env PRESET=linux-native   (this file, with this machine's profile, and the secrets)
+#   make neo4j-init                (a Neo4j that has never started: the stored password)
+#   sudo systemctl start neo4j && make up && make check
+apiVersion: nexo/v1alpha1
+kind: Setup
+metadata:
+  name: nexo
+spec:
+  target:
+    mode: native  # no containers: Neo4j on this machine, telemetry export off
+    host: linux
+  models:
+    provider: ollama
+    local:
+      profile: cpu-64  # gpu-<VRAM GB> or cpu-<RAM GB>

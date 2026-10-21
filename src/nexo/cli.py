@@ -19,7 +19,7 @@ from pydantic import BaseModel, ValidationError
 from nexo.agents.investigator import Investigator
 from nexo.agents.models import InvestigationScope
 from nexo.agents.redaction import ChunkRedactor
-from nexo.config import get_settings
+from nexo.config import explain, get_settings, render_drift
 from nexo.evaluation import (
     answer_scores,
     extraction_scores,
@@ -42,6 +42,7 @@ from nexo.orchestration.graph import workflow_mermaid
 from nexo.orchestration.state import ReviewDecision, describe_errors
 from nexo.review_inbox import InboxAdapter, build_server
 from nexo.review_ui import ReviewApp, check_loopback, make_server
+from nexo.setup.check import context_problem
 from nexo.setup.commands import add_parser as add_setup_parser
 from nexo.service import (
     RunResult,
@@ -386,6 +387,21 @@ def _add_chunk_commands(sub: argparse._SubParsersAction) -> None:
     importer.set_defaults(handler=_chunks_import)
 
 
+def _context_problems(settings) -> list[str]:
+    """Ollama servers whose loaded models run with less context than their profile sets."""
+    servers = []
+    if settings.local_profile:
+        role_set = "light" if settings.remote_profile else "single"
+        servers.append((settings.local_base_url, settings.local_profile, role_set))
+    if settings.remote_profile:
+        servers.append((settings.remote_base_url, settings.remote_profile, "heavy"))
+    return [
+        problem
+        for server in servers
+        if (problem := context_problem(*server)) is not None
+    ]
+
+
 def _models(args: argparse.Namespace) -> int:
     """Which model and server each role uses, after profiles and explicit settings."""
 
@@ -393,6 +409,8 @@ def _models(args: argparse.Namespace) -> int:
     rows = resolved_models(settings)
     if args.check:
         rows = check_model_servers(settings, rows)
+        for problem in _context_problems(settings):
+            log.warning("%s", problem)
     failed = [row["role"] for row in rows if row.get("check", "ok") != "ok"]
     profiles = (
         f"LOCAL_PROFILE={settings.local_profile or '-'} "
@@ -418,6 +436,19 @@ def _models(args: argparse.Namespace) -> int:
         profiles,
         ": all reachable" if args.check else "",
     )
+    return 0
+
+
+def _config(args: argparse.Namespace) -> int:
+    """Each effective setting and where it came from; secret values are never shown."""
+    rows = explain(get_settings(), everything=args.all)
+    result = {
+        row.name: (
+            {"value": row.value, "source": row.source} if args.explain else row.value
+        )
+        for row in rows
+    }
+    _emit(result, "settings%s", " and their sources" if args.explain else "")
     return 0
 
 
@@ -590,12 +621,26 @@ def main(argv: list[str] | None = None) -> int:
     )
     inbox.set_defaults(handler=_review_inbox)
 
+    config = sub.add_parser(
+        "config", help="print the effective settings (secret values redacted)"
+    )
+    config.add_argument(
+        "--explain",
+        action="store_true",
+        help="name each value's source: environment, secrets store, rendered env, .env",
+    )
+    config.add_argument("--all", action="store_true", help="include defaults")
+    config.set_defaults(handler=_config)
+
     add_setup_parser(sub)
     _add_chunk_commands(sub)
 
     args = parser.parse_args(argv)
     # Logs go to stderr: stdout is the command's JSON, or the protocol for MCP over stdio.
     configure_logging(get_settings())
+    # setup renders before it reads; everything else would run on stale settings.
+    if args.command != "setup" and (drift := render_drift()):
+        log.warning("%s", drift)
     try:
         return args.handler(args)
     finally:
