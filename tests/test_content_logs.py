@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import io
 import logging
 from contextlib import contextmanager
 
@@ -13,13 +14,13 @@ from opentelemetry.sdk._logs.export import (
 )
 
 from nexo.config import Settings
-from nexo.logging_setup import JsonFormatter
+from nexo.logging_setup import CONTENT_LOGGER, JsonFormatter, configure_logging
 from nexo.service import content_gate, run_sensitivity
 from nexo.setup import check
 from nexo.setup.render import build_env
 from nexo.setup.schema import SetupError, load_casting
 from nexo.storage.schemas import Sensitivity
-from nexo.storage.sensitive_data import RegexDetector
+from nexo.storage.sensitive_data import NoopDetector, RegexDetector
 from nexo.telemetry import OtelLogHandler
 from tests.test_graph import CHUNK, FakeInvestigator, grounded_output, route, runtime
 from tests.test_setup import _render, _setup
@@ -41,20 +42,27 @@ class BrokenDetector:  # pylint: disable=too-few-public-methods
 
 @contextmanager
 def exported_logs():
-    """The `nexo.service` records as the OTLP handler exports them."""
+    """Records as the OTLP handler exports them, wired as the CLI wires logging.
+
+    LOG_LEVEL=WARNING: the content record must still reach OTLP. The stderr text is
+    kept on `exporter.stderr`.
+    """
     exporter = InMemoryLogRecordExporter()
     provider = LoggerProvider()
     provider.add_log_record_processor(SimpleLogRecordProcessor(exporter))
-    handler = OtelLogHandler(provider, capture_content=False)
-    service_log = logging.getLogger("nexo.service")
-    level = service_log.level
-    service_log.addHandler(handler)
-    service_log.setLevel(logging.INFO)
+    root, content = logging.getLogger(), logging.getLogger(CONTENT_LOGGER)
+    saved = root.handlers[:], root.level, content.level
+    exporter.stderr = io.StringIO()
     try:
+        configure_logging(
+            Settings(_env_file=None, log_level="WARNING"), exporter.stderr
+        )
+        root.addHandler(OtelLogHandler(provider, capture_content=False))
         yield exporter
     finally:
-        service_log.removeHandler(handler)
-        service_log.setLevel(level)
+        root.handlers[:] = saved[0]
+        root.setLevel(saved[1])
+        content.setLevel(saved[2])
 
 
 def _content_records(exporter):
@@ -188,6 +196,48 @@ def test_a_failing_or_missing_detector_withholds_content(
     assert not _content_events(spans)
 
 
+@pytest.mark.parametrize("capture", ["no_content", "span_only"])
+def test_detector_none_withholds_unless_capture_forces_it(settings, capture):
+    """SENSITIVE_DATA_PROVIDER=none cannot classify: an email and SSN are not logged."""
+    settings.otel_instrumentation_genai_capture_message_content = capture
+    question = "Is jane.roe@example.com (SSN 123-45-6789) on the Beta deal?"
+    rt = runtime(settings, FakeInvestigator([grounded_output()]))
+    rt.detector = NoopDetector()  # what build_detector("none") returns
+    with exported_logs() as exporter:
+        rt.start(question, thread_id="n1")
+    body, attrs = _content_records(exporter)[-1]
+    if capture == "span_only":
+        assert body == "thread n1: content: released (content capture on)"
+        assert attrs["nexo.content.question"] == question
+    else:
+        assert body == "thread n1: content: withheld (no detector)"
+        assert "jane.roe" not in str(attrs)
+
+
+def test_the_content_record_reaches_otlp_whatever_the_log_level(settings):
+    """LOG_LEVEL=WARNING keeps the INFO audit record for OTLP and off stderr."""
+    with exported_logs() as exporter:
+        _answered(settings, "internal")
+    assert [body for body, _ in _content_records(exporter)] == [
+        "thread c1: content: released (internal)"
+    ] * 2
+    assert "content:" not in exporter.stderr.getvalue()
+
+
+@pytest.mark.parametrize(
+    "threshold, verdict", [("pii", "withheld (phi)"), ("phi", "released (phi)")]
+)
+def test_a_failed_agent_run_without_its_ledger_counts_as_phi(
+    settings, threshold, verdict
+):
+    """A timeout or crash drops the chunks the agent read, so the run is assumed phi."""
+    settings.telemetry_content_max_sensitivity = threshold
+    rt = runtime(settings, FakeInvestigator([RuntimeError("agent crashed")]))
+    with exported_logs() as exporter:
+        rt.start(QUESTION, thread_id="f1")
+    assert _content_records(exporter)[-1][0] == f"thread f1: content: {verdict}"
+
+
 def test_content_capture_forces_export(settings):
     """The all-or-nothing capture switch exports content whatever the setting."""
     settings.telemetry_content_max_sensitivity = "none"
@@ -260,22 +310,49 @@ CAPTURE_ENV = "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT"
 
 
 @pytest.mark.parametrize(
-    "declared, environ, expected",
+    "declared, dotenv, expected",
     [
-        ("internal", {}, "internal: questions and answers of runs at or below"),
-        ("none", {}, "none: no question or answer is logged"),
-        ("internal", {THRESHOLD_ENV: "pii"}, "environment overrides spec.telemetry"),
-        ("none", {CAPTURE_ENV: "span_only"}, "=span_only logs every run"),
+        ("internal", "", "internal, detector regex: questions and answers of runs"),
+        ("none", "", "none: no question or answer is logged"),
+        ("internal", "SENSITIVE_DATA_PROVIDER=none", "detector none"),
+        ("internal", f"{CAPTURE_ENV}=span_only", "=span_only logs every run"),
     ],
 )
 def test_check_shows_the_content_policy_in_force(
-    workdir, monkeypatch, declared, environ, expected
+    workdir, tmp_path, declared, dotenv, expected
 ):
-    """make check names the threshold and what overrides it."""
-    for name in (THRESHOLD_ENV, CAPTURE_ENV):
-        monkeypatch.delenv(name, raising=False)
-    for name, value in environ.items():
-        monkeypatch.setenv(name, value)
-    finding = check.content_finding(load_casting(_with_content(workdir, declared)))
+    """make check reads the threshold, detector and capture switch as Nexo will (.env too)."""
+    casting = load_casting(_with_content(workdir, declared))
+    rendered = tmp_path / "nexo.env"
+    rendered.write_text("".join(f"{k}={v}\n" for k, v in build_env(casting).items()))
+    (tmp_path / ".env").write_text(dotenv + "\n")
+    finding = check.content_finding(
+        casting, lambda: Settings(_env_file=(tmp_path / ".env", rendered))
+    )
     assert finding.name == "content" and finding.ok
     assert expected in finding.detail
+    if "detector none" in expected:
+        assert "no question or answer is logged" in finding.detail
+
+
+def test_check_names_an_environment_override(workdir, monkeypatch):
+    """Only the process environment beats nexo.env's threshold; check says so."""
+    monkeypatch.setenv(THRESHOLD_ENV, "pii")
+    finding = check.content_finding(
+        load_casting(_with_content(workdir, "internal")),
+        lambda: Settings(_env_file=None),
+    )
+    assert "pii, detector regex" in finding.detail
+    assert "environment overrides spec.telemetry.content internal" in finding.detail
+
+
+def test_check_reports_an_invalid_capture_value_instead_of_echoing_it(
+    workdir, monkeypatch
+):
+    """A value Settings rejects fails the finding with the variable's name."""
+    monkeypatch.setenv(CAPTURE_ENV, "everything")
+    finding = check.content_finding(
+        load_casting(_setup(workdir, "mac-single")), lambda: Settings(_env_file=None)
+    )
+    assert not finding.ok
+    assert finding.detail == f"cannot tell what is logged: {CAPTURE_ENV} invalid"
