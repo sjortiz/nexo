@@ -53,8 +53,8 @@ Examples for query_knowledge_graph (adapt them; they are not a script):
   MATCH (e:Entity) WHERE toLower(e.name) CONTAINS "acme" OR any(a IN e.aliases WHERE toLower(a) CONTAINS "acme")
   RETURN e.key, e.name, e.type, e.aliases LIMIT 10
 - Facts over time:
-  MATCH (a:Entity)-[r]->(b:Entity) WHERE r.valid_at >= "2025-01-01"
-  RETURN a.name, type(r), b.name, r.valid_at, r.chunk_id ORDER BY r.valid_at LIMIT 25
+  MATCH (a:Entity)-[r]->(b:Entity) WHERE properties(r)['valid_at'] >= "2025-01-01"
+  RETURN a.name, type(r), b.name, properties(r)['valid_at'] AS valid_at, r.chunk_id ORDER BY valid_at LIMIT 25
 - Text around a chunk (for context the chunk itself lacks):
   MATCH (c:Chunk {{chunk_id: "chk_..."}})-[:NEXT_CHUNK]-(n:Chunk) RETURN n.chunk_id, n.section_path
 

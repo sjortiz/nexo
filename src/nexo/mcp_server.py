@@ -152,8 +152,10 @@ def build_mcp_server(  # pylint: disable=too-many-locals,too-many-statements  # 
         ):
             documents = read(
                 "MATCH (d:Document) OPTIONAL MATCH (c:Chunk)-[:PART_OF]->(d) "
-                "RETURN d.source_id AS source_id, d.title AS title, d.doc_type AS doc_type, "
-                "d.effective_date AS effective_date, d.sensitivity AS sensitivity, "
+                "RETURN d.source_id AS source_id, properties(d)['title'] AS title, "
+                "properties(d)['doc_type'] AS doc_type, "
+                "properties(d)['effective_date'] AS effective_date, "
+                "d.sensitivity AS sensitivity, "
                 "count(c) AS chunks "
                 "ORDER BY source_id"
             )

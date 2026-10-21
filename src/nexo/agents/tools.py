@@ -197,7 +197,7 @@ OPTIONAL MATCH p = SHORTEST {paths} (a)(()-[]-(:Entity)){{1,{hops}}}(b)
 RETURN [n IN nodes(p) | n {{.key, .name, .type, .sensitivity_rank}}] AS nodes,
        [r IN relationships(p) | r {{from: startNode(r).key, relation: type(r), to: endNode(r).key,
            predicate: properties(r)['predicate'], valid_at: properties(r)['valid_at'],
-           .certainty, .evidence, .evidence_rank, .chunk_ids,
+           certainty: properties(r)['certainty'], .evidence, .evidence_rank, .chunk_ids,
            sensitivity_rank: coalesce(r.sensitivity_rank, {unranked})}}] AS hops"""
 
 _NEIGHBOURS = f"""\
@@ -206,7 +206,8 @@ OPTIONAL MATCH (e)-[r]-(n:Entity)
 WITH e, r, n ORDER BY size(coalesce(r.chunk_ids, [])) DESC LIMIT $limit
 RETURN e {{.key, .name, .type, .sensitivity_rank}} AS entity,
        r {{relation: type(r), outgoing: startNode(r) = e, predicate: properties(r)['predicate'],
-          valid_at: properties(r)['valid_at'], .certainty, .evidence, .evidence_rank, .chunk_ids,
+          valid_at: properties(r)['valid_at'], certainty: properties(r)['certainty'],
+          .evidence, .evidence_rank, .chunk_ids,
           sensitivity_rank: coalesce(r.sensitivity_rank, {_UNKNOWN_RANK})}} AS edge,
        n {{.key, .name, .type, .sensitivity_rank}} AS neighbour"""
 
