@@ -12,6 +12,7 @@ Knowledge about Nexo, the Graph RAG investigation service, in
 * [System overview](architecture/overview.md) - What Nexo does and how its three modules fit together.
 * [Request lifecycle](architecture/request-lifecycle.md) - One question from intake to an approved answer.
 * [LangGraph to Strands handoff](architecture/langgraph-strands-handoff.md) - Where the workflow yields control to the agent.
+* [Glossary](architecture/glossary.md) - Nexo's terms, their aliases and where each lives.
 * [Observability](operations/observability.md) - Trace shape, metrics, content-capture policy and log correlation.
 
 # Sections
