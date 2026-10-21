@@ -38,7 +38,7 @@ from nexo.storage.vector_store import (
     retrieval_attributes,
     tokenize,
 )
-from nexo.telemetry import traced_span
+from nexo.telemetry import query_span
 
 logger = logging.getLogger(__name__)
 
@@ -235,7 +235,7 @@ class Neo4jChunkStore:
             _row(c, t, v) for c, t, v in zip(chunks, search_texts, vectors, strict=True)
         ]
         with (
-            traced_span(
+            query_span(
                 "chunk_store upsert",
                 {"db.system.name": "neo4j", "nexo.chunks.written": len(rows)},
                 kind=SpanKind.CLIENT,
@@ -276,7 +276,7 @@ class Neo4jChunkStore:
             "nexo.chunks.requested": len(chunk_ids),
         }
         with (
-            traced_span(
+            query_span(
                 "chunk_store get_by_ids", attributes, kind=SpanKind.CLIENT
             ) as span,
             self._graph.session(write=False) as session,
@@ -295,7 +295,7 @@ class Neo4jChunkStore:
         fetch = candidates * OVERFETCH
         queries = self._queries
         with (
-            traced_span(
+            query_span(
                 f"retrieval {DATA_SOURCE_ID}", attributes, kind=SpanKind.CLIENT
             ) as span,
             self._graph.session(write=False) as session,

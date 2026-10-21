@@ -34,6 +34,7 @@ from nexo.storage.graph_store import (
 from nexo.storage.schemas import CHUNK_ID_RE, ChunkRecord, Sensitivity
 from nexo.storage.sensitive_data import NoopDetector
 from nexo.storage.vector_store import ChunkFilter
+from nexo.telemetry import record_span_error
 
 log = logging.getLogger(__name__)
 
@@ -397,9 +398,11 @@ def _read_graph(
         ) from exc
 
 
-def _chunk_store_failure(exc: Exception) -> ToolFailure:
-    """Any chunk store failure (down, corrupt) goes back to the agent; the trace keeps it."""
-    trace.get_current_span().record_exception(exc)
+def _chunk_store_failure(
+    exc: Exception, *, capture_content: bool = False
+) -> ToolFailure:
+    """Return a generic error; exception content reaches traces only with capture on."""
+    record_span_error(trace.get_current_span(), exc, capture_content=capture_content)
     name = type(exc).__name__
     return ToolFailure(name, _CHUNK_STORE_DOWN, error_type=name)
 
@@ -586,7 +589,9 @@ def _fetch_tool(
             try:
                 records = chunks.get_by_ids(valid)
             except Exception as exc:  # pylint: disable=broad-exception-caught
-                raise _chunk_store_failure(exc) from exc
+                raise _chunk_store_failure(
+                    exc, capture_content=settings.capture_content
+                ) from exc
             sensitivity = {r.chunk_id: r.sensitivity.value for r in records}
             views = [(r, redactor.visible(r, ctx.scope.chunk_filter)) for r in records]
             withheld = [r.chunk_id for r, shown in views if shown is None]
@@ -651,7 +656,9 @@ def _search_tool(
             try:
                 allowed = redactor.search(chunks, query, limit, ctx.scope.chunk_filter)
             except Exception as exc:  # pylint: disable=broad-exception-caught
-                raise _chunk_store_failure(exc) from exc
+                raise _chunk_store_failure(
+                    exc, capture_content=settings.capture_content
+                ) from exc
             sent = call.finish(
                 {"query": query, "chunks": [_chunk_view(r) for r in allowed]},
                 "chunks",

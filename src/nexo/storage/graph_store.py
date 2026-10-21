@@ -61,7 +61,7 @@ from nexo.storage.schemas import (
     GroundedTriple,
     Sensitivity,
 )
-from nexo.telemetry import traced_span
+from nexo.telemetry import query_span
 
 DATA_MODEL = (
     """\
@@ -201,7 +201,12 @@ class GraphStore:
         if query_text is not None and self._limits.capture_text:
             # Agent-authored Cypher is not parameterized and may carry names: opt-in only.
             attributes["db.query.text"] = query_text[:4000]
-        return traced_span(query_summary, attributes, kind=SpanKind.CLIENT)
+        return query_span(
+            query_summary,
+            attributes,
+            kind=SpanKind.CLIENT,
+            capture_content=self._limits.capture_text,
+        )
 
     @_connection_retry
     def verify(self) -> None:

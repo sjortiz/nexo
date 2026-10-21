@@ -53,7 +53,7 @@ from opentelemetry.sdk.trace.export import (
     ConsoleSpanExporter,
     SimpleSpanProcessor,
 )
-from opentelemetry.trace import Span
+from opentelemetry.trace import Span, Status, StatusCode
 
 from nexo.config import Settings
 
@@ -226,6 +226,43 @@ def traced_span(
         name, attributes=clean_attributes(attributes or {}), **kwargs
     ) as span:
         yield span
+
+
+def record_span_error(
+    span: Span, exc: Exception, *, capture_content: bool = False
+) -> None:
+    """Mark a failure without exporting a potentially content-bearing exception."""
+    span.set_attribute("error.type", type(exc).__name__)
+    span.set_status(Status(StatusCode.ERROR, "storage operation failed"))
+    if capture_content:
+        span.record_exception(exc)
+
+
+@contextmanager
+def query_span(
+    name: str,
+    attributes: Mapping[str, Any] | None = None,
+    *,
+    capture_content: bool = False,
+    **kwargs: Any,
+) -> Iterator[Span]:
+    """Trace storage operations with safe errors; content capture is explicitly opt-in.
+
+    Driver messages can quote query literals. Disable the SDK's automatic event
+    and status description, then set only a generic status and exception type.
+    """
+    with traced_span(
+        name,
+        attributes,
+        record_exception=False,
+        set_status_on_exception=False,
+        **kwargs,
+    ) as span:
+        try:
+            yield span
+        except Exception as exc:
+            record_span_error(span, exc, capture_content=capture_content)
+            raise
 
 
 def caller_attributes(settings: Settings, user: str | None = None) -> dict[str, str]:

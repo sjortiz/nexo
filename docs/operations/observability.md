@@ -76,11 +76,25 @@ and calls refused for budget under `budget_exhausted`, so failed spans = `tool_e
 | `graph_unavailable` | Neo4j unreachable after retries |
 | `budget_exhausted` | the tool budget was used up (a refused call) |
 | `result_too_large` | the result did not fit `TOOL_RESULT_MAX_CHARS` even with every row dropped |
-| exception class name | the chunk store failed (its exception is recorded on the span), or a bug in the tool: the model gets a generic error, and the traceback goes to the log only |
+| exception class name | the chunk store failed, or a bug in the tool: the model gets a generic error; chunk-store exception events require content capture, and unexpected tool tracebacks go to the log |
 
 The span status description is Strands' generic "tool returned error status": the error text the
 model received is message content (a Cypher error can quote the query), so it stays off the tool
 span unless capture is on.
+
+Failed database spans, including `agent_query`, retain their database metadata and add
+`error.type` (the exception class, for example `CypherSyntaxError`) and Error status with the
+generic description `storage operation failed`. Storage spans disable OpenTelemetry's automatic
+exception recording and exception-derived status descriptions. With capture off, no exception
+event or message is exported: Neo4j errors can quote the query and its literals.
+`OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT=span_only|span_and_event` enables both
+`db.query.text` and the query span's `exception` event, including its message and traceback.
+
+Chunk-store child spans use the same safe type and generic status, without exception content.
+For failed `fetch_vector_chunks` and `search_chunks` calls, the parent `execute_tool` span records
+the chunk-store exception event only when that content-capture switch is on; its type and generic
+tool status remain available either way. These exceptions use the explicit capture switch,
+independently of the sensitivity gate for question and answer logs.
 
 In SigNoz, Traces Explorer: filter `name LIKE 'execute_tool %'` and `hasError = true` (or
 `gen_ai.tool.status = error`), group by `error.type`. Strands' tool metrics agree with the spans:

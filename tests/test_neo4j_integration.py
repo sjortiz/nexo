@@ -20,8 +20,8 @@ from langchain_core.language_models.fake_chat_models import GenericFakeChatModel
 from langchain_core.messages import AIMessage
 from langgraph.checkpoint.memory import InMemorySaver
 from neo4j import GraphDatabase
-from neo4j.exceptions import ClientError
-from opentelemetry.trace import SpanKind
+from neo4j.exceptions import ClientError, CypherSyntaxError
+from opentelemetry.trace import SpanKind, StatusCode
 from strands.models.openai import OpenAIModel
 
 from nexo.agents.investigator import Investigator
@@ -553,6 +553,46 @@ def test_row_cap_tool_redaction_and_db_span(store, settings, spans):
         "(:Organization)-[:PARTNERS_WITH]->(:Organization)  x60"
         in store.describe_schema()
     )
+
+
+@pytest.mark.parametrize("capture", ["no_content", "span_only", "span_and_event"])
+def test_failed_query_span_gates_exception_content(settings, spans, capture):
+    """A real Neo4j syntax error must not export its query literal by default."""
+    settings.otel_instrumentation_genai_capture_message_content = capture
+    literal = "JaneRoe-SSN-123"
+    cypher = f"MATCH (n:Person {{secret: '{literal}'}}) RETRN n"
+    driver = GraphDatabase.driver(
+        URI, auth=("neo4j", os.environ["NEO4J_TEST_PASSWORD"])
+    )
+    with (
+        GraphStore(
+            driver,
+            database="neo4j",
+            limits=QueryLimits(
+                timeout_s=10, max_rows=50, capture_text=settings.capture_content
+            ),
+            uri=URI,
+        ) as graph,
+        pytest.raises(CypherSyntaxError),
+    ):
+        graph.run_read_query(cypher)
+
+    [span] = spans.get_finished_spans()
+    assert span.name == "agent_query" and span.kind is SpanKind.CLIENT
+    assert span.attributes["error.type"] == "CypherSyntaxError"
+    assert span.status.status_code is StatusCode.ERROR
+    assert span.status.description == "storage operation failed"
+    assert (literal in span.to_json()) is settings.capture_content
+    messages = [
+        event.attributes["exception.message"]
+        for event in span.events
+        if event.name == "exception"
+    ]
+    if settings.capture_content:
+        assert span.attributes["db.query.text"] == cypher
+        assert len(messages) == 1 and literal in messages[0]
+    else:
+        assert "db.query.text" not in span.attributes and not messages
 
 
 def _last_tool_payload(request: dict) -> dict:

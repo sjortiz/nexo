@@ -34,7 +34,7 @@ from langchain_core.vectorstores import InMemoryVectorStore
 from pydantic import BaseModel, ConfigDict
 
 from nexo.storage.schemas import ChunkRecord, Sensitivity
-from nexo.telemetry import traced_span
+from nexo.telemetry import query_span
 
 DATA_SOURCE_ID = "nexo-chunks"
 RetrievalMode = Literal["hybrid", "vector", "keyword"]
@@ -196,7 +196,7 @@ class LocalChunkStore:
     def get_by_ids(self, chunk_ids: Sequence[str]) -> list[ChunkRecord]:
         """Return the stored chunks for these ids, in order; unknown ids are skipped."""
         attributes = {"nexo.chunks.requested": len(chunk_ids)}
-        with self._lock, traced_span("chunk_store get_by_ids", attributes) as span:
+        with self._lock, query_span("chunk_store get_by_ids", attributes) as span:
             documents = self._store.get_by_ids(list(chunk_ids))
             span.set_attribute("nexo.chunks.found", len(documents))
         by_id = {
@@ -217,7 +217,7 @@ class LocalChunkStore:
         # GenAI `retrieval` operation; INTERNAL because this store is in-process
         # (a pgvector/OpenSearch backend would be a CLIENT span).
         attributes = retrieval_attributes(k, self._mode)
-        with self._lock, traced_span(f"retrieval {DATA_SOURCE_ID}", attributes) as span:
+        with self._lock, query_span(f"retrieval {DATA_SOURCE_ID}", attributes) as span:
             candidates = candidate_count(k, self._mode)
             rankings: list[list[str]] = []
             if self._mode in ("vector", "hybrid"):
