@@ -41,7 +41,8 @@ sources:
 # Models referenced by Nexo's local profiles
 
 From the Ollama library:[^library] `qwen3:30b-a3b-instruct-2507-q4_K_M` (19 GB, tools, no thinking),
-`qwen3.6:35b-a3b-q4_K_M` (24 GB, tools, thinking), `qwen3:4b-instruct-2507-q4_K_M` (2.5 GB),
+`qwen3.6:35b-a3b-q4_K_M` (24 GB, tools, thinking), `gemma4:31b` (20 GB, dense, tools, thinking,
+vision; optional), `qwen3:4b-instruct-2507-q4_K_M` (2.5 GB),
 `llama3.1:8b-instruct-q4_K_M` (4.9 GB, tools), `bge-m3` (1.2 GB, embedding), `qwen3-embedding:0.6b` (639 MB,
 embedding).
 

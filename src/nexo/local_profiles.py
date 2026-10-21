@@ -47,7 +47,9 @@ ROLE_SETS = {
 
 # Models that reason before answering; their JSON roles get reasoning_effort=none
 # because the schema is only enforced after the reasoning section.
-THINKING_MODELS = frozenset({"qwen3.5:9b-q4_K_M", "qwen3.6:35b-a3b-q4_K_M"})
+THINKING_MODELS = frozenset(
+    {"qwen3.5:9b-q4_K_M", "qwen3.6:35b-a3b-q4_K_M", "gemma4:31b"}
+)
 
 # Approximate download sizes (GB) from the Ollama library, for memory planning.
 MODEL_SIZES_GB = {
@@ -55,6 +57,7 @@ MODEL_SIZES_GB = {
     "qwen3:4b-instruct-2507-q4_K_M": 2.5,
     "qwen3:30b-a3b-instruct-2507-q4_K_M": 19.0,
     "qwen3.6:35b-a3b-q4_K_M": 24.0,
+    "gemma4:31b": 20.0,  # optional agent/extraction model, in no tier
     "llama3.1:8b-instruct-q4_K_M": 4.9,
     "bge-m3": 1.2,
 }
