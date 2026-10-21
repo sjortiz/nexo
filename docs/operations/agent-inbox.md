@@ -32,7 +32,10 @@ You want to review paused questions in a page instead of over MCP or `nexo revie
      ports: { agentInbox: 3030, reviewInbox: 2024 }   # optional; these are the defaults
    ```
 
-2. `make up` builds and starts the page at `http://127.0.0.1:3030`. The first build needs network access.
+2. `make up` builds and starts the page at `http://127.0.0.1:3030`. The first build needs network access
+   (git, npm and Google Fonts), about 3 GB of free disk in the Podman machine while it runs (the
+   finished image is 1.4 GB) and memory for a Next.js build: the Dockerfile caps Node's heap at
+   1.5 GB, so a 4 GiB machine running the telemetry stack is enough; at 3 GiB the build is killed.
 3. `make review-inbox` serves the adapter on `127.0.0.1:2024`. It reviews as `NEXO_USER` (else your login
    name) and reads passages at `MCP_CLEARANCE` (else `DEFAULT_CLEARANCE`).
 4. In the page, add an inbox: graph `nexo`, deployment URL `http://127.0.0.1:2024`, no API key. Open the

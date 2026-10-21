@@ -8,7 +8,11 @@ RUN apk add --no-cache git \
     && git checkout --detach FETCH_HEAD
 WORKDIR /app
 ENV NEXT_TELEMETRY_DISABLED=1
-RUN corepack enable && yarn install --frozen-lockfile && yarn build
+# A capped heap keeps the Next.js build inside a small Podman VM (3 GB on the native
+# telemetry machine); without it the build is killed for memory.
+RUN corepack enable && yarn install --frozen-lockfile \
+    && NODE_OPTIONS=--max-old-space-size=1536 yarn build \
+    && yarn cache clean  # ~1 GB of package tarballs the running page never reads
 USER node
 EXPOSE 3000
 CMD ["yarn", "start", "-H", "0.0.0.0", "-p", "3000"]
