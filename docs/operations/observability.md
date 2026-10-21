@@ -95,8 +95,8 @@ A run's level is the highest of:
 - what the sensitive-data detector finds in the question, the released answer, the reviewer's
   comment and the router's reason.
 
-A level Nexo does not rank counts as `phi`; a run that read nothing and in which nothing is found is
-`public`. Graph rows are not in the ledger: the detector on the answer is what catches personal details
+A level Nexo does not rank counts as `phi`, and so does an agent run that failed or timed out without
+its ledger; a run that read nothing and in which nothing is found is `public`. Graph rows are not in the ledger: the detector on the answer is what catches personal details
 the agent took from them.
 
 | Setting | Runs logged with their content |
@@ -107,20 +107,27 @@ the agent took from them.
 | `pii` | Also runs that read PII chunks, or whose question or answer has an email, phone number, SSN and so on |
 | `phi` | Every run the detector could classify |
 
+Whatever the setting, nothing is logged without a detector (`SENSITIVE_DATA_PROVIDER=none`) or
+when the detector fails, unless content capture is on.
+
 At or below the setting, after each `start` and `review` Nexo logs `thread <id>: content: released
-(internal)` from `nexo.service`; the OTLP record carries `nexo.content.question`,
+(internal)` on the `nexo.content` logger, kept at INFO whatever `LOG_LEVEL` is so the record always
+reaches OTLP (stderr still follows `LOG_LEVEL`); the OTLP record carries `nexo.content.question`,
 `nexo.content.answer` (only once released by a reviewer or the review policy, never a draft),
 `nexo.content.review_comment` and `nexo.content.routing_reason`, and the request span gets the
 same attributes as a `nexo.content` event. Above it the line reads `content: withheld (pii)` and
 carries no text. With `telemetry.logs: otlp` the record reaches SigNoz; the span event reaches the
-self-hosted trace backends, and the LangSmith add-on drops it.[^addons] The stderr line never carries
-the text. The request span's `nexo.content` attribute holds the verdict either way.
+self-hosted trace backends, and the LangSmith add-on drops it.[^addons] The request span's
+`nexo.content` attribute holds the verdict either way, and LangSmith receives that verdict, not the
+text. The stderr log line never carries the text, but `OTEL_CONSOLE_EXPORT=true` prints spans to
+stderr, released `nexo.content` events included.
 
-The gate fails closed: when the detector raises (for example Comprehend Medical is unreachable) or
-the runtime has none, the content is withheld (`withheld (detector failed)`). With
-`SENSITIVE_DATA_PROVIDER=none` nothing is detected, so only the chunks read decide.
-`OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT=span_only|span_and_event` still exports every
-run's content (`released (content capture on)`). `make check` shows the setting in force.
+The gate fails closed. When the detector raises (for example Comprehend Medical is unreachable) the
+content is withheld as `withheld (detector failed)`; when there is none, including
+`SENSITIVE_DATA_PROVIDER=none`, whose detector finds nothing and so cannot classify, as `withheld (no
+detector)`. `OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT=span_only|span_and_event` still
+exports every run's content (`released (content capture on)`). `make check` shows the setting, the
+detector and the capture switch in force, read as Nexo reads them (`.env` included).
 
 # Which user and which question
 

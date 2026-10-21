@@ -46,9 +46,11 @@ content into span events.
   is the most sensitive run whose question, released answer, reviewer comment and router reason are
   exported, in an OTLP log record and a `nexo.content` event on the request span. A run's level is
   the highest of the chunks its agent read (`fetched_sensitivity`) and the detector's finding on those
-  texts; an unranked level counts as `phi`. Above the setting the record says `content: withheld
-  (<level>)` and carries no text; a detector that fails, or none, withholds too. `none` keeps the
-  earlier behaviour; content capture still exports everything. The LangSmith add-on drops the event.[^gate]
+  texts; an unranked level, and a failed agent run without its ledger, count as `phi`. Above the
+  setting the record says `content: withheld (<level>)` and carries no text. It fails closed: a
+  detector that raises, or none (`SENSITIVE_DATA_PROVIDER=none` cannot classify), withholds too. The
+  record has its own logger, kept at INFO, so `LOG_LEVEL` cannot drop it. `none` keeps the
+  earlier behaviour; content capture still exports everything. The LangSmith add-on drops the event; it receives the verdict attribute only.[^gate]
 
 # Options considered
 

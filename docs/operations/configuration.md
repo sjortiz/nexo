@@ -153,7 +153,7 @@ No policy approves an answer with a `block` finding.
 |---|---|---|
 | `OTEL_SERVICE_NAME` | `nexo` | `service.name` resource attribute. |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | unset | OTLP/HTTP base URL; unset disables export. |
-| `OTEL_CONSOLE_EXPORT` | `false` | Print spans to stderr. |
+| `OTEL_CONSOLE_EXPORT` | `false` | Print spans to stderr, including the released question and answer (`nexo.content` events). |
 | `OTEL_LOGS_EXPORTER` | `none` | `otlp` also sends log records to the collector, with trace ids; `result` payloads only with content capture on. Stored by SigNoz; `nexo.yaml` sets it (`telemetry.logs`, default `otlp`). |
 | `OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT` | `no_content` | `span_only` / `span_and_event` put prompts, outputs and agent Cypher on spans (may carry PII). Standard GenAI variable. |
 | `OTEL_SEMCONV_STABILITY_OPT_IN` | derived | Strands conventions and redaction; derived from content capture unless set. |
@@ -165,7 +165,7 @@ No policy approves an answer with a `block` finding.
 | `AGENT_INBOX_PORT` | `3030` | Port of the Agent Inbox page, the adapter's only allowed origin; `nexo.yaml` sets both ([Review in Agent Inbox](agent-inbox.md)). |
 | `NEXO_USER` | login name | `user.id` on request and MCP spans; `nexo ask --user` and a reviewer override it. |
 | `QUERY_HASH_KEY` | generated | Key for `nexo.query.hash` (HMAC of the question) on traces; generated into the secrets store by `make env`, never exported. Unset: no hash. |
-| `TELEMETRY_CONTENT_MAX_SENSITIVITY` | `internal` | The most sensitive run whose question, released answer, reviewer comment and router reason are exported (OTLP log record and a `nexo.content` span event): `none`, `public`, `internal`, `pii` or `phi`. A run's level is the highest of the chunks its agent read and the detector's finding on those texts; above the setting, or when the detector fails, they are withheld and the record says why (`content: withheld (pii)`). `nexo.yaml` sets it (`telemetry.content`); content capture exports every run. See [Observability](observability.md#question-and-answer-logs). |
+| `TELEMETRY_CONTENT_MAX_SENSITIVITY` | `internal` | The most sensitive run whose question, released answer, reviewer comment and router reason are exported (OTLP log record and a `nexo.content` span event): `none`, `public`, `internal`, `pii` or `phi`. A run's level is the highest of the chunks its agent read and the detector's finding on those texts; above the setting, with no detector (`SENSITIVE_DATA_PROVIDER=none`) or when the detector fails, they are withheld and the record says why (`content: withheld (pii)`). `nexo.yaml` sets it (`telemetry.content`); content capture exports every run. See [Observability](observability.md#question-and-answer-logs). |
 | `TRACE_QUERY_TEXT` | `false` | `true` puts the question on the request span (`nexo.query.text`); `nexo.yaml` sets it (`telemetry.queryText`). Self-hosted backends only: LangSmith never receives it. |
 
 **Logging**
