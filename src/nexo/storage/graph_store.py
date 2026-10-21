@@ -30,7 +30,6 @@ from tenacity import (
     wait_exponential_jitter,
 )
 
-from nexo.config import Settings
 from nexo.storage.ontology import FALLBACK_RELATION
 from nexo.storage.resolution import Candidate
 from nexo.storage.schemas import (
@@ -132,7 +131,7 @@ class GraphStore:
         self._server = {"server.address": address.hostname, "server.port": address.port}
 
     @classmethod
-    def from_settings(cls, settings: Settings, *, read_only: bool) -> GraphStore:
+    def from_settings(cls, settings: Any, *, read_only: bool) -> GraphStore:
         """Connect with the configured driver, using the read-only user when asked."""
         user, password = settings.neo4j_user, settings.neo4j_password
         if read_only and settings.neo4j_read_user and settings.neo4j_read_password:

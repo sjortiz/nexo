@@ -111,7 +111,7 @@ settings = Settings(
 # %%
 show(
     [
-        {key: row.get(key) for key in ("role", "model", "check")}
+        {key: getattr(row, key) for key in ("role", "model", "check")}
         for row in check_model_servers(settings, resolved_models(settings))
     ]
 )

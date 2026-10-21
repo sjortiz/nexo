@@ -24,7 +24,7 @@ import jsonpatch
 import yaml
 
 from nexo.setup.components import COMPONENTS, load_fragment, merge_compose, merge_patch
-from nexo.setup.lock import resolve, vllm_urls
+from nexo.setup.lock import Lock, resolve, vllm_urls
 from nexo.setup.engine import PodmanMachine
 from nexo.setup.schema import NEEDS_COLLECTOR, Casting, Ports, SetupError
 
@@ -293,15 +293,15 @@ def _configure_app(
 
 
 def build_compose(
-    casting: Casting, lock: dict[str, Any], on: set[str], layout: Layout, host: Host
+    casting: Casting, lock: Lock, on: set[str], layout: Layout, host: Host
 ) -> dict[str, Any]:
     """The compose file for the container components; it mounts the files in layout.out."""
     out = layout.root / layout.out
     on = containers(casting, on)
-    compose: dict[str, Any] = {"name": lock["name"]}
+    compose: dict[str, Any] = {"name": lock.name}
     for name in ORDER:
         if name in on and COMPONENTS[name].compose:
-            fragment = _compose_fragment(layout, name, lock["images"].get(name, {}))
+            fragment = _compose_fragment(layout, name, lock.images.get(name, {}))
             compose = merge_compose(compose, fragment)
     if "volumes" in compose:
         compose["volumes"] = {n: spec or {} for n, spec in compose["volumes"].items()}
@@ -497,7 +497,7 @@ def _apply_patches(casting: Casting, files: dict[str, Any]) -> None:
 
 def rendered_files(
     casting: Casting,
-    lock: dict[str, Any],
+    lock: Lock,
     layout: Layout,
     host: Host,
     extra_addons: frozenset[str] = frozenset(),
@@ -505,7 +505,7 @@ def rendered_files(
     """Repo-relative path -> content of every rendered file."""
     on = enabled_set(lock, extra_addons)
     header = PORTABLE_HEADER if layout.portable else HEADER
-    if source := lock.get("source"):
+    if source := lock.source:
         header += SOURCE_LINE.format(file=source["file"], digest=source["sha256"])
     env_lines = [f"{key}={value}" for key, value in build_env(casting, on).items()]
     env_file = {f"{layout.out}/nexo.env": header + "\n".join(env_lines) + "\n"}
@@ -552,7 +552,7 @@ def write_files(root: Path, files: dict[str, str]) -> None:
 
 def render(
     casting: Casting,
-    lock: dict[str, Any],
+    lock: Lock,
     root: Path,
     host: Host,
     extra_addons: frozenset[str] = frozenset(),
@@ -581,6 +581,6 @@ def portable_files(casting: Casting, root: Path) -> dict[str, str]:
     return rendered_files(casting, resolve(casting, root, None, True), layout, host)
 
 
-def enabled_set(lock: dict[str, Any], extra_addons: frozenset[str]) -> set[str]:
+def enabled_set(lock: Lock, extra_addons: frozenset[str]) -> set[str]:
     """Components on for this run: the lock's plus per-run add-ons."""
-    return {name for name, enabled in lock["enabled"].items() if enabled} | extra_addons
+    return {name for name, enabled in lock.enabled.items() if enabled} | extra_addons

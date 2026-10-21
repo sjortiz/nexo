@@ -20,6 +20,7 @@ from nexo.local_profiles import plan
 from nexo.setup import check
 from nexo.setup.check import Finding, memory_budget
 from nexo.setup import commands
+from nexo.llm import ModelRow
 from nexo.setup.commands import model_lines
 from nexo.setup.components import (
     COMPONENTS,
@@ -192,7 +193,7 @@ def test_lock_keeps_pins_until_upgrade(workdir):
     casting = load_casting(path)
     first = lock(casting, path, workdir)
     default = default_images(ROOT, "neo4j")["neo4j"]
-    assert first["images"]["neo4j"]["neo4j"] == default
+    assert first.images["neo4j"]["neo4j"] == default
     lock_path = workdir / "nexo.lock"
     lock_path.write_text(lock_path.read_text().replace(default, "neo4j:5.0-old"))
 
@@ -202,8 +203,8 @@ def test_lock_keeps_pins_until_upgrade(workdir):
         lambda d: d["spec"]["addons"].update(jaeger={"enabled": True}),
     )
     second = lock(load_casting(edited), edited, workdir)
-    assert second["enabled"]["jaeger"] is True
-    assert second["images"]["neo4j"]["neo4j"] == "neo4j:5.0-old"
+    assert second.enabled["jaeger"] is True
+    assert second.images["neo4j"]["neo4j"] == "neo4j:5.0-old"
 
     pinned = _setup(
         workdir,
@@ -211,12 +212,12 @@ def test_lock_keeps_pins_until_upgrade(workdir):
         lambda d: d["spec"].update(components={"neo4j": {"image": "neo4j:6"}}),
     )
     assert (
-        lock(load_casting(pinned), pinned, workdir)["images"]["neo4j"]["neo4j"]
+        lock(load_casting(pinned), pinned, workdir).images["neo4j"]["neo4j"]
         == "neo4j:6"
     )
     reset = _setup(workdir, "mac-single")
     upgraded = lock(load_casting(reset), reset, workdir, upgrade=True)
-    assert upgraded["images"]["neo4j"]["neo4j"] == default
+    assert upgraded.images["neo4j"]["neo4j"] == default
 
 
 @pytest.mark.parametrize(
@@ -360,7 +361,7 @@ def test_memory_budget_counts_only_models_this_machine_serves(workdir):
         path = _setup(workdir, preset)
         casting = load_casting(path)
         locked = lock(casting, path, workdir)
-        on = {name for name, enabled in locked["enabled"].items() if enabled}
+        on = {name for name, enabled in locked.enabled.items() if enabled}
         budgets[preset] = memory_budget(casting, locked, on)
     assert budgets["mac-single"]["neo4j"] == MEMORY_GB["neo4j"]
     assert budgets["mac-single"]["models"] == plan("m5-pro-24").weights_gb
@@ -435,24 +436,15 @@ def test_committed_compose_file_is_current(tmp_path):
 def test_model_lines_report_off_roles_and_what_a_server_has():
     """A role that is off is ok (no KeyError); a failure lists the server's models."""
     rows = [
-        {
-            "role": "agent",
-            "model": "qwen3.5:9b",
-            "base_url": "http://x/v1",
-            "check": "ok",
-        },
-        {
-            "role": "judge",
-            "model": None,
-            "note": "off: nexo eval skips generation scores",
-        },
-        {
-            "role": "router",
-            "model": "qwen3:4b",
-            "base_url": "http://x/v1",
-            "check": "model not served here",
-            "served": ["bge-m3", "qwen3.5:9b"],
-        },
+        ModelRow("agent", "qwen3.5:9b", "http://x/v1", check="ok"),
+        ModelRow("judge", None, note="off: nexo eval skips generation scores"),
+        ModelRow(
+            "router",
+            "qwen3:4b",
+            "http://x/v1",
+            check="model not served here",
+            served=["bge-m3", "qwen3.5:9b"],
+        ),
     ]
     lines = model_lines(rows)
     assert lines[0] == (True, "model agent: qwen3.5:9b at http://x/v1")
@@ -540,7 +532,7 @@ def _memory(workdir, monkeypatch, preset, sizes, addons=()):
     path = _setup(workdir, preset)
     casting = load_casting(path)
     locked = lock(casting, path, workdir)
-    on = {n for n, enabled in locked["enabled"].items() if enabled} | set(addons)
+    on = {n for n, enabled in locked.enabled.items() if enabled} | set(addons)
     return {f.name: f for f in check.memory_findings(casting, locked, on, MAC)}
 
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+from dataclasses import replace
 import shutil
 import subprocess
 import sys
@@ -403,7 +404,7 @@ def test_init_writes_this_machines_profile(
     monkeypatch.chdir(workdir)
     (workdir / "examples").symlink_to(ROOT / "examples")
     monkeypatch.setattr(commands, "detect_profile", lambda: detected)
-    monkeypatch.setattr(commands.platform, "system", lambda: "Darwin")
+    monkeypatch.setattr(commands, "this_os", lambda: "macos")
     assert cli.main(["setup", "init", *argv]) == 0
     casting = load_casting(workdir / "nexo.yaml")
     assert casting.spec.models.local.profile == profile
@@ -465,11 +466,10 @@ def test_check_reports_models_up_will_pull_as_todo(workdir, monkeypatch, caplog)
     monkeypatch.chdir(workdir)
 
     def servers(_settings, rows):
-        for row in rows:
-            if row.get("model"):
-                row["check"] = "model not served here"
-                row["served"] = []
-        return rows
+        return [
+            replace(row, check="model not served here", served=[]) if row.model else row
+            for row in rows
+        ]
 
     monkeypatch.setattr(commands, "check_model_servers", servers)
     _render_dir(workdir, _setup(workdir, "mac-single"))
@@ -487,7 +487,7 @@ def test_podman_vm_finding_says_how_much_memory_to_set(workdir, monkeypatch):
     path = _setup(workdir, "mac-single")
     casting = load_casting(path)
     locked = lock(casting, path, workdir)
-    on = {n for n, e in locked["enabled"].items() if e} | {"langfuse", "jaeger"}
+    on = {n for n, e in locked.enabled.items() if e} | {"langfuse", "jaeger"}
     vm = {f.name: f for f in check.memory_findings(casting, locked, on, MAC)}[
         "podman vm"
     ]

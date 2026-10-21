@@ -17,7 +17,8 @@ import re
 import urllib.error
 import urllib.request
 from collections.abc import Sequence
-from typing import TypeVar
+from dataclasses import dataclass, replace
+from typing import Any, TypeVar
 
 from langchain_core.embeddings import DeterministicFakeEmbedding, Embeddings
 from langchain_core.language_models import BaseChatModel
@@ -150,52 +151,62 @@ def invoke_structured(
     ) from last_error
 
 
-def resolved_models(settings: Settings) -> list[dict]:
+@dataclass(frozen=True)
+class ModelRow:
+    """One role's model and server, and what `--check` found out about them. No secrets."""
+
+    role: str
+    model: str | None
+    base_url: str | None = None
+    reasoning_effort: str | None = None
+    note: str | None = None  # why a role is off
+    check: str | None = (
+        None  # ok | unreachable: ... | model not served here | structured output failed
+    )
+    served: list[str] | None = (
+        None  # what the server lists, when the model is not among them
+    )
+    detail: str | None = None  # the structured-output probe's complaint
+
+    def as_dict(self) -> dict[str, Any]:
+        """The row as `nexo models` prints it: only the fields that apply to the role."""
+        row: dict[str, Any] = {"role": self.role, "model": self.model}
+        if self.model is not None:
+            row["base_url"] = self.base_url
+            if self.role != "embedding":
+                row["reasoning_effort"] = self.reasoning_effort
+        for key in ("note", "check", "served", "detail"):
+            if (value := getattr(self, key)) is not None:
+                row[key] = value
+        return row
+
+
+def resolved_models(settings: Settings) -> list[ModelRow]:
     """The model and server each role calls, after profiles and explicit settings. No secrets."""
     rows = []
     for role in ("agent", "extraction", "router"):
         endpoint = settings.endpoint(role)
         rows.append(
-            {
-                "role": role,
-                "model": endpoint.model,
-                "base_url": endpoint.base_url,
-                "reasoning_effort": endpoint.reasoning_effort,
-            }
+            ModelRow(role, endpoint.model, endpoint.base_url, endpoint.reasoning_effort)
         )
     if settings.judge_model:
         endpoint = settings.endpoint("judge")
         rows.append(
-            {
-                "role": "judge",
-                "model": endpoint.model,
-                "base_url": endpoint.base_url,
-                "reasoning_effort": endpoint.reasoning_effort,
-            }
+            ModelRow(
+                "judge", endpoint.model, endpoint.base_url, endpoint.reasoning_effort
+            )
         )
     else:
         rows.append(
-            {
-                "role": "judge",
-                "model": None,
-                "note": "off: nexo eval skips generation scores",
-            }
+            ModelRow("judge", None, note="off: nexo eval skips generation scores")
         )
     if settings.embedding_provider == "fake":
         rows.append(
-            {
-                "role": "embedding",
-                "model": None,
-                "note": "fake: deterministic offline vectors",
-            }
+            ModelRow("embedding", None, note="fake: deterministic offline vectors")
         )
     else:
         rows.append(
-            {
-                "role": "embedding",
-                "model": settings.embedding_model,
-                "base_url": settings.embedding_base_url,
-            }
+            ModelRow("embedding", settings.embedding_model, settings.embedding_base_url)
         )
     return rows
 
@@ -210,9 +221,9 @@ _PROBE_SCHEMA = {
 
 
 def check_model_servers(
-    settings: Settings, rows: list[dict], *, timeout_s: float = 5.0
-) -> list[dict]:
-    """Mark each row with whether its server answers and lists its model.
+    settings: Settings, rows: list[ModelRow], *, timeout_s: float = 5.0
+) -> list[ModelRow]:
+    """Each row with whether its server answers and lists its model.
 
     Uses GET /models (OpenAI protocol). JSON roles also get one tiny
     schema-constrained request: a server can list a model and still be unable
@@ -222,15 +233,17 @@ def check_model_servers(
     listings: dict[str, set[str]] = {}
     unreachable: dict[str, str] = {}
     probes: dict[tuple, str | None] = {}
+    checked = []
     for row in rows:
-        if not row.get("model"):
+        if not row.model:
+            checked.append(row)
             continue
         key = (
             settings.embedding_api_key
-            if row["role"] == "embedding"
-            else settings.endpoint(row["role"]).api_key
+            if row.role == "embedding"
+            else settings.endpoint(row.role).api_key
         )
-        url = row["base_url"]
+        url = row.base_url
         if url not in listings and url not in unreachable:
             try:
                 listings[url] = _served_models(url, key.get_secret_value(), timeout_s)
@@ -238,23 +251,24 @@ def check_model_servers(
                 unreachable[url] = str(exc)
         served = listings.get(url)
         if served is None:
-            row["check"] = f"unreachable: {unreachable[url]}"
+            row = replace(row, check=f"unreachable: {unreachable[url]}")
         # Ollama tags untagged pulls :latest
-        elif row["model"] in served or f"{row['model']}:latest" in served:
-            row["check"] = "ok"
+        elif row.model in served or f"{row.model}:latest" in served:
+            row = replace(row, check="ok")
         else:
-            row["check"] = "model not served here"
-            row["served"] = sorted(served)
-        if row["check"] == "ok" and row["role"] in JSON_ROLES:
-            probe = (row["base_url"], row["model"], row.get("reasoning_effort"))
+            row = replace(row, check="model not served here", served=sorted(served))
+        if row.check == "ok" and row.role in JSON_ROLES:
+            probe = (row.base_url, row.model, row.reasoning_effort)
             if probe not in probes:
                 probes[probe] = _probe_structured_output(
                     *probe, key.get_secret_value(), settings.llm_timeout_s
                 )
             if probes[probe]:
-                row["check"] = "structured output failed"
-                row["detail"] = probes[probe]
-    return rows
+                row = replace(
+                    row, check="structured output failed", detail=probes[probe]
+                )
+        checked.append(row)
+    return checked
 
 
 def _probe_structured_output(
