@@ -47,14 +47,11 @@ def build_chat_model(
 ) -> ChatOpenAI:
     """LangChain client for a JSON-producing role (router, extraction, judge)."""
     endpoint = settings.endpoint(role)
-    extra: dict[str, str] = {}
-    if endpoint.reasoning_effort:
-        extra["reasoning_effort"] = endpoint.reasoning_effort
     return ChatOpenAI(
-        **extra,
         base_url=endpoint.base_url,
         api_key=endpoint.api_key,
         model=endpoint.model,
+        reasoning_effort=endpoint.reasoning_effort,
         temperature=temperature,
         timeout=settings.llm_timeout_s,
         # The openai client retries connection errors, 408/409/429 and 5xx

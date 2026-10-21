@@ -313,9 +313,8 @@ def _seeded_request(settings, chunk_store, detector):
         settings=settings,
         graph=FakeGraph(),
         model=OpenAIModel(client=client, model_id="m", stream=False),
+        detector=detector,
     )
-    if detector:
-        investigator.with_detector(detector)
     investigator.investigate(
         "Who led product at Delta Devices?", scope=InvestigationScope()
     )
@@ -348,7 +347,8 @@ def test_agent_reads_the_masked_chunk_through_its_tools(settings, chunk_store):
         settings=settings,
         graph=FakeGraph(),
         model=OpenAIModel(client=client, model_id="m", stream=False),
-    ).with_detector(DETECTOR)
+        detector=DETECTOR,
+    )
 
     output = investigator.investigate(
         "Who led product at Delta Devices?", scope=InvestigationScope(strategy="graph")

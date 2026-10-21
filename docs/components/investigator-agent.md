@@ -61,7 +61,7 @@ redacted unless capture is enabled ([Observability](../operations/observability.
 
 # Output
 
-`AgentOutput`: `answer`, `citations` (ids parsed from `[chunk:<id>]`), `seed_chunk_ids`,
+`AgentOutput`: `agent` (`relationship-investigator`, the name on its spans), `answer`, `citations` (ids parsed from `[chunk:<id>]`), `seed_chunk_ids`,
 `fetched_chunk_ids`, `fetched_sensitivity`, `withheld_chunk_ids`, `tool_calls` (tool, ok, detail,
 duration), `stop_reason`, `usage` and `error`.
 
