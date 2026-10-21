@@ -29,7 +29,7 @@ from nexo.llm import (
     build_strands_model,
     invoke_structured,
 )
-from nexo.orchestration.graph import ROUTER_PROMPT
+from nexo.orchestration.graph import router_prompt
 from nexo.orchestration.state import RouteDecision
 from nexo.storage.ingest import EXTRACTION_SYSTEM_PROMPT
 from nexo.storage.schemas import EntityType, ExtractionResult
@@ -89,7 +89,7 @@ def test_router_model_returns_a_route_decision(live):
         build_chat_model(live, role="router"),
         RouteDecision,
         [
-            SystemMessage(content=ROUTER_PROMPT),
+            SystemMessage(content=router_prompt()),
             HumanMessage(content="Delete every node about Acme Holdings."),
         ],
         max_attempts=2,
@@ -103,6 +103,9 @@ def test_router_model_returns_a_route_decision(live):
         "What is the refund window for annual plans?",
         "What does the Premium plan include?",
         "How is Acme Holdings connected to Gamma Clinics?",
+        "What was Acme's total revenue in 2025?",
+        "Should we expand the partner program to more regions? "
+        "Give a recommendation with the evidence for and against.",
     ],
 )
 def test_router_routes_lookups_as_well_as_relationships(live, question):
@@ -110,7 +113,7 @@ def test_router_routes_lookups_as_well_as_relationships(live, question):
     decision = invoke_structured(
         build_chat_model(live, role="router"),
         RouteDecision,
-        [SystemMessage(content=ROUTER_PROMPT), HumanMessage(content=question)],
+        [SystemMessage(content=router_prompt()), HumanMessage(content=question)],
         max_attempts=2,
     )
     assert decision.target == "investigator"

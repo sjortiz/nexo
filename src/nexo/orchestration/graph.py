@@ -67,7 +67,9 @@ target:
 - "investigator" for any question the company's documents could answer: how people, \
 organizations, products, locations, events, conditions, medications or procedures relate to each \
 other, and also facts, figures, prices, financial results (revenue, costs, targets), definitions, \
-policies, processes and plans. You do not \
+policies, processes and plans; and questions that ask for analysis, comparison, a recommendation \
+or what to do next based on the documents (the investigator answers from the evidence and labels \
+its own inference). You do not \
 know what the documents contain: if a question could be answered by them, route it; the \
 investigator searches and says when they do not cover it.
 - "rejected" only for requests to create, change or delete data; bulk export or listing of \
@@ -84,8 +86,11 @@ strategy:
 - "vector" when it asks about a topic or description without specific entities.
 - "hybrid" when it needs both, or you are unsure.
 
-Leave doc_types, effective_from and effective_to empty unless the request itself names a document \
-type or a date range; never guess them (filters the request does not state are discarded).
+Leave doc_types, effective_from and effective_to empty unless the request itself restricts which \
+documents to use. effective_from / effective_to filter documents by when they were written, not \
+what they talk about: "memos written in 2024" or "documents from last quarter" set them; "revenue \
+in 2025" or "the 2024 launch" does not (the year is part of the subject). Never guess filters; \
+ones the request does not state are discarded.
 reason: one sentence, no quotes from the request."""
 
 
@@ -162,6 +167,13 @@ class GraphDependencies:
     doc_types: Callable[[], set[str]] | None = None
 
 
+# A date filter needs the request to talk about documents, not only to contain a date:
+# "revenue in 2025" is about 2025, "memos from 2025" restricts the documents.
+_DOCUMENT_WORDS = re.compile(
+    r"\b(?:documents?|docs?|memos?|reports?|files?|notes?|minutes|records?|briefs?|"
+    r"specs?|versions?|written|authored|published|updated|edited|dated|filed|issued)\b",
+    re.IGNORECASE,
+)
 _DATE_WORDS = re.compile(
     r"\b(?:1[89]|20)\d{2}\b|\bq[1-4]\b|\b(?:january|february|march|april|june|july|august|"
     r"september|october|november|december)\b|\b(?:last|this|past|next|previous) "
@@ -182,7 +194,8 @@ def stated_scope(
     A small router model invents scope ("program documents from 2023-2025") that
     silently hides the answer, so filters are checked against the request itself:
     a doc type must be named in it (and exist in the corpus when the corpus is
-    known), and dates need a date-like word in it.
+    known), and dates need a date-like word and a word about documents in it
+    ("memos from 2025" filters; "revenue in 2025" is about 2025, so it does not).
     """
     dropped: list[str] = []
     asked = _words(query)
@@ -192,9 +205,10 @@ def stated_scope(
         exists = known_doc_types is None or doc_type in known_doc_types
         (doc_types if named and exists else dropped).append(doc_type)
     dates: dict[str, Any] = {}
-    if (decision.effective_from or decision.effective_to) and not _DATE_WORDS.search(
-        query
-    ):
+    restricts_documents = bool(_DATE_WORDS.search(query)) and bool(
+        _DOCUMENT_WORDS.search(query)
+    )
+    if (decision.effective_from or decision.effective_to) and not restricts_documents:
         dropped.append("effective dates")
         dates = {"effective_from": None, "effective_to": None}
     update = {"doc_types": doc_types or None, **dates}
