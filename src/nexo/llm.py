@@ -1,6 +1,6 @@
-"""Model clients for the self-hosted vLLM layer.
+"""Model clients for any OpenAI-compatible server (Ollama or vLLM, ADR-0012).
 
-vLLM serves an OpenAI-compatible API, so:
+The servers speak the OpenAI API, so:
 * LangChain talks to it through `ChatOpenAI(base_url=...)` (ingestion, router).
 * Strands talks to it through `strands.models.openai.OpenAIModel` (agent).
 * Embeddings come from a separate OpenAI-compatible pooling deployment.

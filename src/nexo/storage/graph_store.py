@@ -1,24 +1,5 @@
-"""Neo4j access over the Bolt driver.
-
-Two layers share one graph (the "lexical graph" + "domain graph" pattern of
-Neo4j's LLM Graph Builder):
-
-    (:Document {source_id, title, doc_type, source_uri, effective_date, sensitivity})
-    (:Document)-[:FIRST_CHUNK]->(:Chunk)-[:NEXT_CHUNK]->(:Chunk)-[:PART_OF]->(:Document)
-    (:Entity:<EntityType>[:PII][:PHI])-[:MENTIONED_IN {surface, resolution}]->(:Chunk)
-    (:Entity)-[:<RELATION> {chunk_id, chunk_ids, evidence, evidence_rank, certainty,
-                            valid_at, extracted_as}]->(:Entity)
-
-`chunk_id` is the chunk where an entity was first extracted, and for an edge
-the chunk its `evidence` quotes, with `evidence_rank` that chunk's rank; when
-that chunk stops supporting the edge the quote goes, and the next chunk that
-states the edge supplies one. `chunk_ids` accumulates every supporting chunk
-across documents. Derived
-properties are recomputed for every touched entity and edge on each replace:
-entity `aliases` from the surfaces on MENTIONED_IN (withdrawing a document
-withdraws the aliases and merges it contributed), and `sensitivity_rank` as
-the *least* sensitive supporting chunk - something is visible to a caller if
-any source they are cleared for supports it. The :PII/:PHI labels follow.
+"""Neo4j access over the Bolt driver: the lexical and domain graphs of
+docs/architecture/data-model.md, written per document and read within clearance.
 """
 
 from __future__ import annotations
@@ -541,7 +522,14 @@ _RANK = (
 
 
 def _refresh_derived(tx: ManagedTransaction, keys: Sequence[str]) -> None:
-    """Recompute aliases, sensitivity and labels of the given entities and their edges."""
+    """Recompute the derived properties of the given entities and their edges.
+
+    On every replace: entity `aliases` from the surfaces on MENTIONED_IN (withdrawing a
+    document withdraws the aliases and merges it contributed), `sensitivity_rank` as the
+    *least* sensitive supporting chunk (visible if any source the caller is cleared for
+    supports it), and the :PII/:PHI labels that follow. An edge's `chunk_ids` accumulate
+    across documents; its `evidence` keeps the rank of the one chunk it quotes.
+    """
     tx.run(
         cast(
             LiteralString,

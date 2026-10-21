@@ -49,6 +49,7 @@ from nexo.service import (
     RunResult,
     build_investigator,
     chunk_store_from_settings,
+    detector_from_settings,
     open_ingestor,
     open_review_runtime,
     open_runtime,
@@ -58,7 +59,7 @@ from nexo.storage.neo4j_chunk_store import Neo4jChunkStore, import_local_store
 from nexo.storage.ingest import ExtractionAids, IngestionTargets, KnowledgeGraphIngestor
 from nexo.storage.ontology import Ontology
 from nexo.storage.schemas import DocumentMetadata, Sensitivity, Triple
-from nexo.storage.sensitive_data import NoopDetector, build_detector
+from nexo.storage.sensitive_data import NoopDetector
 from nexo.storage.vector_store import ChunkFilter, ChunkStore, LocalChunkStore
 from nexo.telemetry import (
     caller_attributes,
@@ -258,9 +259,7 @@ class _Judge(NamedTuple):
 
 
 def _judge(settings, chunks: ChunkStore) -> _Judge:
-    detector = build_detector(
-        settings.sensitive_data_provider, aws_region=settings.aws_region
-    )
+    detector = detector_from_settings(settings)
     return _Judge(
         build_chat_model(settings, role="judge"), chunks, ChunkRedactor(detector)
     )
@@ -524,11 +523,7 @@ def _mcp(args: argparse.Namespace) -> int:
         redactor = (
             None
             if runtime is not None
-            else ChunkRedactor(
-                build_detector(
-                    settings.sensitive_data_provider, aws_region=settings.aws_region
-                )
-            )
+            else ChunkRedactor(detector_from_settings(settings))
         )
         server = build_mcp_server(
             graph=graph,
@@ -551,7 +546,7 @@ def _review_inbox(args: argparse.Namespace) -> int:
     settings = get_settings()
     port = args.port or settings.review_inbox_port
     inbox_port = args.inbox_port or settings.agent_inbox_port
-    clearance = settings.mcp_clearance or settings.default_clearance
+    clearance = settings.effective_mcp_clearance
     with open_runtime(settings) as runtime:
         adapter = InboxAdapter(
             runtime,

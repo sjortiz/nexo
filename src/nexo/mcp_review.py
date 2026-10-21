@@ -148,7 +148,7 @@ def register_review_tools(
     server: MCPServer, *, runtime: Runtime, settings: Settings
 ) -> None:
     """Add the three review tools to the server."""
-    clearance = Sensitivity(settings.mcp_clearance or settings.default_clearance)
+    clearance = Sensitivity(settings.effective_mcp_clearance)
     caller = caller_attributes(settings)
 
     def awaiting(thread_id: str) -> ReviewPacket:

@@ -72,6 +72,8 @@ strategy:
 Set doc_types / effective_from / effective_to only when the request explicitly restricts them.
 reason: one sentence, no quotes from the request."""
 
+WORKFLOW_NAME = "nexo-investigation"  # the compiled graph and its workflow span
+
 
 class InvestigatorRunner(Protocol):  # pylint: disable=too-few-public-methods
     """Anything that can run one investigation synchronously."""
@@ -216,15 +218,12 @@ def _investigator_node(deps: GraphDependencies) -> Callable[..., dict[str, Any]]
     def strands_investigation(
         user_query: str, request_id: str, scope: dict[str, Any]
     ) -> dict[str, Any]:
-        # LangGraph runs tasks with the caller's contextvars, so Strands'
-        # `invoke_agent` span becomes a child of the investigator node span.
-        # ===== HANDOFF: LangGraph yields control to the Strands agent here =====
+        # The handoff to the Strands agent (ADR-0001); its spans nest under this task's.
         output = deps.investigator.investigate(
             user_query,
             request_id=request_id,
             scope=InvestigationScope.model_validate(scope),
         )
-        # ===== Strands returns control: autonomous loop finished =====
         return output.model_dump(mode="json")
 
     # LangGraph passes the run config by this parameter name, used or not.
@@ -357,7 +356,7 @@ def build_graph(
     )
     builder.add_edge("investigator", "compliance")
     builder.add_edge("compliance", END)
-    return builder.compile(checkpointer=checkpointer, name="nexo-investigation")
+    return builder.compile(checkpointer=checkpointer, name=WORKFLOW_NAME)
 
 
 class _DiagramOnly:  # pylint: disable=too-few-public-methods  # stands in for InvestigatorRunner
