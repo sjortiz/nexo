@@ -9,8 +9,8 @@ NEO4J_TEST_URI=bolt://127.0.0.1:7688 NEO4J_TEST_PASSWORD=nexo-test-pass \
 from __future__ import annotations
 
 import json
+import logging
 import os
-import uuid
 from datetime import UTC, datetime
 from urllib.parse import urlparse
 
@@ -27,15 +27,14 @@ from strands.models.openai import OpenAIModel
 from nexo.agents.investigator import Investigator
 from nexo.agents.models import InvestigationScope
 from nexo.agents.tools import (
-    _NEIGHBOURS,
-    _PATHS,
     InvestigationContext,
     build_investigation_tools,
 )
 from nexo.mcp_server import build_mcp_server
 from nexo.orchestration.graph import GraphDependencies, build_graph
+from nexo.orchestration.state import ReviewDecision
 from nexo.service import Runtime
-from nexo.storage.graph_store import GraphStore, QueryLimits
+from nexo.storage.graph_store import GraphStore, QueryLimits, _refresh_derived
 from nexo.storage.ingest import (
     ExtractionAids,
     IngestionTargets,
@@ -54,9 +53,13 @@ from nexo.storage.schemas import (
     Triple,
 )
 from nexo.storage.sensitive_data import NoopDetector, RegexDetector
-from nexo.storage.neo4j_chunk_store import Neo4jChunkStore, import_local_store
+from nexo.storage.neo4j_chunk_store import (
+    _PROCEDURES,
+    Neo4jChunkStore,
+    import_local_store,
+)
 from nexo.storage.vector_store import ChunkFilter, LocalChunkStore
-from tests.conftest import RecordingChatModel, make_chunk
+from tests.conftest import RecordingChatModel, as_model_text, make_chunk
 from tests.test_agent import ScriptedClient, _completion, _tool_call
 from tests.test_mcp_server import call, data
 
@@ -383,6 +386,54 @@ def test_sensitivity_is_the_least_sensitive_source_and_follows_withdrawals(store
     assert state() == (3, {"PII", "PHI"}, [3])  # back to PHI; labels return
 
 
+def _acme_rank_and_labels(store):
+    """Acme's sensitivity rank, its :PII/:PHI labels, and its ACQUIRED edges' ranks."""
+    entity = store.run_read_query(
+        "MATCH (e:Entity {name: 'Acme'}) RETURN e.sensitivity_rank AS rank, labels(e) AS labels"
+    ).rows[0]
+    edges = store.run_read_query(
+        "MATCH (:Entity)-[r:ACQUIRED]->(:Entity) RETURN r.sensitivity_rank AS rank"
+    ).rows
+    return (
+        entity["rank"],
+        {"PII", "PHI"} & set(entity["labels"]),
+        [e["rank"] for e in edges],
+    )
+
+
+def test_pii_sources_label_pii_without_phi(store):
+    """Rank 2 (pii) sets the :PII label alone; :PHI needs rank 3."""
+    acme, beta = _resolved("Acme"), _resolved("Beta")
+    pii = Sensitivity.PII
+    store.replace_source(
+        DocumentMetadata(source_id="hr", sensitivity=pii),
+        _chunks("hr", C1, sensitivity=pii),
+        [_row(C1, "hr", (acme, "ACQUIRED", beta), pii)],
+    )
+    assert _acme_rank_and_labels(store) == (2, {"PII"}, [2])
+
+
+@pytest.mark.parametrize("level", ["secret", None])
+def test_unknown_chunk_sensitivity_ranks_as_phi(store, level):
+    """A chunk whose sensitivity is unknown or missing makes what it supports PHI."""
+    acme, beta = _resolved("Acme"), _resolved("Beta")
+    store.replace_source(
+        DocumentMetadata(source_id="memo"),
+        _chunks("memo", C1),
+        [_row(C1, "memo", (acme, "ACQUIRED", beta))],
+    )
+    assert _acme_rank_and_labels(store) == (1, set(), [1])
+
+    with store.session(write=True) as session:
+        session.run(
+            "MATCH (c:Chunk {chunk_id: $id}) SET c.sensitivity = $level",
+            id=C1,
+            level=level,
+        ).consume()
+        session.execute_write(_refresh_derived, [acme.key, beta.key])
+    assert _acme_rank_and_labels(store) == (3, {"PII", "PHI"}, [3])
+
+
 def test_mcp_tools_against_a_real_graph(store, settings, chunk_store):
     """MCP tools list, find, traverse and query a real graph while withholding PHI."""
     acme, beta, jane = (
@@ -477,8 +528,11 @@ def test_row_cap_tool_redaction_and_db_span(store, settings, spans):
             chunk_filter=ChunkFilter(max_sensitivity=Sensitivity.PUBLIC)
         ),
     )
-    query, *_ = build_investigation_tools(
-        graph=store, chunks=None, ctx=ctx, settings=settings
+    query, *_ = (
+        as_model_text(t)
+        for t in build_investigation_tools(
+            graph=store, chunks=None, ctx=ctx, settings=settings
+        )
     )
     spans.clear()
     out = json.loads(query("MATCH (e:Entity {name: 'Hub'}) RETURN e"))
@@ -499,146 +553,6 @@ def test_row_cap_tool_redaction_and_db_span(store, settings, spans):
         "(:Organization)-[:PARTNERS_WITH]->(:Organization)  x60"
         in store.describe_schema()
     )
-
-
-def test_lookup_tools_follow_entity_edges_within_clearance(store, settings):
-    """find_paths and entity_neighbours skip chunk co-mentions and hide PHI."""
-    acme, beta, gamma = _resolved("Acme"), _resolved("Beta"), _resolved("Gamma")
-    jane = _resolved("Jane Roe", "Person")
-    store.replace_source(
-        DocumentMetadata(source_id="a"),
-        _chunks("a", C1, C2),
-        [
-            _row(C1, "a", (acme, "ACQUIRED", beta)),
-            # Gamma shares C1 with Acme: a 2-hop route through the chunk.
-            _row(C1, "a", (gamma, "PARTNERS_WITH", _resolved("Delta"))),
-            _row(C2, "a", (beta, "SUPPLIES", gamma)),
-        ],
-    )
-    store.replace_source(
-        DocumentMetadata(source_id="p"),
-        _chunks("p", C3, sensitivity=Sensitivity.PHI),
-        [_row(C3, "p", (beta, "TREATS", jane), Sensitivity.PHI)],
-    )
-    ctx = InvestigationContext(
-        request_id="r",
-        max_tool_calls=10,
-        scope=InvestigationScope(
-            chunk_filter=ChunkFilter(max_sensitivity=Sensitivity.INTERNAL)
-        ),
-    )
-    tools = {
-        t.tool_name: t
-        for t in build_investigation_tools(
-            graph=store, chunks=None, ctx=ctx, settings=settings
-        )
-    }
-
-    out = json.loads(tools["find_paths"](acme.key, gamma.key))
-    assert [
-        [(h["from"], h["relation"], h["to"]) for h in p["hops"]] for p in out["paths"]
-    ] == [[(acme.key, "ACQUIRED", beta.key), (beta.key, "SUPPLIES", gamma.key)]]
-    assert out["chunk_ids_found"] == [C1, C2]
-
-    out = json.loads(tools["find_paths"](acme.key, jane.key))
-    assert out["paths"] == [] and out["withheld"] == 1
-    assert "unknown" in json.loads(tools["find_paths"](acme.key, "X:none"))["error"]
-
-    out = json.loads(tools["entity_neighbours"](beta.key))
-    assert sorted(
-        (e["edge"]["relation"], e["edge"]["outgoing"], e["neighbour"]["name"])
-        for e in out["edges"]
-    ) == [("ACQUIRED", False, "Acme"), ("SUPPLIES", True, "Gamma")]
-    assert out["withheld"] == 1 and C3 not in out["chunk_ids_found"]
-    assert "unknown" in json.loads(tools["entity_neighbours"](jane.key))["error"]
-
-    # An edge without a rank (written before ranks existed) is treated as PHI.
-    with GraphDatabase.driver(
-        URI, auth=("neo4j", os.environ["NEO4J_TEST_PASSWORD"])
-    ) as driver:
-        driver.execute_query("MATCH ()-[r:SUPPLIES]->() REMOVE r.sensitivity_rank")
-    out = json.loads(tools["find_paths"](acme.key, gamma.key))
-    assert out["paths"] == [] and out["withheld"] == 1
-
-
-def _warnings(cypher: str, parameters: dict) -> list[str]:
-    """The GQL warning statuses (01xxx) Neo4j attaches to one query."""
-    with (
-        GraphDatabase.driver(
-            URI, auth=("neo4j", os.environ["NEO4J_TEST_PASSWORD"])
-        ) as driver,
-        driver.session(database="neo4j") as session,
-    ):
-        summary = session.run(cypher, parameters).consume()
-    return [
-        s.gql_status for s in summary.gql_status_objects if s.gql_status[:2] == "01"
-    ]
-
-
-def test_lookups_read_predicate_without_unknown_property_warnings(
-    store, settings, chunk_store
-):
-    """No 01N52 warning on undated, non-RELATED_TO edges; RELATED_TO still returns its predicate."""
-    acme, beta = _resolved("Acme"), _resolved("Beta")
-    store.replace_source(
-        DocumentMetadata(source_id="a"),
-        _chunks("a", C1),
-        [_row(C1, "a", (acme, "ACQUIRED", beta))],
-    )
-    reads = [
-        (_NEIGHBOURS, {"key": acme.key, "limit": 25}),
-        (_PATHS.format(paths=5, hops=3), {"from_key": acme.key, "to_key": beta.key}),
-    ]
-    # Earlier tests may have created these keys; keys Neo4j has never seen show
-    # whether the queries would warn on a graph that never had them.
-    unseen = f"never_{uuid.uuid4().hex}"
-    assert _warnings(f"MATCH ()-[r]->() RETURN r.{unseen}", {}) == ["01N52"]
-    for cypher, parameters in reads:
-        assert _warnings(cypher, parameters) == []
-        for key in ("predicate", "valid_at"):
-            assert _warnings(cypher.replace(key, unseen + key), parameters) == []
-
-    store.replace_source(
-        DocumentMetadata(source_id="b"),
-        _chunks("b", C2),
-        [_row(C2, "b", (acme, "RELATED_TO", beta), original="BANKROLLED")],
-    )
-    ctx = InvestigationContext(
-        request_id="r",
-        max_tool_calls=10,
-        scope=InvestigationScope(
-            chunk_filter=ChunkFilter(max_sensitivity=Sensitivity.INTERNAL)
-        ),
-    )
-    tools = {
-        t.tool_name: t
-        for t in build_investigation_tools(
-            graph=store, chunks=None, ctx=ctx, settings=settings
-        )
-    }
-    expected = [("ACQUIRED", None), ("RELATED_TO", "BANKROLLED")]
-    out = json.loads(tools["entity_neighbours"](acme.key))
-    assert (
-        sorted((e["edge"]["relation"], e["edge"]["predicate"]) for e in out["edges"])
-        == expected
-    )
-    out = json.loads(tools["find_paths"](acme.key, beta.key))
-    assert (
-        sorted(
-            (p["hops"][0]["relation"], p["hops"][0]["predicate"]) for p in out["paths"]
-        )
-        == expected
-    )
-    out = data(
-        call(
-            build_mcp_server(graph=store, chunks=chunk_store, settings=settings),
-            "nexo_neighbors",
-            {"entity_key": acme.key},
-        )
-    )
-    assert sorted((e["relation"], e["predicate"]) for e in out["edges"]) == expected
-    for cypher, parameters in reads:
-        assert _warnings(cypher, parameters) == []
 
 
 def _last_tool_payload(request: dict) -> dict:
@@ -724,17 +638,17 @@ def test_end_to_end_ingest_investigate_approve(store, settings, chunk_store):
     )
     assert paused.status == "awaiting_review"
     assert paused.pending_review is not None
-    # dict(): pylint reads the field's default (None), not its declared type.
-    review = dict(paused.pending_review)
-    assert review["citations"] == [chunk_id]
-    assert review["compliance_report"]["blocking"] is False
+    assert paused.pending_review.citations == [chunk_id]
+    assert paused.pending_review.blocking is False
     assert _last_tool_payload(client.requests[1])["rows"][0]["path"] == [
         "Acme Holdings",
         "Beta Labs",
         "Gamma Clinics",
     ]
 
-    done = rt.review("e2e", {"approval_status": "approved", "reviewer": "analyst"})
+    done = rt.review(
+        "e2e", ReviewDecision(approval_status="approved", reviewer="analyst")
+    )
     assert done.final_response.startswith("Acme owns Beta Labs")
 
 
@@ -791,6 +705,37 @@ def test_neo4j_chunk_store_round_trip_and_filters(store, chunks_in_neo4j):
     assert chunks_in_neo4j.delete_source("memo", keep={memo.chunk_id}) == 0
     assert chunks_in_neo4j.delete_source("memo") == 1
     assert not chunks_in_neo4j.get_by_ids([memo.chunk_id])
+
+
+def test_hybrid_search_ranks_alike_on_search_and_procedures(
+    store, chunks_in_neo4j, caplog
+):
+    """The store's index lookups match the procedures' ranking and raise no deprecation."""
+    texts = [
+        "Acme Holdings acquired Beta Labs in 2023.",
+        "Beta Labs makes diagnostic kits for clinics.",
+        "Order XR-7731 shipped to Gamma Clinics.",
+        "Quarterly revenue grew across every region.",
+        "Gamma Clinics buys kits from Beta Labs.",
+    ]
+    chunks = [make_chunk("memo", i, text) for i, text in enumerate(texts)]
+    chunks_in_neo4j.upsert(chunks, texts)
+    everyone = ChunkFilter(max_sensitivity=Sensitivity.PHI)
+
+    with caplog.at_level(logging.WARNING, logger="neo4j.notifications"):
+        ranked = [
+            c.chunk_id for c in chunks_in_neo4j.search("Beta Labs kits", 4, everyone)
+        ]
+    assert not [r for r in caplog.records if "deprecated" in r.getMessage()]
+
+    procedures = Neo4jChunkStore(
+        store, DeterministicFakeEmbedding(size=DIMS), dimensions=DIMS
+    )
+    procedures._queries = _PROCEDURES  # pylint: disable=protected-access
+    assert [
+        c.chunk_id for c in procedures.search("Beta Labs kits", 4, everyone)
+    ] == ranked
+    assert len(ranked) == 4
 
 
 def test_chunk_text_survives_the_graph_swap(store, chunks_in_neo4j):

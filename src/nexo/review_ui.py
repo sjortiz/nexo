@@ -14,10 +14,18 @@ import re
 import secrets
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, HTTPServer
-from typing import Any, Protocol
+from typing import Protocol
 from urllib.parse import parse_qs, urlsplit
 
+from pydantic import ValidationError
+
 from nexo.config import Settings
+from nexo.orchestration.state import (
+    ReviewDecision,
+    ReviewPacket,
+    ReviewPassage,
+    describe_errors,
+)
 from nexo.service import RunResult
 
 BANNER = "Demo: no authentication, local use only"
@@ -42,10 +50,10 @@ class ReviewRuntime(Protocol):
     def pending_reviews(self, limit: int = 50) -> list[RunResult]:
         """Paused threads, newest first."""
 
-    def review_passages(self, thread_id: str, clearance: str) -> list[dict]:
+    def review_passages(self, thread_id: str, clearance: str) -> list[ReviewPassage]:
         """Cited chunk text for the thread, through clearance and redaction."""
 
-    def review(self, thread_id: str, decision: dict[str, Any]) -> RunResult:
+    def review(self, thread_id: str, decision: ReviewDecision) -> RunResult:
         """Resume a paused thread with a decision."""
 
     def status(self, thread_id: str) -> RunResult:
@@ -78,42 +86,30 @@ def _layout(title: str, reviewer: str, body: str) -> str:
     )
 
 
-def _paused_since(runtime: ReviewRuntime, thread_id: str) -> str:
-    """The newest checkpoint of a paused thread is the pause itself."""
-    try:
-        saver = runtime.graph.checkpointer  # type: ignore[attr-defined]
-        stamp = saver.get_tuple({"configurable": {"thread_id": thread_id}})
-        then = datetime.fromisoformat(stamp.checkpoint["ts"])
-    except (AttributeError, KeyError, TypeError, ValueError):
+def _age(paused_at: datetime | None) -> str:
+    """How long ago a thread paused, as 2h or 5m."""
+    if paused_at is None:
         return "unknown"
-    seconds = max(0, int((datetime.now(timezone.utc) - then).total_seconds()))
+    if paused_at.tzinfo is None:  # a naive time from another runtime: read it as UTC
+        paused_at = paused_at.replace(tzinfo=timezone.utc)
+    seconds = max(0, int((datetime.now(timezone.utc) - paused_at).total_seconds()))
     for unit, size in (("d", 86400), ("h", 3600), ("m", 60)):
         if seconds >= size:
             return f"{seconds // size}{unit}"
     return f"{seconds}s"
 
 
-def _findings(packet: dict[str, Any]) -> list[dict[str, Any]]:
-    return (packet.get("compliance_report") or {}).get("findings") or []
-
-
-def _blocking(packet: dict[str, Any]) -> bool:
-    return bool((packet.get("compliance_report") or {}).get("blocking"))
-
-
-def _passage_item(passage: dict[str, Any]) -> str:
+def _passage_item(passage: ReviewPassage) -> str:
     """One cited chunk. Withheld evidence is named, never shown as empty."""
-    status = passage.get("status")
-    text = passage.get("text")
-    if status == "shown" and text is not None:
-        shown = f"<pre>{_e(text)}</pre>"
-    elif status == "withheld":
+    if passage.status == "shown" and passage.text is not None:
+        shown = f"<pre>{_e(passage.text)}</pre>"
+    elif passage.status == "withheld":
         shown = "<p><em>withheld at your clearance</em></p>"
     else:
-        shown = f"<p><em>{_e(status or 'unavailable')}</em></p>"
+        shown = f"<p><em>{_e(passage.status)}</em></p>"
     return (
-        f"<li><strong>{_e(passage.get('chunk_id'))}</strong> "
-        f"{_e(passage.get('source'))} ({_e(passage.get('classification'))}){shown}</li>"
+        f"<li><strong>{_e(passage.chunk_id)}</strong> "
+        f"{_e(passage.source)} ({_e(passage.classification)}){shown}</li>"
     )
 
 
@@ -143,17 +139,13 @@ class ReviewApp:  # pylint: disable=too-few-public-methods  # handle is the whol
         return _layout(title, self.reviewer, body)
 
     def _list(self) -> str:
-        paused = [
-            r
-            for r in self.runtime.pending_reviews()
-            if r.status == "awaiting_review" and r.pending_review
-        ]
         rows = "".join(
             f'<tr><td><a href="/review/{_e(r.thread_id)}">'
-            f'{_e((r.pending_review or {}).get("user_query"))}</a></td>'
-            f"<td>{_e(_paused_since(self.runtime, r.thread_id))}</td>"
-            f"<td>{len(_findings(r.pending_review or {}))}</td></tr>"
-            for r in paused
+            f"{_e(packet.user_query)}</a></td>"
+            f"<td>{_e(_age(r.paused_at))}</td>"
+            f"<td>{len(packet.findings)}</td></tr>"
+            for r in self.runtime.pending_reviews()
+            if (packet := r.pending_review) is not None
         )
         table = (
             f"<table><tr><th>Question</th><th>Age</th><th>Findings</th></tr>{rows}</table>"
@@ -162,19 +154,15 @@ class ReviewApp:  # pylint: disable=too-few-public-methods  # handle is the whol
         )
         return self._page("Pending reviews", f"<h1>Pending reviews</h1>{table}")
 
-    def _paused(self, thread_id: str) -> RunResult | None:
-        result = self.runtime.status(thread_id)
-        if result.status != "awaiting_review" or not result.pending_review:
-            return None
-        return result
+    def _paused(self, thread_id: str) -> ReviewPacket | None:
+        return self.runtime.status(thread_id).pending_review
 
     def _detail(self, thread_id: str, error: str = "", status: int = 200) -> Page:
-        result = self._paused(thread_id)
-        if result is None:
+        packet = self._paused(thread_id)
+        if packet is None:
             return 404, self._page(
                 "Not found", "<p>This thread is not waiting for review.</p>"
             )
-        packet = result.pending_review or {}
         try:
             passages = self.runtime.review_passages(thread_id, self.clearance)
         except ValueError as exc:  # for example, the runtime has no chunk store
@@ -186,24 +174,23 @@ class ReviewApp:  # pylint: disable=too-few-public-methods  # handle is the whol
             )
         findings = (
             "".join(
-                f'<li class="{_e(f.get("severity"))}"><strong>{_e(f.get("severity"))}'
-                f"</strong> {_e(f.get('code'))}: {_e(f.get('detail'))}</li>"
-                for f in _findings(packet)
+                f'<li class="{_e(f.severity)}"><strong>{_e(f.severity)}'
+                f"</strong> {_e(f.code)}: {_e(f.detail)}</li>"
+                for f in packet.findings
             )
             or "<li>No findings.</li>"
         )
-        blocking = _blocking(packet)
         ack = (
             '<p><label><input type="checkbox" name="acknowledge" value="1"> '
             "Acknowledge findings (required to approve)</label></p>"
-            if blocking
+            if packet.blocking
             else ""
         )
         notice = f'<p class="error">{_e(error)}</p>' if error else ""
         body = (
             f'<h1>Review</h1>{notice}<p><a href="/">Back to the list</a></p>'
-            f"<h2>Question</h2><pre>{_e(packet.get('user_query'))}</pre>"
-            f"<h2>Draft answer</h2><pre>{_e(packet.get('draft_answer'))}</pre>"
+            f"<h2>Question</h2><pre>{_e(packet.user_query)}</pre>"
+            f"<h2>Draft answer</h2><pre>{_e(packet.draft_answer)}</pre>"
             f"<h2>Citations (clearance: {_e(self.clearance)})</h2><ul>{cited}</ul>"
             f"<h2>Compliance findings</h2><ul>{findings}</ul>"
             f'<form method="post" action="/review/{_e(thread_id)}">'
@@ -226,23 +213,12 @@ class ReviewApp:  # pylint: disable=too-few-public-methods  # handle is the whol
         paused = self._paused(thread_id)
         if paused is None:
             return self._detail(thread_id)  # a 404 page
-        comment = form.get("comment", "").strip()
-        acknowledged = form.get("acknowledge") == "1"
-        problem = self._problem(paused, decision, comment, acknowledged)
-        if problem:
-            return self._detail(thread_id, problem, 400)
         try:
-            result = self.runtime.review(
-                thread_id,
-                {
-                    "approval_status": (
-                        "approved" if decision == "approve" else "rejected"
-                    ),
-                    "reviewer": self.reviewer,
-                    "comment": comment or None,
-                    "acknowledged_findings": acknowledged,
-                },
-            )
+            recorded = self._decision(paused, form)
+        except ValueError as exc:
+            return self._detail(thread_id, str(exc), 400)
+        try:
+            result = self.runtime.review(thread_id, recorded)
         except ValueError as exc:
             return 409, self._page("Not reviewed", f"<p>{_e(exc)}</p>")
         return 200, self._page(
@@ -251,20 +227,24 @@ class ReviewApp:  # pylint: disable=too-few-public-methods  # handle is the whol
             f'{_e(result.approval_status)}.</p><p><a href="/">Back to the list</a></p>',
         )
 
-    @staticmethod
-    def _problem(
-        paused: RunResult, decision: str, comment: str, acknowledged: bool
-    ) -> str:
-        """Why this decision must not be sent, or an empty string."""
+    def _decision(self, paused: ReviewPacket, form: dict[str, str]) -> ReviewDecision:
+        """The decision the form asks for; raises ValueError saying why it must not be sent."""
+        comment = form.get("comment", "").strip()
+        acknowledged = form.get("acknowledge") == "1"
+        approve = form.get("decision") == "approve"
         if len(comment) > MAX_COMMENT:
-            return "The comment is too long."
-        if (
-            decision == "approve"
-            and _blocking(paused.pending_review or {})
-            and not acknowledged
-        ):
-            return "Blocking findings: acknowledge them to approve."
-        return ""
+            raise ValueError("The comment is too long.")
+        if approve and paused.blocking and not acknowledged:
+            raise ValueError("Blocking findings: acknowledge them to approve.")
+        try:
+            return ReviewDecision(
+                approval_status="approved" if approve else "rejected",
+                reviewer=self.reviewer,
+                comment=comment or None,
+                acknowledged_findings=acknowledged,
+            )
+        except ValidationError as exc:
+            raise ValueError(describe_errors(exc)) from exc
 
 
 def make_server(app: ReviewApp, host: str, port: int) -> HTTPServer:

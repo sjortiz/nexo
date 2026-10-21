@@ -44,7 +44,7 @@ of a document is written, including chunks with no extracted facts.
 | `chunk_id` | string | Chunk where the entity was first extracted. |
 | `chunk_ids` | list | Every chunk that mentions it, across documents. |
 | `source_ids` | list | Every document that mentions it. |
-| `sensitivity_rank` | int | Least sensitive chunk that mentions it (0 public, 1 internal, 2 pii, 3 phi): visible to a caller cleared for any one of its sources. `:PII`/`:PHI` labels follow it. |
+| `sensitivity_rank` | int | Least sensitive chunk that mentions it, as `Sensitivity.rank` (0 public, 1 internal, 2 pii, 3 phi; an unknown level counts as phi): visible to a caller cleared for any one of its sources. `:PII`/`:PHI` labels follow it. |
 | `proposed_codes_json` | string | Terminology codes printed in the source (ICD10CM, RXNORM, SNOMEDCT, MESH, UMLS); unverified. |
 
 **`-[:MENTIONED_IN]->`** — `surface` (the name as written) and `resolution` (`exact`, `alias`,
@@ -57,8 +57,9 @@ or the normalized predicate when no ontology is configured. Out-of-ontology pred
 
 | Property | Description |
 |---|---|
-| `chunk_id`, `chunk_ids` | First-seen and all supporting chunks. |
-| `evidence` | Verbatim quote that states the fact. |
+| `chunk_id`, `chunk_ids` | The chunk `evidence` quotes (first-seen until that chunk leaves), and all supporting chunks. |
+| `evidence` | Verbatim quote from `chunk_id` that states the fact; removed when that chunk stops supporting the edge, until another chunk that states it is ingested. |
+| `evidence_rank` | Rank of the chunk the quote came from; graph tools drop `evidence` above the caller's clearance, or when it is missing (edges written before it existed). |
 | `certainty` | `asserted`, `possible` or `negated`. |
 | `valid_at` | ISO date the fact holds, when stated. |
 | `extracted_as` | Every extracted predicate that produced this edge (e.g. `BOUGHT`, `ACQUIRED_BY`). |

@@ -22,6 +22,7 @@ from nexo.review_inbox import (
     to_decision,
     to_human_interrupt,
 )
+from nexo.orchestration.state import ReviewDecision, ReviewPacket, ReviewPassage
 from nexo.service import RunResult
 from tests.test_graph import FakeInvestigator, grounded_output, route, runtime
 
@@ -30,33 +31,33 @@ ORIGIN = "http://127.0.0.1:3030"
 SECRET = "the withheld sentence"
 
 
-def packet(blocking: bool = False, **extra: Any) -> dict[str, Any]:
+def packet(blocking: bool = False) -> ReviewPacket:
     """A review packet as the compliance node pauses with it."""
     findings = (
         [{"code": "pii_in_answer", "severity": "block", "detail": "an SSN"}]
         if blocking
         else []
     )
-    return {
-        "request_id": "t1",
-        "user_query": "How is Acme related to Beta?",
-        "draft_answer": f"Acme acquired Beta [chunk:{CHUNK}].",
-        "citations": [CHUNK],
-        "compliance_report": {"findings": findings, "blocking": blocking},
-        **extra,
-    }
+    return ReviewPacket(
+        request_id="t1",
+        user_query="How is Acme related to Beta?",
+        draft_answer=f"Acme acquired Beta [chunk:{CHUNK}].",
+        citations=[CHUNK],
+        compliance_report={"findings": findings},
+        resume_with=ReviewDecision.model_json_schema(),
+    )
 
 
-def passages(status: str = "shown") -> list[dict[str, Any]]:
+def passages(status: str = "shown") -> list[ReviewPassage]:
     """One cited passage, shown or withheld."""
     return [
-        {
-            "chunk_id": CHUNK,
-            "source": "Memo > Deal",
-            "text": "Acme bought Beta in 2024." if status == "shown" else None,
-            "classification": "internal",
-            "status": status,
-        }
+        ReviewPassage(
+            chunk_id=CHUNK,
+            source="Memo > Deal",
+            text="Acme bought Beta in 2024." if status == "shown" else None,
+            classification="internal",
+            status=status,
+        )
     ]
 
 
@@ -64,9 +65,9 @@ def passages(status: str = "shown") -> list[dict[str, Any]]:
 class FakeBackend:
     """Paused threads by id; records every review the adapter sends."""
 
-    packets: dict[str, dict[str, Any]]
-    shown: list[dict[str, Any]] = field(default_factory=passages)
-    reviews: list[tuple[str, dict[str, Any]]] = field(default_factory=list)
+    packets: dict[str, ReviewPacket]
+    shown: list[ReviewPassage] = field(default_factory=passages)
+    reviews: list[tuple[str, ReviewDecision]] = field(default_factory=list)
 
     def _result(self, thread_id: str) -> RunResult:
         pending = self.packets.get(thread_id)
@@ -80,12 +81,12 @@ class FakeBackend:
         """Paused threads in insertion order."""
         return [self._result(t) for t in list(self.packets)[:limit]]
 
-    def review_passages(self, thread_id: str, clearance: str) -> list[dict[str, Any]]:
+    def review_passages(self, thread_id: str, clearance: str) -> list[ReviewPassage]:
         """The configured passages."""
         assert thread_id in self.packets and clearance
         return self.shown
 
-    def review(self, thread_id: str, decision: dict[str, Any]) -> RunResult:
+    def review(self, thread_id: str, decision: ReviewDecision) -> RunResult:
         """Record the decision and unpause the thread."""
         if thread_id not in self.packets:
             raise ValueError(f"thread {thread_id} is not awaiting review")
@@ -137,14 +138,13 @@ def test_blocking_findings_cannot_be_accepted_only_acknowledged():
 def test_a_withheld_passage_never_reaches_the_description():
     """A withheld passage never reaches the description."""
     withheld = passages("withheld")
-    withheld[0]["text"] = None
     item = to_human_interrupt(packet(), withheld, "internal")
     assert "withheld at your clearance" in item[
         "description"
     ] and SECRET not in json.dumps(item)
-    # the mapping prints text only for status shown, whatever the dict carries
+    # the mapping prints text only for status shown, whatever the passage carries
     sneaky = passages("withheld")
-    sneaky[0]["text"] = SECRET
+    sneaky[0].text = SECRET
     assert SECRET not in json.dumps(to_human_interrupt(packet(), sneaky, "internal"))
 
 
@@ -157,9 +157,9 @@ def test_accept_approves_as_the_configured_reviewer():
     run(adapter_for(backend), {"type": "accept", "args": None})
     ((thread_id, decision),) = backend.reviews
     assert thread_id == "t1"
-    assert decision["approval_status"] == "approved"
-    assert decision["reviewer"] == "rev@corp"
-    assert "acknowledged_findings" not in decision
+    assert decision.approval_status == "approved"
+    assert decision.reviewer == "rev@corp"
+    assert decision.acknowledged_findings is False
 
 
 def test_accept_on_blocking_findings_is_refused_and_sends_nothing():
@@ -174,8 +174,8 @@ def test_respond_rejects_with_the_text_as_comment():
     """Respond rejects with the text as comment."""
     backend = FakeBackend({"t1": packet()})
     run(adapter_for(backend), {"type": "response", "args": "path is unverified"})
-    assert backend.reviews[0][1]["approval_status"] == "rejected"
-    assert backend.reviews[0][1]["comment"] == "path is unverified"
+    assert backend.reviews[0][1].approval_status == "rejected"
+    assert backend.reviews[0][1].comment == "path is unverified"
 
 
 def test_a_response_is_never_an_approval_and_a_long_one_is_refused():
@@ -194,11 +194,11 @@ def test_ignore_is_an_explicit_rejection():
     backend = FakeBackend({"t1": packet()})
     run(adapter_for(backend), {"type": "ignore", "args": None})
     decision = backend.reviews[0][1]
-    assert decision["approval_status"] == "rejected"
-    assert decision["comment"] == IGNORE_COMMENT
+    assert decision.approval_status == "rejected"
+    assert decision.comment == IGNORE_COMMENT
 
 
-def edit(adapter_packet: dict[str, Any], **changes: Any) -> dict[str, Any]:
+def edit(adapter_packet: ReviewPacket, **changes: Any) -> dict[str, Any]:
     """An inbox edit of a blocked packet: the args as shown, then the reviewer's changes."""
     args = to_human_interrupt(adapter_packet, [], "internal")["action_request"]["args"]
     return {"type": "edit", "args": {"action": "Review answer", "args": args | changes}}
@@ -210,9 +210,9 @@ def test_blocked_findings_are_approved_only_by_an_explicit_acknowledgement():
     backend = FakeBackend({"t1": blocked})
     run(adapter_for(backend), edit(blocked, **{ACK_FIELD: "yes", "comment": "ok"}))
     decision = backend.reviews[0][1]
-    assert decision["approval_status"] == "approved"
-    assert decision["acknowledged_findings"] is True
-    assert decision["comment"] == "ok"
+    assert decision.approval_status == "approved"
+    assert decision.acknowledged_findings is True
+    assert decision.comment == "ok"
 
 
 @pytest.mark.parametrize(
@@ -405,3 +405,13 @@ def test_the_server_binds_loopback_only(serve):
     finally:
         server.server_close()
     assert call(port, "GET", "/ok")[0] == 200
+
+
+def test_a_decision_review_decision_refuses_is_a_422():
+    """Validation errors from ReviewDecision reach the inbox as a 422, and nothing is sent."""
+    backend = FakeBackend({"t1": packet()})
+    adapter = InboxAdapter(backend, reviewer="x" * 201, clearance="internal")
+    with pytest.raises(InboxError) as err:
+        run(adapter, {"type": "accept", "args": None})
+    assert err.value.status == 422 and "reviewer" in err.value.message
+    assert not backend.reviews

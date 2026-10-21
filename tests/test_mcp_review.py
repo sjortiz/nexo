@@ -9,6 +9,7 @@ from mcp.client import Client
 from mcp.types import ElicitResult
 
 from nexo.mcp_server import build_mcp_server
+from nexo.orchestration.state import ReviewDecision
 from nexo.service import Runtime, open_checkpointer, open_review_runtime
 from tests.conftest import make_chunk
 from tests.test_graph import CHUNK, FakeInvestigator, grounded_output, runtime
@@ -221,7 +222,7 @@ def test_approving_blocked_findings_needs_acknowledgement(settings, chunk_store)
     refused = submit(server, Person(decision="approve"), acknowledge_findings=True)
     assert refused.is_error and "acknowledge" in refused.content[0].text
     assert rt.status("t1").status == "awaiting_review"
-    assert "error" not in (rt.status("t1").pending_review or {})  # graph never saw it
+    assert rt.status("t1").pending_review.error is None  # graph never saw it
     ok = submit(server, Person(decision="approve", acknowledge_findings=True))
     assert ok.structured_content["approval_status"] == "approved"
     other = _paused(settings, blocking=True)
@@ -262,8 +263,19 @@ def test_a_review_only_runtime_resumes_a_paused_thread_without_models(
         ).start(QUESTION, thread_id="t1")
     with open_review_runtime(settings, chunk_store) as rt:
         assert [r.thread_id for r in rt.pending_reviews()] == ["t1"]
-        done = rt.review("t1", {"approval_status": "rejected", "reviewer": "a"})
+        done = rt.review("t1", ReviewDecision(approval_status="rejected", reviewer="a"))
         assert done.approval_status == "rejected"
         # It cannot investigate: a new question is auto-rejected, never paused or answered.
         started = rt.start(QUESTION, thread_id="t2")
         assert started.approval_status == "rejected" and started.final_response is None
+
+
+def test_an_invalid_decision_is_refused_before_it_reaches_the_graph(
+    settings, chunk_store
+):
+    """A reviewer ReviewDecision refuses is reported as a tool error; the thread stays paused."""
+    settings.nexo_user = "x" * 201
+    rt = _paused(settings)
+    refused = submit(_server(settings, chunk_store, rt), Person(decision="reject"))
+    assert refused.is_error and "invalid decision: reviewer" in refused.content[0].text
+    assert rt.status("t1").pending_review.error is None

@@ -15,7 +15,7 @@ sources:
     title: Demo review page
   - id: state
     resource: ../../src/nexo/orchestration/state.py
-    title: ReviewDecision
+    title: ReviewDecision, ReviewPacket
   - id: compliance
     resource: ../../src/nexo/orchestration/compliance.py
     title: auto_approves
@@ -24,7 +24,7 @@ sources:
 # Trigger
 
 When the [review policy](#review-policy) holds an answer, `nexo ask` (or `Runtime.start`) returns
-`status: awaiting_review` with a `pending_review` packet. Show
+`status: awaiting_review` with a `pending_review` packet (a `ReviewPacket`). Show
 it again any time with `nexo status <thread_id>`. In code, `Runtime.pending_reviews()` lists every paused
 thread, newest first, and `Runtime.review_passages(thread_id, clearance)` reads the cited chunks, masked
 below their clearance ([ADR-0019](../decisions/adr-0019-review-surfaces.md)).
@@ -48,8 +48,9 @@ acknowledge the findings to approve them. A failed or empty investigation is sti
 
 A clean answer goes out without a pause. An answer is clean when compliance raised no finding at all,
 it cites at least one chunk, and the agent fetched every chunk it cites. An answer with any finding
-waits for a person, even if the finding is only a warning such as `budget_exhausted`. Use it for
-everyday use: a person sees only the answers a check flagged.
+waits for a person, even if the finding is only a warning such as `budget_exhausted`. That includes a
+run whose model asked for more tool calls than the budget allowed: it wanted evidence it did not get,
+so its answer pauses. Use it for everyday use: a person sees only the answers a check flagged.
 
 ## `always`
 
@@ -109,6 +110,8 @@ withheld ones say so. Use review over MCP for real work ([ADR-0019](../decisions
 
 - `--acknowledge-findings` is required to approve when any finding is `block`. Without it the run stays
   paused and the packet gains an `error`.
+- An invalid decision (an empty `--reviewer`, a comment over 2000 characters) is refused before the
+  thread is touched: `nexo review` exits with 2 and names the field.
 - The reviewer's id, comment and acknowledgement are stored in the thread's `review` state as the
   audit record.[^state]
 - A rejected answer is never released; start a new thread with a refined question instead.
@@ -117,5 +120,5 @@ withheld ones say so. Use review over MCP for real work ([ADR-0019](../decisions
 
 [^cli]: CLI
 [^compliance]: auto_approves
-[^state]: ReviewDecision
+[^state]: ReviewDecision, ReviewPacket
 [^ui]: Demo review page

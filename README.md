@@ -115,6 +115,8 @@ network there).
 | macOS (Apple Silicon) | Test suite passes; Podman and native paths verified up to the model server. |
 | Linux | Test suite passes (verified on aarch64); Podman path uses host networking; vLLM GPU passthrough untested here. |
 | Windows | Not tested; WSL2 with the Linux instructions is the likely path. |
+| Neo4j 5.26 (Community) | Supported; the compose and CI default. Chunk search uses the `db.index.*.queryNodes` procedures. |
+| Neo4j 2026.09+ (Community) | Supported; integration tests pass on 2026.09 and 2026.10. Chunk search uses the `SEARCH` clause ([Chunk store](docs/components/chunk-store.md#neo4j-versions)). |
 
 ## Test
 

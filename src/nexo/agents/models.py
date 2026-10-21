@@ -10,6 +10,8 @@ from nexo.storage.vector_store import ChunkFilter
 
 RetrievalStrategy = Literal["graph", "vector", "hybrid"]
 
+AGENT_NAME = "relationship-investigator"
+
 
 class InvestigationScope(BaseModel):
     """Set by the router: where to start and what the caller may see."""
@@ -23,6 +25,7 @@ class ToolCallSummary(BaseModel):
 
     tool: str
     ok: bool
+    refused: bool = False  # asked for after the tool budget was spent
     detail: str = ""
     duration_ms: float = 0.0
 
@@ -30,7 +33,7 @@ class ToolCallSummary(BaseModel):
 class AgentOutput(BaseModel):
     """The investigator's answer, citations, evidence ledger and run metadata."""
 
-    agent: str = "strands-relationship-investigator"
+    agent: str = AGENT_NAME
     answer: str = ""
     citations: list[str] = Field(default_factory=list)
     seed_chunk_ids: list[str] = Field(default_factory=list)

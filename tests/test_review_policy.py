@@ -11,6 +11,7 @@ from nexo.orchestration.compliance import (
     Finding,
     auto_approves,
 )
+from nexo.orchestration.state import ReviewDecision
 from nexo.setup import check
 from nexo.setup.render import build_env
 from nexo.setup.schema import SetupError, load_casting
@@ -103,7 +104,7 @@ def test_blocking_findings_always_wait_for_a_person(settings, policy):
     assert paused.status == "awaiting_review" and paused.final_response is None
     assert _review(paused)["compliance_report"]["blocking"] is True
     # A person still needs to acknowledge the findings to approve.
-    blocked = rt.review("t1", {"approval_status": "approved", "reviewer": "a"})
+    blocked = rt.review("t1", ReviewDecision(approval_status="approved", reviewer="a"))
     assert "acknowledged_findings" in _review(blocked)["error"]
 
 

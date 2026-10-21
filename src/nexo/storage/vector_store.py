@@ -218,7 +218,7 @@ class LocalChunkStore:
         # (a pgvector/OpenSearch backend would be a CLIENT span).
         attributes = retrieval_attributes(k, self._mode)
         with self._lock, traced_span(f"retrieval {DATA_SOURCE_ID}", attributes) as span:
-            candidates = k if self._mode == "vector" else max(k * 4, 20)
+            candidates = candidate_count(k, self._mode)
             rankings: list[list[str]] = []
             if self._mode in ("vector", "hybrid"):
                 rankings.append(
@@ -293,6 +293,11 @@ def retrieval_attributes(k: int, mode: RetrievalMode) -> dict[str, object]:
         "gen_ai.retrieval.top_k": k,
         "nexo.retrieval.mode": mode,
     }
+
+
+def candidate_count(k: int, mode: RetrievalMode) -> int:
+    """Hits each ranking keeps: k for vector alone, more when rankings are fused."""
+    return k if mode == "vector" else max(k * 4, 20)
 
 
 def fuse(rankings: list[list[str]]) -> list[str]:

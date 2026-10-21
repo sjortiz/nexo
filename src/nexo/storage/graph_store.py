@@ -6,11 +6,14 @@ Neo4j's LLM Graph Builder):
     (:Document {source_id, title, doc_type, source_uri, effective_date, sensitivity})
     (:Document)-[:FIRST_CHUNK]->(:Chunk)-[:NEXT_CHUNK]->(:Chunk)-[:PART_OF]->(:Document)
     (:Entity:<EntityType>[:PII][:PHI])-[:MENTIONED_IN {surface, resolution}]->(:Chunk)
-    (:Entity)-[:<RELATION> {chunk_id, chunk_ids, evidence, certainty, valid_at,
-                            extracted_as}]->(:Entity)
+    (:Entity)-[:<RELATION> {chunk_id, chunk_ids, evidence, evidence_rank, certainty,
+                            valid_at, extracted_as}]->(:Entity)
 
-`chunk_id` is the chunk where an entity/edge was first extracted;
-`chunk_ids` accumulates every supporting chunk across documents. Derived
+`chunk_id` is the chunk where an entity was first extracted, and for an edge
+the chunk its `evidence` quotes, with `evidence_rank` that chunk's rank; when
+that chunk stops supporting the edge the quote goes, and the next chunk that
+states the edge supplies one. `chunk_ids` accumulates every supporting chunk
+across documents. Derived
 properties are recomputed for every touched entity and edge on each replace:
 entity `aliases` from the surfaces on MENTIONED_IN (withdrawing a document
 withdraws the aliases and merges it contributed), and `sensitivity_rank` as
@@ -25,7 +28,7 @@ import re
 from collections import defaultdict
 from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Any, LiteralString, Protocol, cast
+from typing import Any, LiteralString, NamedTuple, Protocol, cast
 from urllib.parse import urlparse
 
 from neo4j import (
@@ -56,6 +59,7 @@ from nexo.storage.schemas import (
     DocumentMetadata,
     EntityType,
     GroundedTriple,
+    Sensitivity,
 )
 from nexo.telemetry import traced_span
 
@@ -68,14 +72,15 @@ DATA_MODEL = (
 chunk_id, chunk_ids, source_ids,
                                   sensitivity_rank, proposed_codes_json})
 (:Entity)-[:MENTIONED_IN {surface, resolution}]->(:Chunk)
-(:Entity)-[:<RELATION> {chunk_id, chunk_ids, evidence, certainty, valid_at, extracted_as, \
-sensitivity_rank}]->(:Entity)
+(:Entity)-[:<RELATION> {chunk_id, chunk_ids, evidence, evidence_rank, certainty, valid_at, \
+extracted_as, sensitivity_rank}]->(:Entity)
 (:Entity)-[:RELATED_TO {predicate, ...same properties}]->(:Entity)   \
 # predicate outside the ontology
 EntityType is one of: """
     + ", ".join(t.value for t in EntityType)
     + """
-sensitivity_rank (least sensitive supporting source): 0=public 1=internal 2=pii 3=phi"""
+sensitivity_rank (least sensitive supporting source): """
+    + " ".join(f"{level.rank}={level}" for level in Sensitivity)
 )
 
 # Connection drops surface as ServiceUnavailable/SessionExpired. Transient
@@ -206,9 +211,7 @@ class GraphStore:
     @_connection_retry
     def ensure_schema(self) -> None:
         """Create the constraints and indexes the graph relies on, if missing."""
-        with self._driver.session(
-            database=self._database, default_access_mode=WRITE_ACCESS
-        ) as session:
+        with self.session(write=True) as session:
             for statement in _SCHEMA_STATEMENTS:
                 session.run(statement).consume()
 
@@ -229,55 +232,29 @@ class GraphStore:
         """
         plan = _plan_writes(triples)
         keep = sorted(c.chunk_id for c in chunks)
-        removed: list[int] = []
 
-        def work(tx: ManagedTransaction) -> None:
-            affected, stale = _delete_source(tx, document.source_id, keep)
-            removed[:] = [stale]
+        def work(tx: ManagedTransaction) -> int:
+            affected, removed = _delete_source(tx, document.source_id, keep)
             if chunks:
                 _write_lexical(tx, document, chunks)
             if triples:
-                _write_domain(tx, *plan)
-            _refresh_derived(tx, sorted(affected | {row["key"] for row in plan[1]}))
+                _write_domain(tx, plan)
+            _refresh_derived(tx, sorted(affected | {m["key"] for m in plan.mentions}))
+            return removed
 
-        with (
-            self._span("replace_source"),
-            self._driver.session(
-                database=self._database, default_access_mode=WRITE_ACCESS
-            ) as session,
-        ):
-            session.execute_write(work)
-        return SourceSwap(triples_written=len(triples), chunks_removed=removed[0])
+        with self._span("replace_source"), self.session(write=True) as session:
+            removed = session.execute_write(work)
+        return SourceSwap(triples_written=len(triples), chunks_removed=removed)
 
     @_connection_retry
     def find_candidates(
         self, entity_type: EntityType, tokens: Sequence[str], limit: int
     ) -> list[Candidate]:
         """Resolution blocking: same-type entities whose name or alias contains a token."""
-        with (
-            self._span("find_candidates"),
-            self._driver.session(
-                database=self._database, default_access_mode=READ_ACCESS
-            ) as session,
-        ):
-            records = session.execute_read(
-                lambda tx: list(
-                    tx.run(
-                        """
-                MATCH (e:Entity) WHERE e.type = $type
-                  AND any(t IN $tokens WHERE toLower(e.name) CONTAINS t
-                          OR any(a IN coalesce(e.aliases, []) WHERE toLower(a) CONTAINS t))
-                RETURN e.key AS key, e.name AS name, coalesce(e.aliases, []) AS aliases,
-                       coalesce(e.description, '') AS description
-                LIMIT $limit
-                """,
-                        type=entity_type.value,
-                        tokens=list(tokens),
-                        limit=limit,
-                    )
-                )
+        with self._span("find_candidates"), self.session(write=False) as session:
+            return session.execute_read(
+                _find_candidates, entity_type.value, list(tokens), limit
             )
-        return [Candidate(**record.data()) for record in records]
 
     # --- reads (agent tool) ----------------------------------------------------
     @_connection_retry
@@ -301,12 +278,7 @@ class GraphStore:
                 rows.append(record.data())
             return ReadResult(rows, truncated=False)
 
-        with (
-            self._span("agent_query", cypher),
-            self._driver.session(
-                database=self._database, default_access_mode=READ_ACCESS
-            ) as session,
-        ):
+        with self._span("agent_query", cypher), self.session(write=False) as session:
             return session.execute_read(work)
 
     def describe_schema(self) -> str:
@@ -331,7 +303,32 @@ class GraphStore:
         )
 
 
-def _plan_writes(triples: Sequence[GroundedTriple]):
+_FIND_CANDIDATES: LiteralString = """
+MATCH (e:Entity) WHERE e.type = $type
+  AND any(t IN $tokens WHERE toLower(e.name) CONTAINS t
+          OR any(a IN coalesce(e.aliases, []) WHERE toLower(a) CONTAINS t))
+RETURN e.key AS key, e.name AS name, coalesce(e.aliases, []) AS aliases,
+       coalesce(e.description, '') AS description
+LIMIT $limit
+"""
+
+
+def _find_candidates(
+    tx: ManagedTransaction, entity_type: str, tokens: list[str], limit: int
+) -> list[Candidate]:
+    result = tx.run(_FIND_CANDIDATES, type=entity_type, tokens=tokens, limit=limit)
+    return [Candidate(**record.data()) for record in result]
+
+
+class WritePlan(NamedTuple):
+    """The rows one replace_source writes: entities by label, mentions, relations by type."""
+
+    entities: dict[str, list[dict[str, Any]]]
+    mentions: list[dict[str, Any]]
+    relations: dict[str, list[dict[str, Any]]]
+
+
+def _plan_writes(triples: Sequence[GroundedTriple]) -> WritePlan:
     entities: dict[str, dict[str, Any]] = {}
     mentions: dict[tuple[str, str, str], dict[str, Any]] = {}
     relations: dict[str, list[dict[str, Any]]] = defaultdict(list)
@@ -386,7 +383,7 @@ def _plan_writes(triples: Sequence[GroundedTriple]):
     by_label: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for row in entities.values():
         by_label[row["type"]].append(row)
-    return by_label, list(mentions.values()), relations
+    return WritePlan(by_label, list(mentions.values()), relations)
 
 
 def _write_lexical(
@@ -433,8 +430,8 @@ def _write_lexical(
     ).consume()
 
 
-def _write_domain(tx: ManagedTransaction, entities, mentions, relations) -> None:
-    for label, rows in entities.items():
+def _write_domain(tx: ManagedTransaction, plan: WritePlan) -> None:
+    for label, rows in plan.entities.items():
         # Labels cannot be parameters; only closed-enum literals reach here.
         EntityType(label)
         tx.run(
@@ -461,9 +458,9 @@ def _write_domain(tx: ManagedTransaction, entities, mentions, relations) -> None
         MERGE (e)-[m:MENTIONED_IN {surface: row.surface}]->(c)
         SET m.resolution = row.method
         """,
-        rows=mentions,
+        rows=plan.mentions,
     ).consume()
-    for rel_type, rows in relations.items():
+    for rel_type, rows in plan.relations.items():
         # RELATED_TO keeps one edge per distinct out-of-ontology predicate.
         identity = "{predicate: row.predicate}" if rel_type == FALLBACK_RELATION else ""
         tx.run(
@@ -472,11 +469,18 @@ def _write_domain(tx: ManagedTransaction, entities, mentions, relations) -> None
                 f"""
                 UNWIND $rows AS row
                 MATCH (h:Entity {{key: row.head_key}}), (t:Entity {{key: row.tail_key}})
+                OPTIONAL MATCH (c:Chunk {{chunk_id: row.chunk_id}})
                 MERGE (h)-[r:`{rel_type}` {identity}]->(t)
-                  ON CREATE SET r.chunk_id = row.chunk_id, r.chunk_ids = [], r.extracted_as = [],
-                                r.evidence = row.evidence, r.certainty = row.certainty, r.valid_at = row.valid_at,
+                  ON CREATE SET r.chunk_ids = [], r.extracted_as = [],
+                                r.certainty = row.certainty, r.valid_at = row.valid_at,
                                 r.created_at = datetime()
-                SET r.chunk_ids = CASE WHEN row.chunk_id IN r.chunk_ids THEN r.chunk_ids ELSE r.chunk_ids + row.chunk_id END,
+                // The quote keeps its own chunk's rank: sensitivity_rank falls as
+                // sources are added, but the quote is still that chunk's text.
+                WITH r, row, r.evidence_rank IS NULL AS quote, {_RANK} AS rank
+                SET r.chunk_id = CASE WHEN quote THEN row.chunk_id ELSE r.chunk_id END,
+                    r.evidence = CASE WHEN quote THEN row.evidence ELSE r.evidence END,
+                    r.evidence_rank = CASE WHEN quote THEN rank ELSE r.evidence_rank END,
+                    r.chunk_ids = CASE WHEN row.chunk_id IN r.chunk_ids THEN r.chunk_ids ELSE r.chunk_ids + row.chunk_id END,
                     r.extracted_as = CASE WHEN row.predicate IN r.extracted_as THEN r.extracted_as
                                           ELSE r.extracted_as + row.predicate END
                 """,
@@ -516,18 +520,23 @@ def _delete_source(
         "MATCH (c:Chunk {source_id: $source_id}) WHERE NOT c.chunk_id IN $keep DETACH DELETE c",
         "MATCH (d:Document {source_id: $source_id}) DETACH DELETE d",
         "MATCH (e:Entity) WHERE e.chunk_ids = [] DETACH DELETE e",
-        # ... and re-point first-seen chunk_id where that chunk is gone.
+        # ... and re-point first-seen chunk_id where that chunk is gone. An edge's
+        # quote goes with its chunk; the next chunk that states the edge re-quotes.
         "MATCH (e:Entity) WHERE NOT e.chunk_id IN e.chunk_ids SET e.chunk_id = e.chunk_ids[0]",
-        "MATCH ()-[r]->() WHERE NOT r.chunk_id IN r.chunk_ids SET r.chunk_id = r.chunk_ids[0]",
+        """MATCH ()-[r]->() WHERE NOT r.chunk_id IN r.chunk_ids
+           SET r.chunk_id = r.chunk_ids[0] REMOVE r.evidence, r.evidence_rank""",
     )
     for statement in statements:
         tx.run(statement, stale=stale, source_id=source_id, keep=list(keep)).consume()
     return affected, len(set(stale) - set(keep))
 
 
+# A chunk's rank from its `sensitivity`; an unknown level counts as phi.
+_PII, _PHI = Sensitivity.PII.rank, Sensitivity.PHI.rank
 _RANK = (
-    "CASE c.sensitivity WHEN 'public' THEN 0 WHEN 'internal' THEN 1 "
-    "WHEN 'pii' THEN 2 ELSE 3 END"
+    "CASE c.sensitivity "
+    + "".join(f"WHEN '{level}' THEN {level.rank} " for level in Sensitivity)
+    + f"ELSE {_PHI} END"
 )
 
 
@@ -545,14 +554,14 @@ def _refresh_derived(tx: ManagedTransaction, keys: Sequence[str]) -> None:
                 RETURN DISTINCT m.surface AS surface ORDER BY surface
             }},
             e.sensitivity_rank = reduce(
-                least = 3, r IN ranks | CASE WHEN r < least THEN r ELSE least END
+                least = {_PHI}, r IN ranks | CASE WHEN r < least THEN r ELSE least END
             )
         // Sensitivity labels let Enterprise RBAC hide nodes per role,
         // e.g. DENY TRAVERSE ON GRAPH neo4j NODES PHI TO internal_reader.
         REMOVE e:PII:PHI
         WITH e
-        FOREACH (_ IN CASE WHEN e.sensitivity_rank >= 2 THEN [1] ELSE [] END | SET e:PII)
-        FOREACH (_ IN CASE WHEN e.sensitivity_rank >= 3 THEN [1] ELSE [] END | SET e:PHI)
+        FOREACH (_ IN CASE WHEN e.sensitivity_rank >= {_PII} THEN [1] ELSE [] END | SET e:PII)
+        FOREACH (_ IN CASE WHEN e.sensitivity_rank >= {_PHI} THEN [1] ELSE [] END | SET e:PHI)
         """,
         ),
         keys=list(keys),
@@ -568,7 +577,7 @@ def _refresh_derived(tx: ManagedTransaction, keys: Sequence[str]) -> None:
                 MATCH (c:Chunk) WHERE c.chunk_id IN r.chunk_ids RETURN {_RANK}
             }} AS ranks
         SET r.sensitivity_rank = reduce(
-                least = 3, x IN ranks | CASE WHEN x < least THEN x ELSE least END
+                least = {_PHI}, x IN ranks | CASE WHEN x < least THEN x ELSE least END
             )
         """,
         ),

@@ -30,11 +30,12 @@ sources:
    investigation is auto-rejected with no human step. If the
    [review policy](../operations/human-review.md#review-policy) (`spec.review`, default `on-findings`)
    releases the answer, it is approved as `reviewer: system:auto` with no pause; an answer with a
-   `block` finding never is. Otherwise the node calls `interrupt()` with a review packet; the run
+   `block` finding never is. Otherwise the node calls `interrupt()` with a review packet (`ReviewPacket`); the run
    pauses and its state is checkpointed.[^graph]
-5. **Review.** `Runtime.review(thread_id, decision)` resumes with `Command(resume=decision)`. Invalid
-   input, or an approval of blocking findings without `acknowledged_findings: true`, pauses again with
-   an `error` in the packet.
+5. **Review.** `Runtime.review(thread_id, decision)` takes a `ReviewDecision`, which every review
+   surface builds and whose validation errors it reports to its user, and resumes with
+   `Command(resume=decision)`. An approval of blocking findings without `acknowledged_findings: true`,
+   or a raw resume value the graph cannot validate, pauses again with an `error` in the packet.
 6. **Release.** On approval, `final_response` is set to the draft answer; on rejection it stays `null`.
 
 # Result
@@ -59,6 +60,9 @@ when the run's sensitivity allows it (`telemetry.content`, see
 [content logs](../operations/observability.md#question-and-answer-logs)) or with content capture
 ([ADR-0009](../decisions/adr-0009-opentelemetry-genai-conventions.md)). A reviewer may be named
 `system`; only `review.source: system` marks the compliance node's own rejection.
+
+A paused thread's result also carries `pending_review` (the review packet) and `paused_at`, the time
+of its pause checkpoint; both are absent once the thread completes.
 
 # State
 

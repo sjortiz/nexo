@@ -1,0 +1,332 @@
+{
+  "checkpoint": {
+    "request_id": "t1",
+    "user_query": "How is Acme related to Beta?",
+    "draft_answer": "Acme acquired Beta [chunk:chk_aaaaaaaaaaaaaaaa].",
+    "citations": [
+      "chk_aaaaaaaaaaaaaaaa"
+    ],
+    "compliance_report": {
+      "findings": [
+        {
+          "code": "ungrounded_citations",
+          "severity": "block",
+          "detail": "chk_aaaaaaaaaaaaaaaa"
+        }
+      ],
+      "blocking": true
+    },
+    "resume_with": {
+      "additionalProperties": false,
+      "description": "What a human reviewer sends to resume the paused compliance node.",
+      "properties": {
+        "approval_status": {
+          "enum": [
+            "approved",
+            "rejected"
+          ],
+          "title": "Approval Status",
+          "type": "string"
+        },
+        "reviewer": {
+          "maxLength": 200,
+          "minLength": 1,
+          "title": "Reviewer",
+          "type": "string"
+        },
+        "comment": {
+          "anyOf": [
+            {
+              "maxLength": 2000,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Comment"
+        },
+        "acknowledged_findings": {
+          "default": false,
+          "description": "Required to approve when the compliance report has blocking findings",
+          "title": "Acknowledged Findings",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "approval_status",
+        "reviewer"
+      ],
+      "title": "ReviewDecision",
+      "type": "object"
+    }
+  },
+  "cli": {
+    "thread_id": "t1",
+    "status": "awaiting_review",
+    "outcome": "awaiting review",
+    "routing_target": "investigator",
+    "routing_reason": "no router model configured",
+    "approval_status": "pending",
+    "pending_review": {
+      "request_id": "t1",
+      "user_query": "How is Acme related to Beta?",
+      "draft_answer": "Acme acquired Beta [chunk:chk_aaaaaaaaaaaaaaaa].",
+      "citations": [
+        "chk_aaaaaaaaaaaaaaaa"
+      ],
+      "compliance_report": {
+        "findings": [
+          {
+            "code": "ungrounded_citations",
+            "severity": "block",
+            "detail": "chk_aaaaaaaaaaaaaaaa"
+          }
+        ],
+        "blocking": true
+      },
+      "resume_with": {
+        "additionalProperties": false,
+        "description": "What a human reviewer sends to resume the paused compliance node.",
+        "properties": {
+          "approval_status": {
+            "enum": [
+              "approved",
+              "rejected"
+            ],
+            "title": "Approval Status",
+            "type": "string"
+          },
+          "reviewer": {
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Reviewer",
+            "type": "string"
+          },
+          "comment": {
+            "anyOf": [
+              {
+                "maxLength": 2000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Comment"
+          },
+          "acknowledged_findings": {
+            "default": false,
+            "description": "Required to approve when the compliance report has blocking findings",
+            "title": "Acknowledged Findings",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "approval_status",
+          "reviewer"
+        ],
+        "title": "ReviewDecision",
+        "type": "object"
+      }
+    }
+  },
+  "mcp_pending": {
+    "result": [
+      {
+        "thread_id": "t1",
+        "question": "How is Acme related to Beta?",
+        "blocking": true,
+        "findings": 1
+      }
+    ]
+  },
+  "mcp_get": {
+    "thread_id": "t1",
+    "question": "How is Acme related to Beta?",
+    "draft_answer": "Acme acquired Beta [chunk:chk_aaaaaaaaaaaaaaaa].",
+    "citations": [
+      "chk_aaaaaaaaaaaaaaaa"
+    ],
+    "compliance_report": {
+      "findings": [
+        {
+          "code": "ungrounded_citations",
+          "severity": "block",
+          "detail": "chk_aaaaaaaaaaaaaaaa"
+        }
+      ],
+      "blocking": true
+    },
+    "error": null,
+    "passages": [
+      {
+        "chunk_id": "chk_aaaaaaaaaaaaaaaa",
+        "source": "Deal",
+        "text": "Acme bought Beta.",
+        "classification": "internal",
+        "status": "shown"
+      }
+    ],
+    "clearance": "internal"
+  },
+  "review_ui": "<!doctype html><html><head><meta charset=utf-8><title>Review</title><style>body{font-family:system-ui,sans-serif;max-width:60rem;margin:0 auto;padding:1rem}.banner{background:#fff3cd;border:1px solid #d4a72c;padding:.5rem 1rem;font-weight:600}pre{white-space:pre-wrap;background:#f4f4f4;padding:.75rem}.block{color:#b00020}.error{color:#b00020;font-weight:600}table{border-collapse:collapse;width:100%}td,th{text-align:left;padding:.4rem;border-bottom:1px solid #ddd}</style></head><body><div class=\"banner\">Demo: no authentication, local use only</div><p>Reviewer: <strong>ana</strong> (from NEXO_USER)</p><h1>Review</h1><p><a href=\"/\">Back to the list</a></p><h2>Question</h2><pre>How is Acme related to Beta?</pre><h2>Draft answer</h2><pre>Acme acquired Beta [chunk:chk_aaaaaaaaaaaaaaaa].</pre><h2>Citations (clearance: internal)</h2><ul><li><strong>chk_aaaaaaaaaaaaaaaa</strong> Deal (internal)<pre>Acme bought Beta.</pre></li></ul><h2>Compliance findings</h2><ul><li class=\"block\"><strong>block</strong> ungrounded_citations: chk_aaaaaaaaaaaaaaaa</li></ul><form method=\"post\" action=\"/review/t1\"><input type=\"hidden\" name=\"csrf\" value=\"<csrf>\"><p><label><input type=\"checkbox\" name=\"acknowledge\" value=\"1\"> Acknowledge findings (required to approve)</label></p><p><label>Comment<br><textarea name=\"comment\" rows=\"4\" cols=\"60\" maxlength=\"2000\"></textarea></label></p><button name=\"decision\" value=\"approve\">Approve</button> <button name=\"decision\" value=\"reject\">Reject</button></form></body></html>",
+  "inbox": {
+    "action_request": {
+      "action": "Review answer",
+      "args": {
+        "request_id": "t1",
+        "question": "How is Acme related to Beta?",
+        "draft_answer": "Acme acquired Beta [chunk:chk_aaaaaaaaaaaaaaaa].",
+        "acknowledge_findings": "no",
+        "comment": ""
+      }
+    },
+    "config": {
+      "allow_accept": false,
+      "allow_edit": true,
+      "allow_respond": true,
+      "allow_ignore": true
+    },
+    "description": "**Findings**\n\n- **block** `ungrounded_citations`: chk_aaaaaaaaaaaaaaaa\n\n**Cited passages** (read at clearance `internal`)\n\n`chk_aaaaaaaaaaaaaaaa` Deal (internal)\n\n> Acme bought Beta.\n\nBlocking findings: set `acknowledge_findings` to `yes` and submit to approve."
+  },
+  "cli_error": {
+    "thread_id": "t1",
+    "status": "awaiting_review",
+    "outcome": "awaiting review",
+    "routing_target": "investigator",
+    "routing_reason": "no router model configured",
+    "approval_status": "pending",
+    "pending_review": {
+      "request_id": "t1",
+      "user_query": "How is Acme related to Beta?",
+      "draft_answer": "Acme acquired Beta [chunk:chk_aaaaaaaaaaaaaaaa].",
+      "citations": [
+        "chk_aaaaaaaaaaaaaaaa"
+      ],
+      "compliance_report": {
+        "findings": [
+          {
+            "code": "ungrounded_citations",
+            "severity": "block",
+            "detail": "chk_aaaaaaaaaaaaaaaa"
+          }
+        ],
+        "blocking": true
+      },
+      "resume_with": {
+        "additionalProperties": false,
+        "description": "What a human reviewer sends to resume the paused compliance node.",
+        "properties": {
+          "approval_status": {
+            "enum": [
+              "approved",
+              "rejected"
+            ],
+            "title": "Approval Status",
+            "type": "string"
+          },
+          "reviewer": {
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Reviewer",
+            "type": "string"
+          },
+          "comment": {
+            "anyOf": [
+              {
+                "maxLength": 2000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Comment"
+          },
+          "acknowledged_findings": {
+            "default": false,
+            "description": "Required to approve when the compliance report has blocking findings",
+            "title": "Acknowledged Findings",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "approval_status",
+          "reviewer"
+        ],
+        "title": "ReviewDecision",
+        "type": "object"
+      },
+      "error": [
+        {
+          "type": "literal_error",
+          "loc": [
+            "approval_status"
+          ],
+          "msg": "Input should be 'approved' or 'rejected'",
+          "ctx": {
+            "expected": "'approved' or 'rejected'"
+          }
+        },
+        {
+          "type": "missing",
+          "loc": [
+            "reviewer"
+          ],
+          "msg": "Field required"
+        }
+      ]
+    }
+  },
+  "mcp_get_error": {
+    "thread_id": "t1",
+    "question": "How is Acme related to Beta?",
+    "draft_answer": "Acme acquired Beta [chunk:chk_aaaaaaaaaaaaaaaa].",
+    "citations": [
+      "chk_aaaaaaaaaaaaaaaa"
+    ],
+    "compliance_report": {
+      "findings": [
+        {
+          "code": "ungrounded_citations",
+          "severity": "block",
+          "detail": "chk_aaaaaaaaaaaaaaaa"
+        }
+      ],
+      "blocking": true
+    },
+    "error": [
+      {
+        "type": "literal_error",
+        "loc": [
+          "approval_status"
+        ],
+        "msg": "Input should be 'approved' or 'rejected'",
+        "ctx": {
+          "expected": "'approved' or 'rejected'"
+        }
+      },
+      {
+        "type": "missing",
+        "loc": [
+          "reviewer"
+        ],
+        "msg": "Field required"
+      }
+    ],
+    "passages": [
+      {
+        "chunk_id": "chk_aaaaaaaaaaaaaaaa",
+        "source": "Deal",
+        "text": "Acme bought Beta.",
+        "classification": "internal",
+        "status": "shown"
+      }
+    ],
+    "clearance": "internal"
+  }
+}

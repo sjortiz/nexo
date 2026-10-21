@@ -15,7 +15,7 @@ sources:
 # Signature
 
 ```python
-search_chunks(query: str, k: int = 5) -> str  # JSON
+search_chunks(query: str, k: int = 5) -> ToolResult  # the model reads its content as JSON
 ```
 
 # Behavior
@@ -29,7 +29,12 @@ search_chunks(query: str, k: int = 5) -> str  # JSON
    ranking uses the original text. `k` is capped at `AGENT_MAX_CHUNKS_PER_CALL`.
 3. Returns the chunks in the same shape as [fetch_vector_chunks](fetch-vector-chunks.md) and records them
    in the evidence ledger, so the answer may cite them and [compliance](compliance-checks.md) treats them
-   as grounded.[^tools]
+   as grounded. Passages dropped to fit `TOOL_RESULT_MAX_CHARS` are counted in `omitted_for_size` and
+   are not evidence.[^tools]
+
+If the chunk store fails, the tool returns `{"error": "chunk store unavailable; report what you have"}`,
+a failed call with the exception's class as `error.type` on its span
+([Observability](../operations/observability.md#failed-tool-calls)).
 
 # Why it exists
 

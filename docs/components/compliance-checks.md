@@ -26,8 +26,8 @@ Which answers wait for a person at all is the [review policy](../operations/huma
 | `phi_in_evidence` | block | A cited chunk is classified `phi`; confirm minimum-necessary disclosure. |
 | `pii_in_evidence` | warn | A cited chunk is classified `pii` (and none is `phi`). |
 | `sensitive_data_in_answer` | block | The configured detector finds identifiers in the answer text itself. |
-| `budget_exhausted` | warn | `stop_reason` starts with `limit_`; the answer may be incomplete. |
-| `tool_errors` | warn | Some tool calls failed. |
+| `budget_exhausted` | warn | `stop_reason` starts with `limit_`, or the model asked for tool calls after the tool budget was spent (one finding each); the answer may be incomplete. |
+| `tool_errors` | warn | Some tool calls that ran failed (an error returned to the model). Calls refused for budget are not counted here. |
 | `evidence_withheld` | warn | Chunks were withheld for clearance or scope. |
 
 # Properties

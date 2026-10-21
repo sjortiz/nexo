@@ -13,6 +13,9 @@ sources:
   - id: review
     resource: ../operations/human-review.md
     title: Human review
+  - id: state
+    resource: ../../src/nexo/orchestration/state.py
+    title: ReviewPacket, ReviewPassage
 ---
 
 # Context
@@ -25,8 +28,10 @@ packet in hand. Reviewers want an inbox, and AI clients already talk to Nexo ove
 # Decision
 
 Every surface calls the same `Runtime` methods:[^service] `pending_reviews` lists the paused threads,
-`status` returns one packet, `review_passages` reads the cited chunks for a reviewer's clearance (masked
-by the read-time redactor), and `review` records the decision. No surface owns review state.
+`status` returns one `ReviewPacket`,[^state] `review_passages` reads the cited chunks for a reviewer's
+clearance (masked by the read-time redactor) as `ReviewPassage`s, and `review` records a
+`ReviewDecision` the surface built, so a malformed decision fails at the surface, not in the graph.
+No surface owns review state or parses the packet itself: `blocking` and `findings` come from it.
 
 | Surface | Status | Why |
 |---|---|---|
@@ -34,6 +39,13 @@ by the read-time redactor), and `review` records the decision. No surface owns r
 | LangChain Agent Inbox | Opt-in | An inbox UI for teams that already run one; a small adapter stands in for LangGraph Server, which is not open source, and every decision still goes through `review` ([how](../operations/agent-inbox.md)). |
 | Local web page | Demo only | Shows the flow without an MCP client; no authentication, loopback only (`make review-ui`, [Human review](../operations/human-review.md#demo-review-page)). |
 | `nexo review` | Always available | The fallback every other surface can print. |
+
+- **Amended 2026-10-21:** the packet and the decision are typed. The compliance node pauses with a
+  `ReviewPacket` (its JSON shape unchanged), `status` and `pending_reviews` return it, and
+  `review_passages` returns `ReviewPassage`s, so no surface re-derives `blocking` or `findings`.
+  Each surface builds the `ReviewDecision` and reports a validation error to its own user
+  (`nexo review` exits 2, the page answers 400, the inbox 422, the MCP tool an error) instead of
+  letting the graph re-pause the thread; the graph still validates raw resumes.
 
 # Why MCP is the default
 
@@ -56,3 +68,4 @@ findings and require acknowledgement to approve a blocked draft; the graph enfor
 
 [^service]: Runtime
 [^review]: Human review
+[^state]: ReviewPacket, ReviewPassage

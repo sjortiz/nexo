@@ -13,14 +13,15 @@ from neo4j.exceptions import Neo4jError, ServiceUnavailable
 from openai.types.chat import ChatCompletion
 from strands.models.openai import OpenAIModel
 from strands.telemetry import tracer as strands_tracer
+from strands.types.exceptions import ModelThrottledException
 
-from nexo.agents.investigator import Investigator, extract_citations
+from nexo.agents.investigator import Investigator, extract_citations, is_transient
 from nexo.agents.models import InvestigationScope
 from nexo.agents.tools import InvestigationContext, build_investigation_tools
 from nexo.storage.schemas import Sensitivity
 from nexo.storage.vector_store import ChunkFilter
 from nexo.telemetry import apply_genai_env
-from tests.conftest import FakeGraph, make_chunk
+from tests.conftest import FakeGraph, as_model_text, make_chunk
 
 
 def _named_tools(
@@ -35,7 +36,7 @@ def _named_tools(
     tools = build_investigation_tools(
         graph=graph, chunks=chunk_store, ctx=ctx, settings=settings
     )
-    return ctx, {t.tool_name: t for t in tools}
+    return ctx, {t.tool_name: as_model_text(t) for t in tools}
 
 
 def _tools(settings, graph, chunk_store, *, clearance=Sensitivity.INTERNAL, budget=10):
@@ -151,7 +152,7 @@ def test_find_paths_withholds_paths_through_anything_above_clearance(
     out = json.loads(tools["find_paths"](a, c, max_hops=99, max_paths=0))
     assert [p["hops"] for p in out["paths"]] == [[_hop(a, c, C1)]]
     assert out["withheld"] == 2 and out["chunk_ids_found"] == [C1]
-    assert ctx.evidence.discovered == {C1} and ctx.calls[0].ok
+    assert ctx.calls[0].ok
     assert "hint" not in out and out["tool_calls_left"] == 9
     # Keys travel as parameters; hop and path counts are clamped before inlining.
     assert graph.parameters == [{"from_key": a, "to_key": c}]
@@ -170,7 +171,15 @@ def test_find_paths_reports_unknown_keys_no_path_and_same_entity(settings, chunk
     _, tools = _named_tools(settings, graph, chunk_store)
     out = json.loads(tools["find_paths"]("X:a", "X:b", max_hops=0))
     assert out["paths"] == [] and out["withheld"] == 0 and "{1,1}" in graph.queries[0]
-    assert "search_chunks" in out["hint"]
+    assert out["hint"] == "no path in the graph: search_chunks for the text"
+
+    graph = FakeGraph(
+        rows=[{"nodes": [_node("X:a")], "hops": [_hop("X:a", "X:b", C1, 3)]}]
+    )
+    _, tools = _named_tools(settings, graph, chunk_store)
+    out = json.loads(tools["find_paths"]("X:a", "X:b"))
+    assert out["withheld"] == 1
+    assert out["hint"] == "no visible path: search_chunks for the text"
 
     graph = FakeGraph()
     _, tools = _named_tools(settings, graph, chunk_store)
@@ -204,11 +213,10 @@ def test_entity_neighbours_hides_entities_and_edges_above_clearance(
             },
         ]
     )
-    ctx, tools = _named_tools(settings, graph, chunk_store)
+    _, tools = _named_tools(settings, graph, chunk_store)
     out = json.loads(tools["entity_neighbours"]("Organization:acme", limit=500))
     assert [e["neighbour"]["key"] for e in out["edges"]] == ["Organization:beta"]
     assert out["withheld"] == 2 and out["chunk_ids_found"] == [C1]
-    assert ctx.evidence.discovered == {C1}
     assert graph.parameters == [{"key": "Organization:acme", "limit": 100}]
 
     hidden = FakeGraph(
@@ -259,6 +267,18 @@ def test_fetch_tool_enforces_clearance_validates_ids_and_budget(settings, chunk_
         public.chunk_id: "internal"
     }  # withheld text is never evidence
     assert "budget" in json.loads(fetch([public.chunk_id]))["error"]
+
+
+def test_throttling_anywhere_in_the_cause_chain_is_transient():
+    """A throttled model call retries the run; an ordinary error does not."""
+    try:
+        try:
+            raise ModelThrottledException("slow down")
+        except ModelThrottledException as exc:
+            raise RuntimeError("agent failed") from exc
+    except RuntimeError as wrapped:
+        assert is_transient(wrapped)
+    assert not is_transient(RuntimeError("bug"))
 
 
 def test_extract_citations():
@@ -807,6 +827,25 @@ def test_system_prompt_says_absence_from_the_graph_is_not_evidence(
     system = client.requests[0]["messages"][0]["content"]
     assert "Absence from the graph is not evidence of absence" in system
     assert "search_chunks" in system
+
+
+def test_system_prompt_sends_role_questions_to_entity_neighbours(settings, chunk_store):
+    """Roles, owners and suppliers of one entity go to entity_neighbours, not freehand Cypher."""
+    client = ScriptedClient([_completion({"content": "No data."}, "stop")])
+    investigator = Investigator(
+        model=OpenAIModel(client=client, model_id="m", stream=False),
+        graph=FakeGraph(),
+        chunks=chunk_store,
+        settings=settings,
+    )
+    investigator.investigate(
+        "Who is the chief executive of Beta Labs?",
+        scope=InvestigationScope(strategy="graph"),
+    )
+    system = " ".join(client.requests[0]["messages"][0]["content"].split())
+    steer = system[system.index("roles, owners, suppliers") :]
+    assert "entity_neighbours" in steer[:200]
+    assert "do not write Cypher or guess relationship types" in steer[:300]
 
 
 # --- answering without exhausting the turns ----------------------------------

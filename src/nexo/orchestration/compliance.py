@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, computed_field
 
 from nexo.agents.models import AgentOutput
 from nexo.storage.schemas import Sensitivity
@@ -32,6 +32,7 @@ class ComplianceReport(BaseModel):
 
     findings: list[Finding] = Field(default_factory=list)
 
+    @computed_field
     @property
     def blocking(self) -> bool:
         """Whether any finding blocks the answer."""
@@ -39,10 +40,7 @@ class ComplianceReport(BaseModel):
 
     def as_state(self) -> dict:
         """Return the report as a plain dict for the graph state."""
-        return {
-            "findings": [f.model_dump() for f in self.findings],
-            "blocking": self.blocking,
-        }
+        return self.model_dump(mode="json")
 
 
 def run_compliance_checks(
@@ -132,13 +130,23 @@ def run_compliance_checks(
                 detail=f"agent stopped on {output.stop_reason}; answer may be incomplete",
             )
         )
-    failed_tools = [c for c in output.tool_calls if not c.ok]
+    refused = [c for c in output.tool_calls if c.refused]
+    if refused:
+        add(
+            Finding(
+                code="budget_exhausted",
+                severity="warn",
+                detail=f"{len(refused)} tool call(s) refused after the budget was spent",
+            )
+        )
+    ran = [c for c in output.tool_calls if not c.refused]
+    failed_tools = [c for c in ran if not c.ok]
     if failed_tools:
         add(
             Finding(
                 code="tool_errors",
                 severity="warn",
-                detail=f"{len(failed_tools)} of {len(output.tool_calls)} tool calls failed",
+                detail=f"{len(failed_tools)} of {len(ran)} tool calls failed",
             )
         )
     if output.withheld_chunk_ids:

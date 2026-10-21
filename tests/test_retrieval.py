@@ -10,6 +10,7 @@ from nexo.storage.vector_store import (
     BM25,
     ChunkFilter,
     LocalChunkStore,
+    candidate_count,
     fuse,
     tokenize,
 )
@@ -149,6 +150,13 @@ def test_rrf_rewards_agreement_between_rankings():
         fuse([["a", "b", "c"], ["c", "x"]])[0] == "c"
     )  # in both lists beats first in one
     assert fuse([["a", "b"]]) == ["a", "b"]
+
+
+def test_candidate_count_widens_only_rankings_that_are_fused():
+    """Vector alone keeps k hits; keyword and hybrid keep at least 20 to fuse."""
+    assert candidate_count(5, "vector") == 5
+    assert candidate_count(3, "keyword") == 20
+    assert candidate_count(10, "hybrid") == 40
 
 
 def test_unknown_mode_is_rejected(settings):

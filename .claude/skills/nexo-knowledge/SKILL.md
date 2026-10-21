@@ -1,7 +1,7 @@
 ---
 name: nexo-knowledge
 description: Answer questions from the Nexo knowledge graph and its source documents through the nexo MCP tools, citing every claim to a source chunk. Use when the user asks about people, organizations, products, conditions, events or how they relate, or about anything in documents ingested into Nexo.
-allowed-tools: mcp__nexo__nexo_index, mcp__nexo__nexo_search, mcp__nexo__nexo_get_chunks, mcp__nexo__nexo_find_entities, mcp__nexo__nexo_neighbors, mcp__nexo__nexo_graph_query
+allowed-tools: mcp__nexo__nexo_index, mcp__nexo__nexo_search, mcp__nexo__nexo_get_chunks, mcp__nexo__nexo_find_entities, mcp__nexo__nexo_neighbors, mcp__nexo__nexo_find_paths, mcp__nexo__nexo_graph_query
 ---
 
 # Nexo knowledge
@@ -27,9 +27,12 @@ Check: you have at least one entity key or chunk id. If not, report what you sea
 
 ## 3. Trace (relationship questions)
 
-- Direct relationships: `nexo_neighbors(entity_key)`. It returns both directions.
-- Multi-hop paths: `nexo_graph_query` with bounded paths (`*1..3`) and a `LIMIT`; exclude the
-  lexical relationships `MENTIONED_IN`, `PART_OF`, `NEXT_CHUNK`, `FIRST_CHUNK`.
+- Direct relationships, including one entity's roles, owners and suppliers:
+  `nexo_neighbors(entity_key)`. It returns both directions.
+- How two entities connect: `nexo_find_paths(from_key, to_key)`, shortest paths of 3 hops by default, up to 4
+  through entities only. Each hop gives its direction and chunk ids.
+- Anything else multi-hop: `nexo_graph_query` with bounded paths (`*1..3`) and a `LIMIT`; exclude
+  the lexical relationships `MENTIONED_IN`, `PART_OF`, `NEXT_CHUNK`, `FIRST_CHUNK`.
 - Keep the chunk ids of every edge you rely on. Respect `certainty` (`possible` is a hypothesis,
   `negated` means ruled out) and `valid_at` dates.
 
