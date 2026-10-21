@@ -22,8 +22,9 @@ from neo4j.exceptions import ServiceUnavailable, SessionExpired
 from strands import Agent
 from strands.models import Model
 from strands.types.agent import Limits
+from strands.types.exceptions import ModelThrottledException
 
-from nexo.agents.models import AgentOutput, InvestigationScope
+from nexo.agents.models import AGENT_NAME, AgentOutput, InvestigationScope
 from nexo.agents.redaction import ChunkRedactor
 from nexo.agents.tools import InvestigationContext, build_investigation_tools
 from nexo.aio import run_sync
@@ -81,8 +82,6 @@ the whole id, including its chk_ prefix."""
 
 log = logging.getLogger(__name__)
 
-AGENT_NAME = "relationship-investigator"
-
 _CITATION_BLOCK = re.compile(r"\[chunk:([^\]]+)\]")
 # A whole chunk id without its chk_ prefix; small models write these.
 _BARE_HASH = re.compile(r"[0-9a-f]{16}")
@@ -114,6 +113,7 @@ _TRANSIENT = (
     openai.APIConnectionError,  # includes APITimeoutError
     openai.InternalServerError,
     openai.RateLimitError,
+    ModelThrottledException,
     ServiceUnavailable,
     SessionExpired,
 )
@@ -128,10 +128,7 @@ def is_transient(exc: BaseException) -> bool:
     seen: set[int] = set()
     current: BaseException | None = exc
     while current is not None and id(current) not in seen:
-        if (
-            isinstance(current, _TRANSIENT)
-            or type(current).__name__ == "ModelThrottledException"
-        ):
+        if isinstance(current, _TRANSIENT):
             return True
         seen.add(id(current))
         current = current.__cause__ or current.__context__
@@ -141,7 +138,7 @@ def is_transient(exc: BaseException) -> bool:
 class Investigator:
     """Runs one Strands agent per question to trace and cite graph relationships."""
 
-    def __init__(
+    def __init__(  # pylint: disable=too-many-arguments  # keyword-only wiring
         self,
         *,
         model: Model,
@@ -149,19 +146,15 @@ class Investigator:
         chunks: ChunkStore,
         settings: Settings,
         schema_text: str | None = None,
+        detector: SensitiveDataDetector | None = None,
     ) -> None:
-        # Until `with_detector`, nothing can be masked: chunks above clearance stay withheld.
-        self._redactor = ChunkRedactor(NoopDetector())
+        """Without a detector nothing is masked: chunks above clearance stay withheld."""
+        self._redactor = ChunkRedactor(detector or NoopDetector())
         self._model = model
         self._graph = graph
         self._chunks = chunks
         self._settings = settings
         self._system_prompt = SYSTEM_PROMPT.format(schema=schema_text or DATA_MODEL)
-
-    def with_detector(self, detector: SensitiveDataDetector) -> Investigator:
-        """Mask detected personal details in chunks above a caller's clearance."""
-        self._redactor = ChunkRedactor(detector)
-        return self
 
     def _build_agent(self, ctx: InvestigationContext) -> Agent:
         # A fresh Agent per investigation: Strands agents hold conversation
@@ -264,7 +257,7 @@ class Investigator:
             fetched_chunk_ids=sorted(ctx.evidence.fetched),
             fetched_sensitivity=dict(ctx.evidence.fetched),
             withheld_chunk_ids=sorted(ctx.evidence.withheld),
-            tool_calls=[c for c in ctx.calls if c.tool != "(reserved)"],
+            tool_calls=ctx.completed_calls(),
             stop_reason=str(result.stop_reason),
             usage=_usage(result),
         )

@@ -38,19 +38,20 @@ class StructuredOutputError(RuntimeError):
     """The model did not produce schema-valid JSON within the retry budget."""
 
 
+class ModelServerError(RuntimeError):
+    """A model server did not answer, or answered with something unreadable."""
+
+
 def build_chat_model(
     settings: Settings, *, role: ModelRole, temperature: float = 0.0
 ) -> ChatOpenAI:
     """LangChain client for a JSON-producing role (router, extraction, judge)."""
     endpoint = settings.endpoint(role)
-    extra: dict[str, str] = {}
-    if endpoint.reasoning_effort:
-        extra["reasoning_effort"] = endpoint.reasoning_effort
     return ChatOpenAI(
-        **extra,
         base_url=endpoint.base_url,
         api_key=endpoint.api_key,
         model=endpoint.model,
+        reasoning_effort=endpoint.reasoning_effort,
         temperature=temperature,
         timeout=settings.llm_timeout_s,
         # The openai client retries connection errors, 408/409/429 and 5xx
@@ -218,7 +219,8 @@ def check_model_servers(
     to constrain its output (e.g. Ollama MLX builds), which breaks extraction
     and routing.
     """
-    listings: dict[str, set[str] | str] = {}
+    listings: dict[str, set[str]] = {}
+    unreachable: dict[str, str] = {}
     probes: dict[tuple, str | None] = {}
     for row in rows:
         if not row.get("model"):
@@ -228,13 +230,15 @@ def check_model_servers(
             if row["role"] == "embedding"
             else settings.endpoint(row["role"]).api_key
         )
-        if row["base_url"] not in listings:
-            listings[row["base_url"]] = _served_models(
-                row["base_url"], key.get_secret_value(), timeout_s
-            )
-        served = listings[row["base_url"]]
-        if isinstance(served, str):
-            row["check"] = f"unreachable: {served}"
+        url = row["base_url"]
+        if url not in listings and url not in unreachable:
+            try:
+                listings[url] = _served_models(url, key.get_secret_value(), timeout_s)
+            except ModelServerError as exc:
+                unreachable[url] = str(exc)
+        served = listings.get(url)
+        if served is None:
+            row["check"] = f"unreachable: {unreachable[url]}"
         # Ollama tags untagged pulls :latest
         elif row["model"] in served or f"{row['model']}:latest" in served:
             row["check"] = "ok"
@@ -299,15 +303,14 @@ def _probe_structured_output(
     return f"reply is not schema-valid JSON: {content[:80]!r}"
 
 
-def _served_models(base_url: str, api_key: str, timeout_s: float) -> set[str] | str:
+def _served_models(base_url: str, api_key: str, timeout_s: float) -> set[str]:
+    """The model ids the server lists at GET /models."""
     request = urllib.request.Request(
         base_url.rstrip("/") + "/models", headers={"Authorization": f"Bearer {api_key}"}
     )
     try:
         with urllib.request.urlopen(request, timeout=timeout_s) as response:
             return {entry.get("id") for entry in json.load(response).get("data", [])}
-    except (
-        OSError,
-        ValueError,
-    ) as exc:  # URLError/HTTPError/timeouts are OSError; bad JSON is ValueError
-        return f"{type(exc).__name__}: {exc}"
+    # URLError, HTTPError and timeouts are OSError; bad JSON is ValueError.
+    except (OSError, ValueError) as exc:
+        raise ModelServerError(f"{type(exc).__name__}: {exc}") from exc

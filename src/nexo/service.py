@@ -440,8 +440,9 @@ def build_investigator(
         chunks=chunk_store,
         settings=settings,
         schema_text=graph_store.describe_schema(),
-    ).with_detector(
-        build_detector(settings.sensitive_data_provider, aws_region=settings.aws_region)
+        detector=build_detector(
+            settings.sensitive_data_provider, aws_region=settings.aws_region
+        ),
     )
 
 

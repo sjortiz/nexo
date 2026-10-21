@@ -58,7 +58,7 @@ from nexo.storage.neo4j_chunk_store import (
     import_local_store,
 )
 from nexo.storage.vector_store import ChunkFilter, LocalChunkStore
-from tests.conftest import RecordingChatModel, make_chunk
+from tests.conftest import RecordingChatModel, as_model_text, make_chunk
 from tests.test_agent import ScriptedClient, _completion, _tool_call
 from tests.test_mcp_server import call, data
 
@@ -527,8 +527,11 @@ def test_row_cap_tool_redaction_and_db_span(store, settings, spans):
             chunk_filter=ChunkFilter(max_sensitivity=Sensitivity.PUBLIC)
         ),
     )
-    query, *_ = build_investigation_tools(
-        graph=store, chunks=None, ctx=ctx, settings=settings
+    query, *_ = (
+        as_model_text(t)
+        for t in build_investigation_tools(
+            graph=store, chunks=None, ctx=ctx, settings=settings
+        )
     )
     spans.clear()
     out = json.loads(query("MATCH (e:Entity {name: 'Hub'}) RETURN e"))

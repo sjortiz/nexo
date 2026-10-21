@@ -24,6 +24,7 @@ from nexo.agents.tools import (
 from nexo.mcp_server import build_mcp_server
 from nexo.storage.schemas import DocumentMetadata, GroundedTriple, Sensitivity
 from nexo.storage.vector_store import ChunkFilter
+from tests.conftest import as_model_text
 from tests.test_mcp_server import call, data
 from tests.test_neo4j_integration import (  # pylint: disable=unused-import
     C1,
@@ -66,7 +67,7 @@ def test_lookup_tools_follow_entity_edges_within_clearance(store, settings):
         ),
     )
     tools = {
-        t.tool_name: t
+        t.tool_name: as_model_text(t)
         for t in build_investigation_tools(
             graph=store, chunks=None, ctx=ctx, settings=settings
         )
@@ -152,7 +153,7 @@ def test_lookups_read_predicate_without_unknown_property_warnings(
         ),
     )
     tools = {
-        t.tool_name: t
+        t.tool_name: as_model_text(t)
         for t in build_investigation_tools(
             graph=store, chunks=None, ctx=ctx, settings=settings
         )
@@ -285,7 +286,7 @@ def test_evidence_shows_only_within_the_rank_of_the_chunk_it_quotes(
             ),
         )
         agent = {
-            t.tool_name: t
+            t.tool_name: as_model_text(t)
             for t in build_investigation_tools(
                 graph=store, chunks=None, ctx=ctx, settings=settings
             )

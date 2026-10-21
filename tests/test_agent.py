@@ -13,14 +13,15 @@ from neo4j.exceptions import Neo4jError, ServiceUnavailable
 from openai.types.chat import ChatCompletion
 from strands.models.openai import OpenAIModel
 from strands.telemetry import tracer as strands_tracer
+from strands.types.exceptions import ModelThrottledException
 
-from nexo.agents.investigator import Investigator, extract_citations
+from nexo.agents.investigator import Investigator, extract_citations, is_transient
 from nexo.agents.models import InvestigationScope
 from nexo.agents.tools import InvestigationContext, build_investigation_tools
 from nexo.storage.schemas import Sensitivity
 from nexo.storage.vector_store import ChunkFilter
 from nexo.telemetry import apply_genai_env
-from tests.conftest import FakeGraph, make_chunk
+from tests.conftest import FakeGraph, as_model_text, make_chunk
 
 
 def _named_tools(
@@ -35,7 +36,7 @@ def _named_tools(
     tools = build_investigation_tools(
         graph=graph, chunks=chunk_store, ctx=ctx, settings=settings
     )
-    return ctx, {t.tool_name: t for t in tools}
+    return ctx, {t.tool_name: as_model_text(t) for t in tools}
 
 
 def _tools(settings, graph, chunk_store, *, clearance=Sensitivity.INTERNAL, budget=10):
@@ -267,6 +268,18 @@ def test_fetch_tool_enforces_clearance_validates_ids_and_budget(settings, chunk_
         public.chunk_id: "internal"
     }  # withheld text is never evidence
     assert "budget" in json.loads(fetch([public.chunk_id]))["error"]
+
+
+def test_throttling_anywhere_in_the_cause_chain_is_transient():
+    """A throttled model call retries the run; an ordinary error does not."""
+    try:
+        try:
+            raise ModelThrottledException("slow down")
+        except ModelThrottledException as exc:
+            raise RuntimeError("agent failed") from exc
+    except RuntimeError as wrapped:
+        assert is_transient(wrapped)
+    assert not is_transient(RuntimeError("bug"))
 
 
 def test_extract_citations():

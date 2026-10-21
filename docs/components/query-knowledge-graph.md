@@ -18,7 +18,7 @@ sources:
 # Signature
 
 ```python
-query_knowledge_graph(cypher_query: str) -> str  # JSON
+query_knowledge_graph(cypher_query: str) -> ToolResult  # the model reads its content as JSON
 ```
 
 # Behavior
@@ -41,7 +41,9 @@ Success:
  "chunk_ids_found": ["chk_3f1a..."]}
 ```
 
-Errors are returned to the model as data so it can correct itself:
+Errors are returned to the model as data so it can correct itself. The call is recorded as failed
+and its `execute_tool` span is marked failed with an `error.type`
+([Observability](../operations/observability.md#failed-tool-calls)):
 
 | Cause | Result |
 |---|---|
@@ -49,6 +51,7 @@ Errors are returned to the model as data so it can correct itself:
 | Syntax error, timeout, access-mode violation | `{"error": "<Neo4j message>", "code": "Neo.ClientError..."}` |
 | Neo4j unreachable after retries | `{"error": "knowledge graph unavailable; do not retry, report what you have"}` |
 | Budget used up | `{"error": "tool budget exhausted; write your answer from the evidence gathered"}` |
+| Too large even with every row dropped | `{"error": "result too large; return fewer or smaller properties"}` |
 
 # Limits
 

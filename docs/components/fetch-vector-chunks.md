@@ -15,7 +15,7 @@ sources:
 # Signature
 
 ```python
-fetch_vector_chunks(chunk_ids: list[str]) -> str  # JSON
+fetch_vector_chunks(chunk_ids: list[str]) -> ToolResult  # the model reads its content as JSON
 ```
 
 # Behavior
@@ -39,7 +39,8 @@ fetch_vector_chunks(chunk_ids: list[str]) -> str  # JSON
  "withheld": ["chk_9c0e..."], "not_found": [], "invalid_ids": ["acme"], "over_limit_not_fetched": []}
 ```
 
-If the chunk store fails, the tool returns `{"error": "vector store unavailable; report what you have"}`
-and records the exception on its span.
+If the chunk store fails, the tool returns `{"error": "chunk store unavailable; report what you have"}`
+and records the exception on its span. Chunks dropped to fit `TOOL_RESULT_MAX_CHARS` are counted in
+`omitted_for_size` and are not evidence: only chunks the model received are recorded as fetched.
 
 [^tools]: Investigation tools

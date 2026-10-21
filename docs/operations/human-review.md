@@ -48,8 +48,9 @@ acknowledge the findings to approve them. A failed or empty investigation is sti
 
 A clean answer goes out without a pause. An answer is clean when compliance raised no finding at all,
 it cites at least one chunk, and the agent fetched every chunk it cites. An answer with any finding
-waits for a person, even if the finding is only a warning such as `budget_exhausted`. Use it for
-everyday use: a person sees only the answers a check flagged.
+waits for a person, even if the finding is only a warning such as `budget_exhausted`. That includes a
+run whose model asked for more tool calls than the budget allowed: it wanted evidence it did not get,
+so its answer pauses. Use it for everyday use: a person sees only the answers a check flagged.
 
 ## `always`
 
