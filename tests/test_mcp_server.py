@@ -526,7 +526,7 @@ def edge(relation: str, neighbor: str, neighbor_rank: int, edge_rank: int) -> di
 
 
 def test_neighbors_hide_restricted_entities_and_edges(settings, chunk_store):
-    """Edges above clearance or to hidden neighbors are withheld; a restricted root is an error."""
+    """Edges above clearance or to hidden neighbors are withheld; a hidden root reads as unknown."""
     rows = [
         edge("ACQUIRED", "Beta", 1, 1),
         edge("TREATS", "Jane", 3, 3),  # neighbor above clearance
@@ -561,22 +561,17 @@ def test_neighbors_hide_restricted_entities_and_edges(settings, chunk_store):
             ]
         }
     )
-    result = call(
-        build_mcp_server(graph=restricted, chunks=chunk_store, settings=settings),
-        "nexo_neighbors",
-        {"entity_key": "Person:jane"},
-    )
-    assert result.is_error and "clearance" in result.content[0].text
-    unknown = data(
+    hidden, unknown = (
         call(
-            build_mcp_server(
-                graph=RoutedGraph(), chunks=chunk_store, settings=settings
-            ),
+            build_mcp_server(graph=g, chunks=chunk_store, settings=settings),
             "nexo_neighbors",
-            {"entity_key": "X:none"},
+            {"entity_key": "Person:jane"},
         )
+        for g in (restricted, RoutedGraph())
     )
-    assert unknown["edges"] == [] and unknown["withheld"] == 0
+    assert hidden.is_error and unknown.is_error
+    assert hidden.content == unknown.content  # a hidden entity reads as unknown
+    assert "unknown entity key" in unknown.content[0].text
 
 
 def test_graph_query_rejects_writes_and_redacts_rows(settings, chunk_store):

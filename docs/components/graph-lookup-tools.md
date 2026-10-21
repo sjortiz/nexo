@@ -41,7 +41,8 @@ returns `unknown entity key`; an empty result hints at
 query_knowledge_graph.[^test-agent]
 
 The MCP server's `nexo_neighbors` runs the same neighbour query and the same `visible_neighbours`
-filter, and keeps its own result shape ([MCP server](mcp-server.md)).
+filter, and keeps its own result shape; like here, an unknown key and an entity above clearance get
+the same `unknown entity key` error ([MCP server](mcp-server.md)).
 
 [^tools]: Investigation tools
 [^test-agent]: Tool tests

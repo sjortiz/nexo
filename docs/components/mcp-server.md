@@ -31,7 +31,7 @@ The six retrieval tools are annotated read-only, idempotent and closed-world.[^s
 | `nexo_search(query, k, doc_types)` | Snippets with chunk ids, ranked by hybrid BM25 + vector search, masked like `nexo_get_chunks` | Topics, codes, phrases |
 | `nexo_get_chunks(chunk_ids)` | Exact chunk text (detected PII masked above clearance); `masked`, `withheld`, `not_found`, `invalid_or_over_limit` | The evidence to cite |
 | `nexo_find_entities(name, entity_type, limit)` | Entities matching a name or alias, with keys and chunk ids | Starting points in the graph |
-| `nexo_neighbors(entity_key, limit)` | Edges in both directions, best-supported first, with certainty, date and chunk ids; `withheld` count. Same query and clearance filter as [entity_neighbours](graph-lookup-tools.md); an entity above clearance is an error | Direct relationships |
+| `nexo_neighbors(entity_key, limit)` | Edges in both directions, best-supported first, with certainty, date and chunk ids; `withheld` count. Same query and clearance filter as [entity_neighbours](graph-lookup-tools.md); an unknown key and one above clearance get the same `unknown entity key` error | Direct relationships |
 | `nexo_graph_query(cypher)` | Rows, `truncated`, `chunk_ids_found` | Multi-hop questions |
 
 # Review tools
@@ -75,7 +75,7 @@ forms automatically, without a person, defeats the check: use a client that asks
   keys are not caught: on Community they can still return a value above the clearance; on Enterprise, deny
   them with database roles ([read-only enforcement](graph-store.md#read-only-enforcement)).
 - **Identity.** MCP over stdio has no per-user identity, so run one server per clearance.
-- **Errors.** Anticipated failures (unsafe Cypher, unknown entity type, graph unavailable) come back as
+- **Errors.** Anticipated failures (unsafe Cypher, unknown entity type, unknown entity key, graph unavailable) come back as
   tool errors with a message; unexpected exceptions are masked and logged on the server.
 - **Transport.** `stdio` by default. `--transport streamable-http` binds `127.0.0.1:8765` and has no
   authentication; put it behind something that authenticates before exposing it.
