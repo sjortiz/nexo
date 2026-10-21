@@ -21,6 +21,10 @@ class StubGraphStore:
         """Return a fixed schema description."""
         return "schema"
 
+    def document_types(self):
+        """Return no doc types (the router's doc type filters are then all dropped)."""
+        return set()
+
     def close(self):
         """Accept the close call."""
 

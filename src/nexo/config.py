@@ -181,6 +181,15 @@ class Settings(BaseSettings):
     resolution_batch_size: int = Field(default=30, ge=1)
     # JSON object of acronym -> expansion, appended to embedded chunk text.
     glossary_path: Path | None = None
+    # YAML/JSON rules keeping content out of chosen ingest stages (document, search,
+    # extraction); see deploy/ingest-exclusions.example.yaml. Unset = no exclusions.
+    ingest_exclusions_path: Path | None = None
+    # A triple that made an amount (price, rating, percentage, date) an entity:
+    # convert it to an attribute of the other entity, drop it, or keep it.
+    amount_entities: Literal["convert", "drop", "keep"] = "convert"
+    # YAML/JSON: which built-in entity types to extract and the deployment's own
+    # types (deploy/entity-types.example.yaml). Unset = every built-in type.
+    entity_types_path: Path | None = None
 
     # --- Sensitive data (PII/PHI) ---------------------------------------------
     # comprehend_medical sends chunk text to Amazon Comprehend Medical

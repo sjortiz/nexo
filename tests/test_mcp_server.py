@@ -524,7 +524,9 @@ def test_find_entities_is_parameterized_and_redacts(settings, chunk_store):
         "x' OR 1=1" not in cypher and params["name"] == "x' OR 1=1 //"
     )  # input never spliced into Cypher
     bad = call(
-        server, "nexo_find_entities", {"name": "acme", "entity_type": "Spaceship"}
+        server,
+        "nexo_find_entities",
+        {"name": "acme", "entity_type": "Org) DETACH DELETE (n"},
     )
     assert bad.is_error and "unknown entity type" in bad.content[0].text
 

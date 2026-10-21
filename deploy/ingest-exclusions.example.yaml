@@ -1,0 +1,41 @@
+# Ingest exclusions (INGEST_EXCLUSIONS_PATH): content kept out of chosen stages.
+#
+# stages:
+#   document    removed before chunking: no stage sees it, citations included
+#   search      left out of the embedded and full-text indexed text
+#   extraction  left out of the text sent to triple extraction
+#
+# Selectors (exactly one per rule), all Python regular expressions:
+#   lines: <regex>              every line that matches
+#   start: <regex> + while: <regex>
+#                               a block from a matching line, continuing while lines match
+#   start: <regex> + end: <regex>
+#                               a block from a matching line through the line matching `end`
+#   entity: <regex>             extracted entities whose name matches (extraction only)
+#
+# doc_types limits a rule to documents ingested with those --doc-type values.
+
+exclude:
+  # Image descriptions written by an upstream pipeline: searchable, but screenshots
+  # (prices, ratings, product tiles) should not become graph facts.
+  - name: image-descriptions
+    start: '^<!-- image:'
+    while: '^>'
+    stages: [extraction]
+    doc_types: [web-export]
+
+  # A block authors can mark in the source document.
+  - name: skip-markers
+    start: '<!-- nexo:skip -->'
+    end: '<!-- /nexo:skip -->'
+    stages: [extraction, search]
+
+  # Boilerplate that adds noise everywhere.
+  - name: confidentiality-footer
+    lines: '^(Confidential|Internal use only)\b'
+    stages: [document]
+
+  # Entities never wanted as nodes (amounts have their own setting, AMOUNT_ENTITIES).
+  - name: placeholder-names
+    entity: '^(TBD|N/A|Unknown)$'
+    stages: [extraction]

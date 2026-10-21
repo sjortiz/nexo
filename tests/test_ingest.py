@@ -29,10 +29,12 @@ class RecordingGraphWriter:
     """Graph writer that records each replace_source call instead of writing to Neo4j."""
 
     calls: list[tuple] = field(default_factory=list)
+    attributes: list = field(default_factory=list)
 
-    def replace_source(self, document, chunks, triples):
+    def replace_source(self, document, chunks, triples, attributes=()):
         """Record the document, chunks and triples; report every triple as written."""
         self.calls.append((document, list(chunks), list(triples)))
+        self.attributes.append(list(attributes))
         return SourceSwap(triples_written=len(triples), chunks_removed=0)
 
 

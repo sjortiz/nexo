@@ -34,7 +34,6 @@ from pydantic import BaseModel, Field
 from nexo.llm import invoke_structured
 from nexo.storage.schemas import (
     EntityRef,
-    EntityType,
     Resolution,
     ResolvedEntity,
     normalize_name,
@@ -72,7 +71,7 @@ class EntityCatalog(Protocol):  # pylint: disable=too-few-public-methods  # prot
     """Lookup of existing entities for resolution."""
 
     def find_candidates(
-        self, entity_type: EntityType, tokens: Sequence[str], limit: int
+        self, entity_type: str, tokens: Sequence[str], limit: int
     ) -> list[Candidate]:
         """Return same-type entities whose name or alias contains a token."""
 
@@ -123,7 +122,7 @@ class ResolutionLimits:
 class _TypePass:
     """One entity type's mentions while they are being resolved."""
 
-    entity_type: EntityType
+    entity_type: str
     mentions: dict[str, EntityRef]  # exact key -> most complete mention
     names: dict[str, set[str]]  # exact key -> normalized name and aliases
     result: dict[str, ResolvedEntity]
@@ -195,7 +194,7 @@ class EntityResolver:  # pylint: disable=too-few-public-methods  # resolve() is 
 
     def resolve(self, mentions: Sequence[EntityRef]) -> dict[str, ResolvedEntity]:
         """Map each mention's exact key to where it should be written."""
-        by_type: dict[EntityType, list[EntityRef]] = defaultdict(list)
+        by_type: dict[str, list[EntityRef]] = defaultdict(list)
         for ref in mentions:
             by_type[ref.type].append(ref)
         resolved: dict[str, ResolvedEntity] = {}
@@ -204,7 +203,7 @@ class EntityResolver:  # pylint: disable=too-few-public-methods  # resolve() is 
         return resolved
 
     def _resolve_type(
-        self, entity_type: EntityType, refs: list[EntityRef]
+        self, entity_type: str, refs: list[EntityRef]
     ) -> dict[str, ResolvedEntity]:
         mentions = _group_by_key(refs)
         result = {
@@ -237,7 +236,7 @@ class EntityResolver:  # pylint: disable=too-few-public-methods  # resolve() is 
         tokens = sorted(state.tokens(roots))
         if not tokens:
             return [], []
-        prefix = f"{state.entity_type.value}:"
+        prefix = f"{state.entity_type}:"
         candidates = [  # never merge across types, whatever the catalog returns
             c
             for c in self._catalog.find_candidates(
@@ -300,7 +299,7 @@ class EntityResolver:  # pylint: disable=too-few-public-methods  # resolve() is 
 
     def _arbitrate(
         self,
-        entity_type: EntityType,
+        entity_type: str,
         refs: list[EntityRef],
         keys: list[str],
         pool: list[Candidate],
@@ -319,7 +318,7 @@ class EntityResolver:  # pylint: disable=too-few-public-methods  # resolve() is 
                 MatchResult,
                 [
                     SystemMessage(
-                        content=RESOLUTION_PROMPT.format(entity_type=entity_type.value)
+                        content=RESOLUTION_PROMPT.format(entity_type=entity_type)
                     ),
                     HumanMessage(
                         content=f"Existing entities:\n{existing}\n\nNew mentions:\n{new}"

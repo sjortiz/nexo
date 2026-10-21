@@ -112,17 +112,20 @@ review-inbox: ## Serve the Agent Inbox adapter on 127.0.0.1 (opt-in; start the p
 graph: ## Print the LangGraph workflow as Mermaid
 	$(RUN)nexo graph
 
+visualize: ## Write the knowledge graph as an interactive page: make visualize [OUT=graph.html] [OPEN=1]
+	$(RUN)nexo visualize --out "$(or $(OUT),graph.html)" $(if $(OPEN),--open)
+
 app: ## Run the nexo CLI in a container: make app ARGS="models --check"
 	$(NEXO_SETUP) compose run --rm nexo $(ARGS)
 
 ##@ Test
 
 lint: ## Check formatting with black and lint with pylint
-	$(RUN)black --check src tests examples
-	$(RUN)pylint src tests examples
+	$(RUN)black --check src tests examples tools
+	$(RUN)pylint src tests examples tools
 
 format: ## Format the code with black
-	$(RUN)black src tests examples
+	$(RUN)black src tests examples tools
 
 test: ## Run the test suite (the Neo4j tests also run when NEO4J_TEST_URI is set)
 	$(RUN)pytest -o addopts="" -q -rs

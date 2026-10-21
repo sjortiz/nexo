@@ -66,6 +66,14 @@ show no evidence, at any clearance, until a document that states them is ingeste
 
 See [ADR-0002](../decisions/adr-0002-read-only-defense-in-depth.md).
 
+# Viewing the graph
+
+`nexo visualize --out graph.html --open` (or `make visualize OPEN=1`, or `tools/graph_view.py`) reads
+the graph with the read-only user and writes one HTML page: documents as dark boxes, entities coloured
+by type and sized by degree, a thick border on entities that bridge two or more documents, and
+relation evidence and entity attributes on hover. The page embeds graph data, so it is git-ignored
+and should be handled like the source documents; only the vis-network library is fetched from cdnjs.
+
 # Failure handling
 
 Connection drops (`ServiceUnavailable`, `SessionExpired`) are retried with jittered backoff, up to 4

@@ -33,12 +33,13 @@ from pydantic import SecretStr
 from nexo.agents.models import AgentOutput, InvestigationScope
 from nexo.cli import main
 from nexo.orchestration.graph import (
+    stated_scope,
     GraphDependencies,
     build_graph,
     workflow_mermaid,
     traced_node,
 )
-from nexo.orchestration.state import ReviewDecision
+from nexo.orchestration.state import ReviewDecision, RouteDecision
 from nexo.service import RunResult, Runtime, _outcome, open_checkpointer
 from nexo.storage.sensitive_data import RegexDetector
 from nexo.telemetry import OtelLogHandler, SESSION_ID, get_tracer, query_attributes
@@ -228,13 +229,50 @@ def test_router_fails_closed_when_llm_output_is_invalid(settings):
     assert not investigator.calls
 
 
+def test_router_drops_filters_the_request_does_not_state(settings):
+    """An invented doc type or date range never hides documents from the agent."""
+    investigator = FakeInvestigator([grounded_output()])
+    invented = route(
+        doc_types=["program"], effective_from="2023-01-01", effective_to="2025-12-31"
+    )
+    runtime(settings, investigator, [invented]).start(
+        "What are the phases of the Project Orion rollout?", thread_id="t9"
+    )
+    _, scope = investigator.calls[0]
+    assert scope.chunk_filter.doc_types is None
+    assert scope.chunk_filter.effective_from is None
+    assert scope.chunk_filter.effective_to is None
+
+
+@pytest.mark.parametrize(
+    "query, known, kept_types, kept_dates",
+    [
+        ("Which memo docs changed in 2024?", {"memo"}, ["memo"], True),
+        ("Which memo docs changed in 2024?", {"report"}, None, True),  # not in corpus
+        ("What did the memo say last quarter?", None, ["memo"], True),
+        ("What does this package include?", None, None, False),  # "this" is no date
+    ],
+)
+def test_stated_scope(query, known, kept_types, kept_dates):
+    """Doc types must be named (and exist); dates need a date-like word."""
+    decision = RouteDecision(
+        target="investigator",
+        reason="r",
+        doc_types=["memo"],
+        effective_from="2024-01-01",
+    )
+    scoped, _ = stated_scope(decision, query, known)
+    assert scoped.doc_types == kept_types
+    assert (scoped.effective_from is not None) is kept_dates
+
+
 def test_router_cannot_raise_caller_clearance(settings):
     """Router scope choices pass through, but sensitivity stays at the caller's clearance."""
     investigator = FakeInvestigator([grounded_output()])
     rt = runtime(
         settings, investigator, [route(strategy="vector", doc_types=["discharge"])]
     )
-    rt.start("q", thread_id="t8", clearance="public")
+    rt.start("q about discharge summaries", thread_id="t8", clearance="public")
     assert len(investigator.calls) == 1
     _, scope = investigator.calls[0]
     assert scope.strategy == "vector" and scope.chunk_filter.doc_types == ["discharge"]

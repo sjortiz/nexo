@@ -32,6 +32,8 @@ from nexo.logging_setup import AUDIT_LOGGER, CONTENT_LOGGER
 from nexo.llm import build_chat_model, build_embeddings, build_strands_model
 from nexo.orchestration.graph import WORKFLOW_NAME, GraphDependencies, build_graph
 from nexo.orchestration.state import ReviewDecision, ReviewPacket, ReviewPassage
+from nexo.storage.entity_types import EntityTypes
+from nexo.storage.exclusions import IngestExclusions
 from nexo.storage.graph_store import GraphStore
 from nexo.storage.ingest import (
     ExtractionAids,
@@ -492,6 +494,7 @@ def open_runtime(settings: Settings) -> Iterator[Runtime]:
             investigator=investigator,
             detector=detector_from_settings(settings),
             router_llm=build_chat_model(settings, role="router"),
+            doc_types=graph_store.document_types,
         )
         yield Runtime(
             graph=build_graph(deps, checkpointer),
@@ -567,6 +570,8 @@ def open_ingestor(
                     if settings.ontology_path
                     else None
                 ),
+                entity_types=EntityTypes.from_settings(settings),
+                exclusions=IngestExclusions.from_settings(settings),
                 resolver=EntityResolver(
                     catalog=graph_store,
                     llm=llm,

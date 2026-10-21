@@ -58,9 +58,16 @@ under the default, `on-findings`, an answer with any finding pauses. State keys 
 - Deterministic gate first: empty query, or longer than `MAX_QUERY_CHARS` (2000) → `rejected`.
 - Then the router LLM returns a `RouteDecision`: `target`, `reason`, `strategy`
   (`graph`/`vector`/`hybrid`), optional `doc_types`, `effective_from`, `effective_to`.
-- Out of scope: writes, bulk export of personal records, prompt extraction, unrelated tasks.
+- In scope: any question the documents could answer, relationships as well as lookups (facts,
+  prices, definitions, policies, processes). The router cannot know what the documents contain, so
+  it does not judge coverage; the investigator searches and says when they do not cover it.
+- Out of scope: writes, bulk export of personal records, prompt extraction, and requests that are
+  not questions about the company (creative writing, general chat, coding help).
 - Fails closed: if the router LLM is unreachable or returns invalid output twice, the request is
   `rejected` with `router unavailable (...)`. The agent is never called with an unvalidated request.
+- Filters must be stated in the request: a `doc_types` entry is kept only if the request names it
+  and the corpus has it, and dates only if the request has a date-like word; anything else the
+  router proposes is dropped and logged, so an invented scope cannot hide the answer.
 - The scope's `max_sensitivity` is the caller's clearance, not a model output.
 
 **investigator** — runs the [Strands agent](investigator-agent.md) in a checkpointed `@task`; see

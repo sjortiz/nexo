@@ -49,7 +49,7 @@ from nexo.storage.graph_store import (
     UnsafeCypherError,
     validate_read_only_cypher,
 )
-from nexo.storage.schemas import CHUNK_ID_RE, EntityType, Sensitivity
+from nexo.storage.schemas import CHUNK_ID_RE, ENTITY_TYPE_RE, Sensitivity
 from nexo.storage.sensitive_data import NoopDetector
 from nexo.storage.vector_store import ChunkFilter, ChunkStore
 from nexo.telemetry import caller_attributes, query_attributes, traced_span
@@ -268,14 +268,15 @@ def build_mcp_server(  # pylint: disable=too-many-locals,too-many-statements  # 
             str | None,
             Field(
                 description="Person, Organization, Location, Product, Event, "
-                "Concept, Condition, Medication or Procedure"
+                "Concept, Condition, Medication, Procedure, or a type this "
+                "deployment adds (nexo_index lists the types in use)"
             ),
         ] = None,
         limit: Annotated[int, Field(ge=1, le=50)] = 10,
     ) -> dict[str, Any]:
         """Find entities by name or alias. Returns entity keys for nexo_neighbors,
         plus the chunks that mention each entity."""
-        if entity_type is not None and entity_type not in {t.value for t in EntityType}:
+        if entity_type is not None and not ENTITY_TYPE_RE.fullmatch(entity_type):
             raise ToolError(f"unknown entity type {entity_type!r}")
         with traced_span(
             "execute_tool nexo_find_entities",

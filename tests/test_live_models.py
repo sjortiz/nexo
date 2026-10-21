@@ -97,6 +97,25 @@ def test_router_model_returns_a_route_decision(live):
     assert decision.target == "rejected"
 
 
+@pytest.mark.parametrize(
+    "question",
+    [
+        "What is the refund window for annual plans?",
+        "What does the Premium plan include?",
+        "How is Acme Holdings connected to Gamma Clinics?",
+    ],
+)
+def test_router_routes_lookups_as_well_as_relationships(live, question):
+    """Fact and policy lookups reach the investigator; it, not the router, judges coverage."""
+    decision = invoke_structured(
+        build_chat_model(live, role="router"),
+        RouteDecision,
+        [SystemMessage(content=ROUTER_PROMPT), HumanMessage(content=question)],
+        max_attempts=2,
+    )
+    assert decision.target == "investigator"
+
+
 def test_embeddings_have_the_configured_size_and_rank_related_text_higher(live):
     """Embeddings match the configured size and rank related text above unrelated text."""
     embeddings = build_embeddings(live)

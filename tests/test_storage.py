@@ -28,6 +28,7 @@ from nexo.storage.graph_store import (
     _plan_writes,
     validate_read_only_cypher,
 )
+from nexo.storage.entity_types import EntityTypes
 from nexo.storage.schemas import (
     DocumentMetadata,
     EntityRef,
@@ -72,11 +73,19 @@ def test_triple_rejects_relation_that_cannot_be_normalized():
 
 
 def test_extraction_schema_forbids_unknown_fields_and_types():
-    """Extraction output rejects extra fields and unknown entity types."""
+    """Extraction output rejects extra fields, unconfigured types and unsafe type names."""
     with pytest.raises(ValidationError):
         ExtractionResult.model_validate({"triples": [], "notes": "x"})
+    schema = EntityTypes().extraction_schema  # the built-ins
     with pytest.raises(ValidationError):
-        EntityRef(name="X", type="Spaceship")
+        schema.model_validate({"triples": [_triple_with_type("Spaceship")]})
+    with pytest.raises(ValidationError):
+        EntityRef(name="X", type="Org) DETACH DELETE (n")
+
+
+def _triple_with_type(entity_type: str) -> dict:
+    ref = {"name": "X", "type": entity_type}
+    return {"head": ref, "relation": "R", "tail": ref, "evidence": "e"}
 
 
 def test_entity_key_folds_case_and_whitespace():

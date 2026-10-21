@@ -56,6 +56,9 @@ from nexo.service import (
     remove_source,
 )
 from nexo.storage.convert import ConversionError, to_markdown
+from nexo.graph_view import export
+from nexo.storage.entity_types import EntityTypes
+from nexo.storage.exclusions import IngestExclusions
 from nexo.storage.graph_store import GraphStore
 from nexo.storage.neo4j_chunk_store import Neo4jChunkStore, import_local_store
 from nexo.storage.ingest import (
@@ -400,7 +403,11 @@ def _eval_extraction(args: argparse.Namespace) -> int:
         targets=IngestionTargets(
             chunk_store=LocalChunkStore(build_embeddings(settings)), graph_writer=None
         ),
-        aids=ExtractionAids(ontology=ontology),
+        aids=ExtractionAids(
+            ontology=ontology,
+            entity_types=EntityTypes.from_settings(settings),
+            exclusions=IngestExclusions.from_settings(settings),
+        ),
     )
     totals: dict[str, list] = {"predicted": [], "gold": []}
     failed = 0
@@ -445,6 +452,14 @@ def _graph(args: argparse.Namespace) -> int:
         log.info("wrote workflow diagram to %s", args.output)
     else:
         _emit({"mermaid": diagram}, "workflow diagram")
+    return 0
+
+
+def _visualize(args: argparse.Namespace) -> int:
+    """The knowledge graph as an interactive HTML page (entities, relations, documents)."""
+
+    counts = export(Path(args.out), open_browser=args.open)
+    _emit({"out": args.out, **counts}, "wrote the graph page to %s", args.out)
     return 0
 
 
@@ -734,6 +749,14 @@ def main(argv: list[str] | None = None) -> int:
         "--output", help="write the diagram to this file (e.g. workflow.mmd)"
     )
     graph.set_defaults(handler=_graph)
+
+    visualize = sub.add_parser(
+        "visualize",
+        help="the knowledge graph as an interactive HTML page (embeds graph data)",
+    )
+    visualize.add_argument("--out", default="graph.html")
+    visualize.add_argument("--open", action="store_true", help="open it in the browser")
+    visualize.set_defaults(handler=_visualize)
 
     models = sub.add_parser("models", help="show the model and server each role uses")
     models.add_argument(

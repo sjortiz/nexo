@@ -161,6 +161,9 @@ Review is also available over MCP. The optional [Agent Inbox](docs/operations/ag
 `make up AGENT_INBOX=1` plus `make review-inbox`; `nexo review-ui` is a loopback-only demo with no
 authentication and is not started by `make up`. See [Human review](docs/operations/human-review.md).
 
+To see what ingestion built, `make visualize OPEN=1` writes `graph.html`, an interactive view of
+entities, relations and the documents that mention them ([Graph store](docs/components/graph-store.md#viewing-the-graph)).
+
 ### Ingestion
 
 ```mermaid

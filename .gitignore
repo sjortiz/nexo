@@ -7,6 +7,8 @@ __pycache__/
 .claude/worktrees/
 .claude/settings.local.json
 /corpus/
+# nexo visualize output: embeds graph data from the documents
+/graph.html
 
 # nexo setup: your setup file, its lock and the rendered stack (machine-specific)
 /nexo.yaml

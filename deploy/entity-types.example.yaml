@@ -1,0 +1,17 @@
+# Entity types (ENTITY_TYPES_PATH): which built-in types to extract, and your own.
+#
+# builtin: any of Person, Organization, Location, Product, Event, Concept,
+#          Condition, Medication, Procedure (omit the key to keep all of them)
+# custom:  your own types; name is a Neo4j label (letters and digits, starting
+#          with a capital), description tells the extractor when to use it.
+#
+# Keep a deployment's file next to its data, not in this repository, when the
+# types describe a client's business.
+
+builtin: [Person, Organization, Location, Product, Event, Concept]
+
+custom:
+  - name: Contract
+    description: a signed agreement between parties, with its terms
+  - name: Regulation
+    description: a law, rule or regulatory requirement an organization must follow
