@@ -57,8 +57,9 @@ or the normalized predicate when no ontology is configured. Out-of-ontology pred
 
 | Property | Description |
 |---|---|
-| `chunk_id`, `chunk_ids` | First-seen and all supporting chunks. |
-| `evidence` | Verbatim quote that states the fact. |
+| `chunk_id`, `chunk_ids` | The chunk `evidence` quotes (first-seen until that chunk leaves), and all supporting chunks. |
+| `evidence` | Verbatim quote from `chunk_id` that states the fact; removed when that chunk stops supporting the edge, until another chunk that states it is ingested. |
+| `evidence_rank` | Rank of the chunk the quote came from; graph tools drop `evidence` above the caller's clearance, or when it is missing (edges written before it existed). |
 | `certainty` | `asserted`, `possible` or `negated`. |
 | `valid_at` | ISO date the fact holds, when stated. |
 | `extracted_as` | Every extracted predicate that produced this edge (e.g. `BOUGHT`, `ACQUIRED_BY`). |

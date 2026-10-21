@@ -698,6 +698,206 @@ def test_lookups_read_predicate_without_unknown_property_warnings(
         assert _warnings(cypher, parameters) == []
 
 
+def test_mcp_find_paths_against_a_real_graph(store, settings, chunk_store):
+    """nexo_find_paths skips co-mentions, withholds PHI and unranked hops, hides PHI keys."""
+    acme, beta, gamma = _resolved("Acme"), _resolved("Beta"), _resolved("Gamma")
+    omega, jane = _resolved("Omega"), _resolved("Jane Roe", "Person")
+    store.replace_source(
+        DocumentMetadata(source_id="a"),
+        _chunks("a", C1, C2),
+        [
+            _row(C1, "a", (acme, "ACQUIRED", beta)),
+            # Omega shares C1 with Acme, but a chunk is never a link.
+            _row(C1, "a", (omega, "PARTNERS_WITH", _resolved("Sigma"))),
+            _row(C2, "a", (beta, "SUPPLIES", gamma)),
+        ],
+    )
+    store.replace_source(
+        DocumentMetadata(source_id="p", sensitivity=Sensitivity.PHI),
+        _chunks("p", C3, sensitivity=Sensitivity.PHI),
+        [
+            _row(C3, "p", (acme, "EMPLOYS", jane), Sensitivity.PHI),
+            _row(C3, "p", (jane, "OWNS", gamma), Sensitivity.PHI),
+        ],
+    )
+    server = build_mcp_server(graph=store, chunks=chunk_store, settings=settings)
+
+    def paths(from_key, to_key):
+        return call(server, "nexo_find_paths", {"from_key": from_key, "to_key": to_key})
+
+    out = data(paths(acme.key, gamma.key))
+    assert [
+        [(h["from"], h["relation"], h["to"]) for h in p["hops"]] for p in out["paths"]
+    ] == [[(acme.key, "ACQUIRED", beta.key), (beta.key, "SUPPLIES", gamma.key)]]
+    assert out["withheld"] == 1 and out["chunk_ids_found"] == [C1, C2]
+
+    out = data(paths(acme.key, omega.key))
+    assert out["paths"] == [] and out["withheld"] == 0 and "hint" in out
+    hidden, unknown = paths(acme.key, jane.key), paths(acme.key, "X:none")
+    assert hidden.is_error and unknown.is_error
+    assert hidden.content[0].text == unknown.content[0].text
+
+    # An edge without a rank (written before ranks existed) is treated as PHI.
+    with GraphDatabase.driver(
+        URI, auth=("neo4j", os.environ["NEO4J_TEST_PASSWORD"])
+    ) as driver:
+        driver.execute_query("MATCH ()-[r:SUPPLIES]->() REMOVE r.sensitivity_rank")
+    out = data(paths(acme.key, gamma.key))
+    assert out["paths"] == [] and out["withheld"] == 2
+
+
+def _quoting(row: GroundedTriple, evidence: str) -> GroundedTriple:
+    """The same grounded triple with its own verbatim evidence."""
+    return row.model_copy(
+        update={"triple": row.triple.model_copy(update={"evidence": evidence})}
+    )
+
+
+def _edge_state(store) -> dict:
+    """The ACQUIRED edge's quote, its chunk and both ranks, as stored."""
+    return store.run_read_query(
+        "MATCH (:Entity)-[r:ACQUIRED]->(:Entity) RETURN r.evidence AS evidence, "
+        "r.evidence_rank AS evidence_rank, r.chunk_id AS chunk, "
+        "r.sensitivity_rank AS rank"
+    ).rows[0]
+
+
+def test_evidence_shows_only_within_the_rank_of_the_chunk_it_quotes(
+    store, settings, chunk_store
+):
+    """A PHI note then an internal memo state one edge: the edge is internal, its quote PHI."""
+    acme, beta = _resolved("Acme"), _resolved("Beta")
+    note = "Jane Roe's ward notes: Acme acquired Beta"
+    phi = Sensitivity.PHI
+    store.replace_source(
+        DocumentMetadata(source_id="clinic", sensitivity=phi),
+        _chunks("clinic", C1, sensitivity=phi),
+        [_quoting(_row(C1, "clinic", (acme, "ACQUIRED", beta), phi), note)],
+    )
+    store.replace_source(
+        DocumentMetadata(source_id="memo"),
+        _chunks("memo", C2),
+        [_quoting(_row(C2, "memo", (acme, "ACQUIRED", beta)), "Acme acquired Beta")],
+    )
+    assert _edge_state(store) == {
+        "evidence": note,
+        "evidence_rank": 3,
+        "chunk": C1,
+        "rank": 1,
+    }
+
+    def surfaces(clearance: Sensitivity) -> list[dict]:
+        """Every read surface that returns edge maps, at one clearance."""
+        mcp = build_mcp_server(
+            graph=store,
+            chunks=chunk_store,
+            settings=settings.model_copy(update={"mcp_clearance": clearance.value}),
+        )
+        ctx = InvestigationContext(
+            request_id="r",
+            max_tool_calls=10,
+            scope=InvestigationScope(
+                chunk_filter=ChunkFilter(max_sensitivity=clearance)
+            ),
+        )
+        agent = {
+            t.tool_name: t
+            for t in build_investigation_tools(
+                graph=store, chunks=None, ctx=ctx, settings=settings
+            )
+        }
+        paths = data(
+            call(mcp, "nexo_find_paths", {"from_key": acme.key, "to_key": beta.key})
+        )
+        query = data(
+            call(
+                mcp,
+                "nexo_graph_query",
+                # Every property; created_at as text, the MCP layer cannot encode a DateTime.
+                {
+                    "cypher": "MATCH (:Entity)-[r:ACQUIRED]->(:Entity) "
+                    "RETURN r {.*, created_at: toString(r.created_at)} AS r"
+                },
+            )
+        )
+        found = json.loads(agent["find_paths"](acme.key, beta.key))
+        around = json.loads(agent["entity_neighbours"](acme.key))
+        assert paths["path_count"] == found["path_count"] == around["edge_count"] == 1
+        return [
+            paths["paths"][0]["hops"][0],
+            query["rows"][0]["r"],
+            found["paths"][0]["hops"][0],
+            around["edges"][0]["edge"],
+        ]
+
+    for edge in surfaces(Sensitivity.INTERNAL):  # the edge is visible, its quote is not
+        assert "evidence" not in edge and note not in json.dumps(edge)
+    assert [e["evidence"] for e in surfaces(phi)] == [note] * 4
+
+    # An edge written before evidence_rank existed shows no evidence to anyone.
+    with GraphDatabase.driver(
+        URI, auth=("neo4j", os.environ["NEO4J_TEST_PASSWORD"])
+    ) as driver:
+        driver.execute_query("MATCH ()-[r:ACQUIRED]->() REMOVE r.evidence_rank")
+    assert all("evidence" not in e for e in surfaces(phi))
+
+
+def test_a_quote_leaves_with_its_chunk_and_the_next_source_requotes(store):
+    """Re-ingesting, withdrawing or upgrading a source re-derives the quote and its rank."""
+    acme, beta = _resolved("Acme"), _resolved("Beta")
+
+    def ingest(source_id, chunk_id, evidence, sensitivity=Sensitivity.INTERNAL):
+        store.replace_source(
+            DocumentMetadata(source_id=source_id, sensitivity=sensitivity),
+            _chunks(source_id, chunk_id, sensitivity=sensitivity),
+            [
+                _quoting(
+                    _row(chunk_id, source_id, (acme, "ACQUIRED", beta), sensitivity),
+                    evidence,
+                )
+            ],
+        )
+
+    ingest("memo", C1, "memo quote")
+    ingest("notes", C2, "notes quote")
+    assert _edge_state(store) == {
+        "evidence": "memo quote",
+        "evidence_rank": 1,
+        "chunk": C1,
+        "rank": 1,
+    }
+    # The memo is reclassified as PHI: its quote must not keep the internal rank.
+    ingest("memo", C1, "memo quote, now PHI", Sensitivity.PHI)
+    assert _edge_state(store) == {
+        "evidence": "memo quote, now PHI",
+        "evidence_rank": 3,
+        "chunk": C1,
+        "rank": 1,
+    }
+    store.replace_source(DocumentMetadata(source_id="memo"), [], [])  # withdrawn
+    assert _edge_state(store) == {
+        "evidence": None,
+        "evidence_rank": None,
+        "chunk": C2,
+        "rank": 1,
+    }
+    ingest("notes", C2, "notes quote")
+    assert _edge_state(store)["evidence"] == "notes quote"
+
+    # A legacy edge (no evidence_rank) is re-quoted the next time a source states it.
+    with GraphDatabase.driver(
+        URI, auth=("neo4j", os.environ["NEO4J_TEST_PASSWORD"])
+    ) as driver:
+        driver.execute_query("MATCH ()-[r:ACQUIRED]->() REMOVE r.evidence_rank")
+    ingest("memo", C1, "memo quote again")
+    assert _edge_state(store) == {
+        "evidence": "memo quote again",
+        "evidence_rank": 1,
+        "chunk": C1,
+        "rank": 1,
+    }
+
+
 def _last_tool_payload(request: dict) -> dict:
     """Decode the JSON tool result carried by the last message of a model request."""
     content = request["messages"][-1]["content"]

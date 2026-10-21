@@ -55,6 +55,16 @@ access.
   matches its masked text, without words that masking removed; ranking among matching chunks still
   uses the original text and embedding, so their order can shift with the masked words
   ([read-time redaction](../components/sensitive-data-detection.md#read-time-redaction)).
+- **Amended 2026-10-21 (edge evidence):** an edge's `evidence` is verbatim text from one chunk, so it is
+  ranked by that chunk (`evidence_rank`), not by the edge's least sensitive source; graph tools drop it
+  above clearance, and from edges written before the rank existed.
+- **Amended 2026-10-21 (withheld counts):** `nexo_find_paths`, like the agent's `find_paths` and both
+  neighbour tools, reports how many results it withheld, as issue #40 asked. With both endpoints visible
+  and `max_hops=1`, `withheld: 1` says a hidden edge joins them, so the count is a pairwise oracle for
+  hidden direct edges (not for their type, sources or text). We accept that residual: the caller already
+  sees both entities, and the count tells the model to search the text instead of concluding there is
+  no link. The alternative is a boolean (`some results withheld`), or nothing at all, on every graph
+  tool; revisit if edge existence itself becomes sensitive.
 
 # Consequences
 

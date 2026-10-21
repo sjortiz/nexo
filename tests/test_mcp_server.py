@@ -17,7 +17,7 @@ from neo4j.exceptions import ServiceUnavailable
 
 from pydantic import SecretStr
 from nexo.agents.redaction import ChunkRedactor
-from nexo.agents.tools import redact_above_clearance
+from nexo.agents.tools import redact_above_clearance, visible_paths
 from nexo.telemetry import SESSION_ID, query_attributes
 from nexo.mcp_server import build_mcp_server
 from nexo.storage.graph_store import ReadResult
@@ -26,6 +26,7 @@ from nexo.storage.sensitive_data import RegexDetector
 from nexo.storage.vector_store import LocalChunkStore
 from nexo.llm import build_embeddings
 from tests.conftest import make_chunk
+from tests.test_agent import _hop, _node
 from tests.test_graph import FakeInvestigator, runtime
 
 TOOLS = {
@@ -34,6 +35,7 @@ TOOLS = {
     "nexo_get_chunks",
     "nexo_find_entities",
     "nexo_neighbors",
+    "nexo_find_paths",
     "nexo_graph_query",
 }
 
@@ -429,6 +431,34 @@ def test_graph_query_never_returns_chunk_text(settings, chunk_store, clearance):
         assert EMAIL not in json.dumps(out)
 
 
+@pytest.mark.parametrize(
+    ("evidence_rank", "clearance", "shown"),
+    [
+        (1, Sensitivity.INTERNAL, True),
+        (3, Sensitivity.INTERNAL, False),  # quoted from a PHI chunk
+        (3, Sensitivity.PHI, True),
+        (None, Sensitivity.PHI, False),  # written before evidence_rank: fail closed
+        ("1", Sensitivity.PHI, False),  # a rank that cannot be read
+    ],
+)
+def test_edge_evidence_shows_only_within_the_rank_it_was_quoted_at(
+    evidence_rank, clearance, shown
+):
+    """An internal edge can quote a PHI chunk; its evidence follows evidence_rank, not the edge."""
+    hop = {
+        **_hop(A, C, P1),
+        "evidence": "Jane Roe's ward notes",
+        "evidence_rank": evidence_rank,
+    }
+    out = visible_paths(
+        [{"nodes": [_node(A), _node(C)], "hops": [hop]}], clearance.rank
+    )
+    assert out["path_count"] == 1 and out["withheld"] == 0  # the edge stays visible
+    assert ("evidence" in out["paths"][0]["hops"][0]) is shown
+    row = redact_above_clearance({"r": hop, "evidence": "x"}, clearance.rank)
+    assert ("evidence" in row["r"]) is shown and "evidence" not in row
+
+
 def test_relationship_tuples_from_the_driver_are_redacted_too():
     """The driver returns a relationship as a (start, type, end) tuple; its nodes are checked."""
     entity = {"key": "Person:jane", "sensitivity_rank": 1}
@@ -617,6 +647,98 @@ def test_unavailable_graph_is_a_clear_tool_error(settings, chunk_store):
     )
     result = call(server, "nexo_index")
     assert result.is_error and "knowledge graph unavailable" in result.content[0].text
+
+
+A, B, C = "Organization:a", "Organization:b", "Organization:c"
+P1, P2, P3 = ("chk_" + d * 16 for d in "123")
+
+
+def ends(*ranks: tuple[str, int | None]) -> list[dict[str, Any]]:
+    """Build endpoint rows (key and rank) as the endpoint lookup returns them."""
+    return [{"entity": {"key": key, "sensitivity_rank": rank}} for key, rank in ranks]
+
+
+def paths_server(settings, chunk_store, endpoints, paths):
+    """Build a server whose graph answers the endpoint lookup and the path query."""
+    graph = RoutedGraph({"e.key IN $keys": endpoints, "SHORTEST": paths})
+    return graph, build_mcp_server(graph=graph, chunks=chunk_store, settings=settings)
+
+
+def test_find_paths_withholds_paths_through_anything_above_clearance(
+    settings, chunk_store
+):
+    """A path touching a PHI node or a PHI (or unranked) hop is withheld and counted."""
+    graph, server = paths_server(
+        settings,
+        chunk_store,
+        ends((A, 1), (C, 1)),
+        [
+            {"nodes": [_node(A), _node(C)], "hops": [_hop(A, C, P1)]},
+            {
+                "nodes": [_node(A), _node(B, 3), _node(C)],
+                "hops": [_hop(A, B, P2), _hop(B, C, P2)],
+            },
+            # _PATHS reads an unranked edge as rank 3; this is what it returns.
+            {
+                "nodes": [_node(A), _node(B), _node(C)],
+                "hops": [_hop(A, B, P3, 3), _hop(B, C, P1)],
+            },
+        ],
+    )
+    args = {"from_key": A, "to_key": C, "max_hops": 2, "max_paths": 7}
+    out = data(call(server, "nexo_find_paths", args))
+    assert [p["hops"] for p in out["paths"]] == [[_hop(A, C, P1)]]
+    assert out["path_count"] == 1 and out["withheld"] == 2
+    assert out["chunk_ids_found"] == [P1] and "hint" not in out
+    # Keys travel as parameters; validated counts are inlined into the shared query.
+    lookup, (cypher, params) = graph.calls[0][1], graph.calls[1]
+    assert lookup == {"keys": [A, C]} and params == {"from_key": A, "to_key": C}
+    assert "SHORTEST 7 " in cypher and "{1,2}" in cypher
+    assert "coalesce(r.sensitivity_rank, 3)" in cypher
+
+    phi = settings.model_copy(update={"mcp_clearance": "phi"})
+    _, server = paths_server(phi, chunk_store, *graph.routes.values())
+    out = data(call(server, "nexo_find_paths", args))
+    assert out["path_count"] == 3 and out["withheld"] == 0
+
+
+def test_find_paths_hides_unknown_and_restricted_keys(settings, chunk_store):
+    """A missing key and a key above clearance get the same error; no path query runs."""
+    path = [{"nodes": [_node(A), _node(C)], "hops": [_hop(A, C, P1)]}]
+    errors = []
+    # An unranked entity (rank projected as null) counts as phi, like an unranked edge.
+    hidden = (ends((A, 1), (C, 3)), ends((A, 3), (C, 0)), ends((A, 1), (C, None)))
+    for endpoints in (ends((A, 1)), *hidden):
+        graph, server = paths_server(settings, chunk_store, endpoints, path)
+        result = call(server, "nexo_find_paths", {"from_key": A, "to_key": C})
+        assert result.is_error and len(graph.calls) == 1
+        errors.append(result.content[0].text)
+    assert len(set(errors)) == 1 and "unknown entity key" in errors[0]
+
+    graph, server = paths_server(settings, chunk_store, ends((A, 1)), path)
+    same = call(server, "nexo_find_paths", {"from_key": A, "to_key": A})
+    assert same.is_error and "same entity" in same.content[0].text and not graph.calls
+
+
+def test_find_paths_reports_no_path_and_validates_bounds(settings, chunk_store):
+    """Two known entities with no path get a hint; out-of-range bounds are rejected."""
+    graph, server = paths_server(
+        settings, chunk_store, ends((A, 0), (C, 1)), [{"nodes": None, "hops": None}]
+    )
+    out = data(call(server, "nexo_find_paths", {"from_key": A, "to_key": C}))
+    assert out["paths"] == [] and out["withheld"] == 0
+    assert out["hint"] == "no path in the graph: nexo_search for the text"
+    assert "{1,3}" in graph.calls[1][0]
+    for bad in ({"max_hops": 5}, {"max_hops": 0}, {"max_paths": 11}):
+        result = call(server, "nexo_find_paths", {"from_key": A, "to_key": C, **bad})
+        assert result.is_error
+    assert len(graph.calls) == 2  # rejected before reaching the graph
+
+    hidden = [{"nodes": [_node(A), _node(C)], "hops": [_hop(A, C, P1, 3)]}]
+    _, server = paths_server(settings, chunk_store, ends((A, 0), (C, 1)), hidden)
+    out = data(call(server, "nexo_find_paths", {"from_key": A, "to_key": C}))
+    assert out["withheld"] == 1  # a path exists, just not one this caller may see
+    assert out["hint"] == "no visible path: nexo_search for the text"
 
 
 def test_stdout_carries_only_json_rpc_and_logs_go_to_stderr(tmp_path):

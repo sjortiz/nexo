@@ -43,7 +43,9 @@ The graph is in Neo4j:
 
 Look entities up by name first to get their keys, then use find_paths for how two entities \
 connect and entity_neighbours for one entity's direct relationships; they need no Cypher. \
-Use query_knowledge_graph for anything else.
+Questions about one entity's roles, owners, suppliers, partners and the like (who is the chief \
+executive of X, who owns X, who supplies X) are entity_neighbours on X: do not write Cypher or \
+guess relationship types for them. Use query_knowledge_graph for anything else.
 
 Examples for query_knowledge_graph (adapt them; they are not a script):
 - Find an entity by name or alias (names vary across documents):

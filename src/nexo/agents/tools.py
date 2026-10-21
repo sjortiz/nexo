@@ -121,10 +121,11 @@ def _rank(value: dict[str, Any]) -> int:
     """The map's sensitivity rank; a level that cannot be read counts as phi.
 
     Entities and edges carry `sensitivity_rank`, chunks and documents a
-    `sensitivity` level. MENTIONED_IN maps (a verbatim `surface`) carry neither,
-    so they count as phi.
+    `sensitivity` level. A rank projected but never set (null) and MENTIONED_IN
+    maps (a verbatim `surface`, no rank) count as phi.
     """
-    rank = int(value.get("sensitivity_rank", 0) or 0)
+    rank = value.get("sensitivity_rank", 0)
+    rank = _UNKNOWN_RANK if rank is None else int(rank)
     level = value.get("sensitivity")
     if level is not None:
         try:
@@ -136,13 +137,29 @@ def _rank(value: dict[str, Any]) -> int:
     return rank
 
 
+def _hidden_key(value: dict[str, Any], key: str, clearance_rank: int) -> bool:
+    """True for chunk text, and for an edge's evidence quoted from above clearance.
+
+    An edge's `sensitivity_rank` is its least sensitive source, but `evidence`
+    is verbatim text from one chunk, ranked by `evidence_rank`; an edge written
+    before that rank existed has none, so its evidence is hidden.
+    """
+    if key in CHUNK_TEXT_KEYS:
+        return True
+    if key == "evidence":
+        rank = value.get("evidence_rank")
+        return not isinstance(rank, int) or rank > clearance_rank
+    return False
+
+
 def redact_above_clearance(value: Any, clearance_rank: int) -> Any:
     """Redact node/relationship maps above the caller's clearance; drop chunk text.
 
     A map is redacted whole when its rank (see `_rank`) exceeds the clearance.
     Chunk text, search text and embeddings are dropped from every map whatever
-    the clearance. Only catches values projected as maps; scalar projections
-    (RETURN e.name) need database-side RBAC on the :PII/:PHI labels.
+    the clearance, and an edge's `evidence` unless its `evidence_rank` is within
+    it. Only catches values projected as maps; scalar projections (RETURN
+    e.name) need database-side RBAC on the :PII/:PHI labels.
     """
     if isinstance(value, dict):
         if _rank(value) > clearance_rank:
@@ -150,7 +167,7 @@ def redact_above_clearance(value: Any, clearance_rank: int) -> Any:
         return {
             k: redact_above_clearance(v, clearance_rank)
             for k, v in value.items()
-            if k not in CHUNK_TEXT_KEYS
+            if not _hidden_key(value, k, clearance_rank)
         }
     if isinstance(value, (list, tuple)):  # the driver returns relationships as tuples
         return [redact_above_clearance(v, clearance_rank) for v in value]
@@ -168,7 +185,7 @@ OPTIONAL MATCH p = SHORTEST {paths} (a)(()-[]-(:Entity)){{1,{hops}}}(b)
 RETURN [n IN nodes(p) | n {{.key, .name, .type, .sensitivity_rank}}] AS nodes,
        [r IN relationships(p) | r {{from: startNode(r).key, relation: type(r), to: endNode(r).key,
            predicate: properties(r)['predicate'], valid_at: properties(r)['valid_at'],
-           .certainty, .evidence, .chunk_ids,
+           .certainty, .evidence, .evidence_rank, .chunk_ids,
            sensitivity_rank: coalesce(r.sensitivity_rank, {unranked})}}] AS hops"""
 
 _NEIGHBOURS = f"""\
@@ -177,7 +194,7 @@ OPTIONAL MATCH (e)-[r]-(n:Entity)
 WITH e, r, n ORDER BY size(coalesce(r.chunk_ids, [])) DESC LIMIT $limit
 RETURN e {{.key, .name, .type, .sensitivity_rank}} AS entity,
        r {{relation: type(r), outgoing: startNode(r) = e, predicate: properties(r)['predicate'],
-          valid_at: properties(r)['valid_at'], .certainty, .evidence, .chunk_ids,
+          valid_at: properties(r)['valid_at'], .certainty, .evidence, .evidence_rank, .chunk_ids,
           sensitivity_rank: coalesce(r.sensitivity_rank, {_UNKNOWN_RANK})}} AS edge,
        n {{.key, .name, .type, .sensitivity_rank}} AS neighbour"""
 
@@ -419,7 +436,8 @@ def _lookup_tools(
             return call.fail("unknown key", _UNKNOWN_KEY)
         payload = visible_paths(result.rows, clearance.rank)
         if not payload["paths"]:
-            payload["hint"] = "no path in the graph: search_chunks for the text"
+            where = "no visible path" if payload["withheld"] else "no path in the graph"
+            payload["hint"] = f"{where}: search_chunks for the text"
         return call.reply(payload, f"{payload['path_count']} paths", max_chars)
 
     @tool
