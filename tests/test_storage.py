@@ -15,6 +15,7 @@ from nexo.storage.chunking import (
     split_document,
 )
 from nexo.storage.graph_store import (
+    _RANK,
     UnsafeCypherError,
     _plan_writes,
     validate_read_only_cypher,
@@ -261,3 +262,10 @@ def test_plan_writes_rejects_unsafe_relation_types():
     )
     with pytest.raises(ValueError, match="unsafe relationship type"):
         _plan_writes([row])
+
+
+def test_rank_case_follows_sensitivity_and_counts_unknown_levels_as_phi():
+    """Each level maps to its rank; anything else, including null, ranks as phi."""
+    for level in Sensitivity:
+        assert f"WHEN '{level}' THEN {level.rank} " in _RANK
+    assert _RANK.endswith(f"ELSE {Sensitivity.PHI.rank} END")

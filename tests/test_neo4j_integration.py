@@ -29,7 +29,7 @@ from nexo.agents.tools import InvestigationContext, build_investigation_tools
 from nexo.mcp_server import build_mcp_server
 from nexo.orchestration.graph import GraphDependencies, build_graph
 from nexo.service import Runtime
-from nexo.storage.graph_store import GraphStore, QueryLimits
+from nexo.storage.graph_store import GraphStore, QueryLimits, _refresh_derived
 from nexo.storage.ingest import (
     ExtractionAids,
     IngestionTargets,
@@ -375,6 +375,54 @@ def test_sensitivity_is_the_least_sensitive_source_and_follows_withdrawals(store
 
     store.replace_source(DocumentMetadata(source_id="memo"), [], [])  # memo withdrawn
     assert state() == (3, {"PII", "PHI"}, [3])  # back to PHI; labels return
+
+
+def _acme_rank_and_labels(store):
+    """Acme's sensitivity rank, its :PII/:PHI labels, and its ACQUIRED edges' ranks."""
+    entity = store.run_read_query(
+        "MATCH (e:Entity {name: 'Acme'}) RETURN e.sensitivity_rank AS rank, labels(e) AS labels"
+    ).rows[0]
+    edges = store.run_read_query(
+        "MATCH (:Entity)-[r:ACQUIRED]->(:Entity) RETURN r.sensitivity_rank AS rank"
+    ).rows
+    return (
+        entity["rank"],
+        {"PII", "PHI"} & set(entity["labels"]),
+        [e["rank"] for e in edges],
+    )
+
+
+def test_pii_sources_label_pii_without_phi(store):
+    """Rank 2 (pii) sets the :PII label alone; :PHI needs rank 3."""
+    acme, beta = _resolved("Acme"), _resolved("Beta")
+    pii = Sensitivity.PII
+    store.replace_source(
+        DocumentMetadata(source_id="hr", sensitivity=pii),
+        _chunks("hr", C1, sensitivity=pii),
+        [_row(C1, "hr", (acme, "ACQUIRED", beta), pii)],
+    )
+    assert _acme_rank_and_labels(store) == (2, {"PII"}, [2])
+
+
+@pytest.mark.parametrize("level", ["secret", None])
+def test_unknown_chunk_sensitivity_ranks_as_phi(store, level):
+    """A chunk whose sensitivity is unknown or missing makes what it supports PHI."""
+    acme, beta = _resolved("Acme"), _resolved("Beta")
+    store.replace_source(
+        DocumentMetadata(source_id="memo"),
+        _chunks("memo", C1),
+        [_row(C1, "memo", (acme, "ACQUIRED", beta))],
+    )
+    assert _acme_rank_and_labels(store) == (1, set(), [1])
+
+    with store.session(write=True) as session:
+        session.run(
+            "MATCH (c:Chunk {chunk_id: $id}) SET c.sensitivity = $level",
+            id=C1,
+            level=level,
+        ).consume()
+        session.execute_write(_refresh_derived, [acme.key, beta.key])
+    assert _acme_rank_and_labels(store) == (3, {"PII", "PHI"}, [3])
 
 
 def test_mcp_tools_against_a_real_graph(store, settings, chunk_store):
