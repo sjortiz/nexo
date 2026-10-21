@@ -26,6 +26,7 @@ from nexo.storage.vector_store import (
     DATA_SOURCE_ID,
     ChunkFilter,
     RetrievalMode,
+    candidate_count,
     fuse,
     retrieval_attributes,
     tokenize,
@@ -229,7 +230,7 @@ class Neo4jChunkStore:
     ) -> list[ChunkRecord]:
         """Top-k chunks the filter allows, ranked by the store's retrieval mode."""
         attributes = retrieval_attributes(k, self._mode) | {"db.system.name": "neo4j"}
-        candidates = k if self._mode == "vector" else max(k * 4, 20)
+        candidates = candidate_count(k, self._mode)
         fetch = candidates * OVERFETCH
         with (
             traced_span(

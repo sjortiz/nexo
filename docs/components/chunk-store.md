@@ -60,7 +60,9 @@ date-bounded filter.
 
 BM25 runs in-process over the embedded text (title, section path, chunk, glossary notes), with
 case- and accent-folded tokens so "compró" matches "compro". The index rebuilds lazily after any
-write. Each search is a `retrieval nexo-chunks` span with `nexo.retrieval.mode`.
+write. Before fusion each ranking keeps `candidate_count(k, mode)` allowed hits (`k` in `vector`
+mode, else `max(4k, 20)`), the same in both stores. Each search is a `retrieval nexo-chunks` span
+with `nexo.retrieval.mode`.
 
 # Implementations
 

@@ -174,16 +174,17 @@ OPTIONAL MATCH p = SHORTEST {paths} (a)(()-[]-(:Entity)){{1,{hops}}}(b)
 RETURN [n IN nodes(p) | n {{.key, .name, .type, .sensitivity_rank}}] AS nodes,
        [r IN relationships(p) | r {{from: startNode(r).key, relation: type(r), to: endNode(r).key,
            .predicate, .certainty, .valid_at, .evidence, .chunk_ids,
-           sensitivity_rank: coalesce(r.sensitivity_rank, 3)}}] AS hops"""
+           sensitivity_rank: coalesce(r.sensitivity_rank, {unranked})}}] AS hops"""
 
-_NEIGHBOURS = """\
-MATCH (e:Entity {key: $key})
+_NEIGHBOURS = f"""\
+MATCH (e:Entity {{key: $key}})
 OPTIONAL MATCH (e)-[r]-(n:Entity)
 WITH e, r, n ORDER BY size(coalesce(r.chunk_ids, [])) DESC LIMIT $limit
-RETURN e {.key, .name, .type, .sensitivity_rank} AS entity,
-       r {relation: type(r), outgoing: startNode(r) = e, .predicate, .certainty,
-          .valid_at, .evidence, .chunk_ids, sensitivity_rank: coalesce(r.sensitivity_rank, 3)} AS edge,
-       n {.key, .name, .type, .sensitivity_rank} AS neighbour"""
+RETURN e {{.key, .name, .type, .sensitivity_rank}} AS entity,
+       r {{relation: type(r), outgoing: startNode(r) = e, .predicate, .certainty,
+          .valid_at, .evidence, .chunk_ids,
+          sensitivity_rank: coalesce(r.sensitivity_rank, {_UNKNOWN_RANK})}} AS edge,
+       n {{.key, .name, .type, .sensitivity_rank}} AS neighbour"""
 
 _UNKNOWN_KEY = {
     "error": "unknown entity key; look entities up by name and alias with "
@@ -414,7 +415,7 @@ def _lookup_tools(
         result = _read_graph(
             graph,
             call,
-            _PATHS.format(paths=paths, hops=hops),
+            _PATHS.format(paths=paths, hops=hops, unranked=_UNKNOWN_RANK),
             {"from_key": from_key, "to_key": to_key},
         )
         if isinstance(result, str):

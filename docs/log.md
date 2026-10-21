@@ -1,6 +1,7 @@
 # Bundle Update Log
 
 ## 2026-10-20
+* **Update**: Sensitivity ranks have one source, `Sensitivity.rank`: the graph store's rank `CASE`, its `DATA_MODEL` text and the PHI default for unranked edges in the lookup and MCP tools are generated from it; both chunk stores size their rankings with one `candidate_count(k, mode)`; no behaviour change ([data model](architecture/data-model.md), [Chunk store](components/chunk-store.md#search)).
 * **Update**: The graph and chunk stores read flatter: `replace_source` returns its result from the transaction and plans writes as a `WritePlan`, every query opens its session through `GraphStore.session(write=)`, chunk-store Cypher lives in module constants, and `collect_chunk_ids` returns a set; no behaviour change ([Graph store](components/graph-store.md), [Chunk store](components/chunk-store.md)).
 * **Update**: `GraphStore` is a context manager and every `nexo` command opens the graph with `with`; `review-ui` and `review-inbox` serve through one helper, `--sensitivity` and `--clearance` take their choices from `Sensitivity`, and `nexo eval` builds the redactor only when a judge is set. Commands and output are unchanged.
 * **Update**: `KnowledgeGraphIngestor.ingest()` raises a `ValueError` naming `extract_triples()` when its targets lack a chunk store or graph writer, instead of an `AttributeError` mid-run ([Ingestion pipeline](components/ingestion-pipeline.md)).

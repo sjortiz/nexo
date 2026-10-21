@@ -56,6 +56,7 @@ from nexo.storage.schemas import (
     DocumentMetadata,
     EntityType,
     GroundedTriple,
+    Sensitivity,
 )
 from nexo.telemetry import traced_span
 
@@ -75,7 +76,8 @@ sensitivity_rank}]->(:Entity)
 EntityType is one of: """
     + ", ".join(t.value for t in EntityType)
     + """
-sensitivity_rank (least sensitive supporting source): 0=public 1=internal 2=pii 3=phi"""
+sensitivity_rank (least sensitive supporting source): """
+    + " ".join(f"{level.rank}={level}" for level in Sensitivity)
 )
 
 # Connection drops surface as ServiceUnavailable/SessionExpired. Transient
@@ -505,9 +507,12 @@ def _delete_source(
     return affected, len(set(stale) - set(keep))
 
 
+# A chunk's rank from its `sensitivity`; an unknown level counts as phi.
+_PII, _PHI = Sensitivity.PII.rank, Sensitivity.PHI.rank
 _RANK = (
-    "CASE c.sensitivity WHEN 'public' THEN 0 WHEN 'internal' THEN 1 "
-    "WHEN 'pii' THEN 2 ELSE 3 END"
+    "CASE c.sensitivity "
+    + "".join(f"WHEN '{level}' THEN {level.rank} " for level in Sensitivity)
+    + f"ELSE {_PHI} END"
 )
 
 
@@ -525,14 +530,14 @@ def _refresh_derived(tx: ManagedTransaction, keys: Sequence[str]) -> None:
                 RETURN DISTINCT m.surface AS surface ORDER BY surface
             }},
             e.sensitivity_rank = reduce(
-                least = 3, r IN ranks | CASE WHEN r < least THEN r ELSE least END
+                least = {_PHI}, r IN ranks | CASE WHEN r < least THEN r ELSE least END
             )
         // Sensitivity labels let Enterprise RBAC hide nodes per role,
         // e.g. DENY TRAVERSE ON GRAPH neo4j NODES PHI TO internal_reader.
         REMOVE e:PII:PHI
         WITH e
-        FOREACH (_ IN CASE WHEN e.sensitivity_rank >= 2 THEN [1] ELSE [] END | SET e:PII)
-        FOREACH (_ IN CASE WHEN e.sensitivity_rank >= 3 THEN [1] ELSE [] END | SET e:PHI)
+        FOREACH (_ IN CASE WHEN e.sensitivity_rank >= {_PII} THEN [1] ELSE [] END | SET e:PII)
+        FOREACH (_ IN CASE WHEN e.sensitivity_rank >= {_PHI} THEN [1] ELSE [] END | SET e:PHI)
         """,
         ),
         keys=list(keys),
@@ -548,7 +553,7 @@ def _refresh_derived(tx: ManagedTransaction, keys: Sequence[str]) -> None:
                 MATCH (c:Chunk) WHERE c.chunk_id IN r.chunk_ids RETURN {_RANK}
             }} AS ranks
         SET r.sensitivity_rank = reduce(
-                least = 3, x IN ranks | CASE WHEN x < least THEN x ELSE least END
+                least = {_PHI}, x IN ranks | CASE WHEN x < least THEN x ELSE least END
             )
         """,
         ),

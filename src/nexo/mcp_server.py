@@ -319,7 +319,11 @@ def build_mcp_server(  # pylint: disable=too-many-locals  # one closure per tool
                 {k: v for k, v in row.items() if k not in ("entity", "edge_rank")}
                 for row in rows
                 if "redacted" not in row["neighbor"]
-                and (row["edge_rank"] if row["edge_rank"] is not None else 3)
+                and (
+                    row["edge_rank"]
+                    if row["edge_rank"] is not None
+                    else Sensitivity.PHI.rank
+                )
                 <= clearance.rank
             ]
             return {
