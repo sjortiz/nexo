@@ -42,7 +42,12 @@ from nexo.orchestration.compliance import (
     auto_approves,
     run_compliance_checks,
 )
-from nexo.orchestration.state import GraphState, ReviewDecision, RouteDecision
+from nexo.orchestration.state import (
+    GraphState,
+    ReviewDecision,
+    ReviewPacket,
+    RouteDecision,
+)
 from nexo.storage.schemas import Sensitivity
 from nexo.storage.sensitive_data import NoopDetector, SensitiveDataDetector
 from nexo.storage.vector_store import ChunkFilter
@@ -290,34 +295,30 @@ def _compliance_node(deps: GraphDependencies) -> Callable[..., dict[str, Any]]:
                 "final_response": latest.answer,
             }
 
-        request = {
-            "request_id": state.get("request_id"),
-            "user_query": state.get("user_query"),
-            "draft_answer": latest.answer,
-            "citations": latest.citations,
-            "compliance_report": report.as_state(),
-            "resume_with": ReviewDecision.model_json_schema(),
-        }
+        packet = ReviewPacket(
+            request_id=state["request_id"],
+            user_query=state["user_query"],
+            draft_answer=latest.answer,
+            citations=latest.citations,
+            compliance_report=report,
+            resume_with=ReviewDecision.model_json_schema(),
+        )
         while True:
             # Pauses the run and persists state; resumes with Command(resume=...).
-            raw = interrupt(request)
+            raw = interrupt(packet.model_dump(mode="json"))
             try:
                 decision = ReviewDecision.model_validate(raw)
             except ValidationError as exc:
-                request = {
-                    **request,
-                    "error": exc.errors(include_url=False, include_input=False),
-                }
+                packet.error = exc.errors(include_url=False, include_input=False)
                 continue
             if (
                 decision.approval_status == "approved"
                 and report.blocking
                 and not decision.acknowledged_findings
             ):
-                request = {
-                    **request,
-                    "error": "blocking findings: set acknowledged_findings=true to approve",
-                }
+                packet.error = (
+                    "blocking findings: set acknowledged_findings=true to approve"
+                )
                 continue
             break
 

@@ -13,6 +13,9 @@ sources:
   - id: review
     resource: ../operations/human-review.md
     title: Human review
+  - id: state
+    resource: ../../src/nexo/orchestration/state.py
+    title: ReviewPacket, ReviewPassage
 ---
 
 # Context
@@ -25,8 +28,9 @@ packet in hand. Reviewers want an inbox, and AI clients already talk to Nexo ove
 # Decision
 
 Every surface calls the same `Runtime` methods:[^service] `pending_reviews` lists the paused threads,
-`status` returns one packet, `review_passages` reads the cited chunks for a reviewer's clearance (masked
-by the read-time redactor), and `review` records the decision. No surface owns review state.
+`status` returns one `ReviewPacket`,[^state] `review_passages` reads the cited chunks for a reviewer's
+clearance (masked by the read-time redactor) as `ReviewPassage`s, and `review` records the decision.
+No surface owns review state or parses the packet itself: `blocking` and `findings` come from it.
 
 | Surface | Status | Why |
 |---|---|---|
@@ -56,3 +60,4 @@ findings and require acknowledgement to approve a blocked draft; the graph enfor
 
 [^service]: Runtime
 [^review]: Human review
+[^state]: ReviewPacket, ReviewPassage

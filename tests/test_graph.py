@@ -102,10 +102,9 @@ def runtime(settings, investigator, router_replies=None, checkpointer=None) -> R
 
 
 def _review(result: RunResult) -> dict[str, Any]:
-    """Return the pending review payload, failing if the thread is not paused for review."""
+    """Return the pending review packet as JSON, failing if the thread is not paused."""
     assert result.pending_review is not None, result
-    # dict(): pylint reads the field's default (None), not its declared type.
-    return dict(result.pending_review)
+    return result.pending_review.model_dump(mode="json")
 
 
 def _state(rt: Runtime, thread_id: str) -> dict[str, Any]:

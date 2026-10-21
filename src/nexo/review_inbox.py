@@ -22,6 +22,7 @@ from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any, Protocol
 
+from nexo.orchestration.state import ReviewPacket, ReviewPassage
 from nexo.service import RunResult
 
 COMMENT_LIMIT = 2000
@@ -39,7 +40,7 @@ class ReviewBackend(Protocol):
     def pending_reviews(self, limit: int = 50) -> list[RunResult]:
         """Paused threads, newest first."""
 
-    def review_passages(self, thread_id: str, clearance: str) -> list[dict[str, Any]]:
+    def review_passages(self, thread_id: str, clearance: str) -> list[ReviewPassage]:
         """Cited chunk text as a reader with this clearance sees it."""
 
     def review(self, thread_id: str, decision: dict[str, Any]) -> RunResult:
@@ -58,31 +59,22 @@ class InboxError(Exception):
         self.message = message
 
 
-def _passages_markdown(passages: list[dict[str, Any]], clearance: str) -> str:
+def _passages_markdown(passages: list[ReviewPassage], clearance: str) -> str:
     lines = [f"**Cited passages** (read at clearance `{clearance}`)"]
     for p in passages:
-        head = f"`{p['chunk_id']}`"
-        if p["status"] == "shown":
-            quoted = "\n".join(f"> {line}" for line in (p["text"] or "").splitlines())
-            lines.append(f"{head} {p['source']} ({p['classification']})\n\n{quoted}")
-        elif p["status"] == "withheld":
+        head = f"`{p.chunk_id}`"
+        if p.status == "shown":
+            quoted = "\n".join(f"> {line}" for line in (p.text or "").splitlines())
+            lines.append(f"{head} {p.source} ({p.classification})\n\n{quoted}")
+        elif p.status == "withheld":
             lines.append(f"{head} withheld at your clearance (`{clearance}`)")
         else:
             lines.append(f"{head} not found")
     return "\n\n".join(lines)
 
 
-def _findings(packet: dict[str, Any]) -> list[dict[str, Any]]:
-    return (packet.get("compliance_report") or {}).get("findings") or []
-
-
-def is_blocking(packet: dict[str, Any]) -> bool:
-    """Whether approving needs the reviewer to acknowledge findings."""
-    return bool((packet.get("compliance_report") or {}).get("blocking"))
-
-
 def to_human_interrupt(
-    packet: dict[str, Any], passages: list[dict[str, Any]], clearance: str
+    packet: ReviewPacket, passages: list[ReviewPassage], clearance: str
 ) -> dict[str, Any]:
     """The Agent Inbox HumanInterrupt for one review packet.
 
@@ -90,18 +82,16 @@ def to_human_interrupt(
     the inbox offers an edit form whose `acknowledge_findings` field must be set to yes, and
     the answer itself cannot be edited.
     """
-    blocking = is_blocking(packet)
+    blocking = packet.blocking
     args: dict[str, Any] = {
-        "request_id": packet.get("request_id"),
-        "question": packet.get("user_query"),
-        "draft_answer": packet.get("draft_answer"),
+        "request_id": packet.request_id,
+        "question": packet.user_query,
+        "draft_answer": packet.draft_answer,
     }
     if blocking:
         args[ACK_FIELD] = "no"
         args["comment"] = ""
-    findings = [
-        f"- **{f['severity']}** `{f['code']}`: {f['detail']}" for f in _findings(packet)
-    ]
+    findings = [f"- **{f.severity}** `{f.code}`: {f.detail}" for f in packet.findings]
     description = "\n\n".join(
         [
             "**Findings**\n\n" + ("\n".join(findings) or "none"),
@@ -125,7 +115,7 @@ def to_human_interrupt(
     }
 
 
-def to_decision(response: Any, packet: dict[str, Any], reviewer: str) -> dict[str, Any]:
+def to_decision(response: Any, packet: ReviewPacket, reviewer: str) -> dict[str, Any]:
     """The ReviewDecision for one Agent Inbox response; raises InboxError when not allowed.
 
     Nothing here approves on its own: a blocked packet is approved only by an explicit
@@ -136,7 +126,7 @@ def to_decision(response: Any, packet: dict[str, Any], reviewer: str) -> dict[st
     kind, args = response.get("type"), response.get("args")
     decision: dict[str, Any] = {"reviewer": reviewer}
     if kind == "accept":
-        if is_blocking(packet):
+        if packet.blocking:
             raise InboxError(422, f"blocking findings: edit and set {ACK_FIELD} to yes")
         return decision | {"approval_status": "approved", "comment": ACCEPT_COMMENT}
     if kind == "edit":
@@ -155,19 +145,19 @@ def to_decision(response: Any, packet: dict[str, Any], reviewer: str) -> dict[st
     raise InboxError(422, f"unknown response type {kind!r}")
 
 
-def _edit_decision(args: Any, packet: dict[str, Any]) -> dict[str, Any]:
+def _edit_decision(args: Any, packet: ReviewPacket) -> dict[str, Any]:
     """An edit approves only to acknowledge blocking findings; the answer stays as drafted."""
     edited = args.get("args") if isinstance(args, dict) else None
     if not isinstance(edited, dict):
         raise InboxError(422, "an edit needs the action's args")
-    if not is_blocking(packet):
+    if not packet.blocking:
         raise InboxError(422, "this answer has no blocking findings: accept it")
-    for key, packet_key in (
-        ("request_id", "request_id"),
-        ("question", "user_query"),
-        ("draft_answer", "draft_answer"),
+    for key, drafted in (
+        ("request_id", packet.request_id),
+        ("question", packet.user_query),
+        ("draft_answer", packet.draft_answer),
     ):
-        if edited.get(key) != packet.get(packet_key):
+        if edited.get(key) != drafted:
             raise InboxError(422, f"{key} cannot be edited: Nexo has no edited answers")
     if str(edited.get(ACK_FIELD, "")).strip().lower() not in YES:
         raise InboxError(
@@ -200,10 +190,7 @@ class InboxAdapter:
         self.clearance = clearance
         self._lock = threading.Lock()
 
-    def _packet(self, result: RunResult) -> dict[str, Any]:
-        return dict(result.pending_review or {})
-
-    def _interrupt(self, thread_id: str, packet: dict[str, Any]) -> dict[str, Any]:
+    def _interrupt(self, thread_id: str, packet: ReviewPacket) -> dict[str, Any]:
         try:
             passages = self.backend.review_passages(thread_id, self.clearance)
         except ValueError:  # no chunk store: show the answer without passages
@@ -211,19 +198,19 @@ class InboxAdapter:
         return to_human_interrupt(packet, passages, self.clearance)
 
     def _thread(self, result: RunResult, position: int = 0) -> dict[str, Any]:
-        paused = result.pending_review is not None
+        packet = result.pending_review
         when = _timestamp(position)
         thread: dict[str, Any] = {
             "thread_id": result.thread_id,
             "created_at": when,
             "updated_at": when,
             "metadata": {"graph_id": "nexo"},
-            "status": "interrupted" if paused else "idle",
+            "status": "interrupted" if packet is not None else "idle",
             "values": {},
             "interrupts": {},
         }
-        if paused:
-            value = self._interrupt(result.thread_id, self._packet(result))
+        if packet is not None:
+            value = self._interrupt(result.thread_id, packet)
             thread["interrupts"] = {result.thread_id: [{"value": value}]}
         return thread
 
@@ -254,7 +241,7 @@ class InboxAdapter:
             result = self.backend.status(thread_id)
             tasks = []
             if result.pending_review is not None:
-                value = self._interrupt(thread_id, self._packet(result))
+                value = self._interrupt(thread_id, result.pending_review)
                 tasks = [
                     {
                         "id": thread_id,
@@ -279,8 +266,8 @@ class InboxAdapter:
         if len(resume) != 1:
             raise InboxError(422, "send exactly one response")
         with self._lock:
-            packet = self._packet(self.backend.status(thread_id))
-            if not packet:
+            packet = self.backend.status(thread_id).pending_review
+            if packet is None:
                 raise InboxError(409, f"thread {thread_id} is not awaiting review")
             decision = to_decision(resume[0], packet, self.reviewer)
             try:

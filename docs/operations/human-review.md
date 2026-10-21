@@ -15,7 +15,7 @@ sources:
     title: Demo review page
   - id: state
     resource: ../../src/nexo/orchestration/state.py
-    title: ReviewDecision
+    title: ReviewDecision, ReviewPacket
   - id: compliance
     resource: ../../src/nexo/orchestration/compliance.py
     title: auto_approves
@@ -24,7 +24,7 @@ sources:
 # Trigger
 
 When the [review policy](#review-policy) holds an answer, `nexo ask` (or `Runtime.start`) returns
-`status: awaiting_review` with a `pending_review` packet. Show
+`status: awaiting_review` with a `pending_review` packet (a `ReviewPacket`). Show
 it again any time with `nexo status <thread_id>`. In code, `Runtime.pending_reviews()` lists every paused
 thread, newest first, and `Runtime.review_passages(thread_id, clearance)` reads the cited chunks, masked
 below their clearance ([ADR-0019](../decisions/adr-0019-review-surfaces.md)).
@@ -117,5 +117,5 @@ withheld ones say so. Use review over MCP for real work ([ADR-0019](../decisions
 
 [^cli]: CLI
 [^compliance]: auto_approves
-[^state]: ReviewDecision
+[^state]: ReviewDecision, ReviewPacket
 [^ui]: Demo review page

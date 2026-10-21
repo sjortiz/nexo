@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, computed_field
 
 from nexo.agents.models import AgentOutput
 from nexo.storage.schemas import Sensitivity
@@ -32,6 +32,7 @@ class ComplianceReport(BaseModel):
 
     findings: list[Finding] = Field(default_factory=list)
 
+    @computed_field
     @property
     def blocking(self) -> bool:
         """Whether any finding blocks the answer."""
@@ -39,10 +40,7 @@ class ComplianceReport(BaseModel):
 
     def as_state(self) -> dict:
         """Return the report as a plain dict for the graph state."""
-        return {
-            "findings": [f.model_dump() for f in self.findings],
-            "blocking": self.blocking,
-        }
+        return self.model_dump(mode="json")
 
 
 def run_compliance_checks(

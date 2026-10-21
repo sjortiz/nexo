@@ -13,6 +13,7 @@ import pytest
 
 from nexo.cli import main
 from nexo.config import Settings
+from nexo.orchestration.state import ReviewPassage
 from nexo.review_ui import ReviewApp, make_server
 from nexo.service import RunResult
 
@@ -23,6 +24,7 @@ def packet(question="Who owns A?", blocking=False, answer="B owns A."):
     """Test helper."""
     findings = [{"severity": "block", "code": "phi", "detail": "PHI in draft"}]
     return {
+        "request_id": THREAD,
         "user_query": question,
         "draft_answer": answer,
         "citations": ["chk_1"],
@@ -30,6 +32,7 @@ def packet(question="Who owns A?", blocking=False, answer="B owns A."):
             "findings": findings if blocking else [],
             "blocking": blocking,
         },
+        "resume_with": {},
     }
 
 
@@ -63,7 +66,7 @@ class FakeRuntime:
 
     def review_passages(self, _thread_id, _clearance):
         """Test helper."""
-        return self.passages
+        return [ReviewPassage.model_validate(p) for p in self.passages]
 
     def status(self, thread_id):
         """Test helper."""

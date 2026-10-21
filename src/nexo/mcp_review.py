@@ -20,8 +20,8 @@ from mcp.types import ToolAnnotations
 from pydantic import BaseModel, Field
 
 from nexo.config import Settings
-from nexo.orchestration.state import ReviewDecision
-from nexo.service import RunResult, Runtime
+from nexo.orchestration.state import ReviewDecision, ReviewPacket, ReviewPassage
+from nexo.service import Runtime
 from nexo.storage.schemas import Sensitivity
 from nexo.telemetry import caller_attributes, traced_span
 
@@ -57,15 +57,15 @@ def supports_form_elicitation(ctx: Context) -> bool:
     return declared is not None and (declared.form is not None or declared.url is None)
 
 
-def _packet(result: RunResult) -> dict[str, Any]:
-    packet = result.pending_review or {}
+def _review_view(thread_id: str, packet: ReviewPacket) -> dict[str, Any]:
+    """The packet as nexo_get_review shows it."""
     return {
-        "thread_id": result.thread_id,
-        "question": packet.get("user_query"),
-        "draft_answer": packet.get("draft_answer"),
-        "citations": packet.get("citations") or [],
-        "compliance_report": packet.get("compliance_report") or {},
-        "error": packet.get("error"),
+        "thread_id": thread_id,
+        "question": packet.user_query,
+        "draft_answer": packet.draft_answer,
+        "citations": packet.citations,
+        "compliance_report": packet.compliance_report.model_dump(mode="json"),
+        "error": packet.error,
     }
 
 
@@ -108,32 +108,30 @@ class ReviewConfirmation(BaseModel):
 
 
 def _confirmation_text(
-    packet: dict[str, Any],
-    passages: list[dict[str, Any]],
+    thread_id: str,
+    packet: ReviewPacket,
+    passages: list[ReviewPassage],
     proposed: str,
     clearance: Sensitivity,
 ) -> str:
-    findings = packet["compliance_report"].get("findings") or []
     lines = [
-        f"Review thread {packet['thread_id']}. The assistant proposes: {proposed}.",
+        f"Review thread {thread_id}. The assistant proposes: {proposed}.",
         "",
-        f"QUESTION: {packet['question']}",
+        f"QUESTION: {packet.user_query}",
         "",
-        f"DRAFT ANSWER: {(packet['draft_answer'] or '')[:DRAFT_CHARS]}",
+        f"DRAFT ANSWER: {packet.draft_answer[:DRAFT_CHARS]}",
         "",
         "COMPLIANCE FINDINGS:",
         *(
-            [f"  [{f['severity']}] {f['code']}: {f['detail']}" for f in findings]
+            [f"  [{f.severity}] {f.code}: {f.detail}" for f in packet.findings]
             or ["  none"]
         ),
         "",
         f"CITED PASSAGES (shown at clearance {clearance.value}):",
     ]
     for p in passages:
-        shown = (
-            p["text"][:PASSAGE_CHARS] if p["text"] is not None else f"<{p['status']}>"
-        )
-        lines.append(f"  [chunk:{p['chunk_id']}] {shown}")
+        shown = p.text[:PASSAGE_CHARS] if p.text is not None else f"<{p.status}>"
+        lines.append(f"  [chunk:{p.chunk_id}] {shown}")
     lines += [
         "",
         "Choose a decision to record it under your name, or decline to do nothing.",
@@ -148,11 +146,11 @@ def register_review_tools(
     clearance = Sensitivity(settings.mcp_clearance or settings.default_clearance)
     caller = caller_attributes(settings)
 
-    def awaiting(thread_id: str) -> RunResult:
-        result = runtime.status(thread_id)
-        if result.status != "awaiting_review":
+    def awaiting(thread_id: str) -> ReviewPacket:
+        packet = runtime.status(thread_id).pending_review
+        if packet is None:
             raise ToolError(f"thread {thread_id} is not awaiting review")
-        return result
+        return packet
 
     @server.tool(annotations=READ_ONLY, structured_output=True)
     def nexo_pending_reviews(
@@ -165,19 +163,16 @@ def register_review_tools(
             "execute_tool nexo_pending_reviews",
             {"gen_ai.tool.name": "nexo_pending_reviews", **caller},
         ):
-            rows = []
-            for result in runtime.pending_reviews(limit):
-                packet = _packet(result)
-                report = packet["compliance_report"]
-                rows.append(
-                    {
-                        "thread_id": result.thread_id,
-                        "question": packet["question"],
-                        "blocking": bool(report.get("blocking")),
-                        "findings": len(report.get("findings") or []),
-                    }
-                )
-            return rows
+            return [
+                {
+                    "thread_id": result.thread_id,
+                    "question": packet.user_query,
+                    "blocking": packet.blocking,
+                    "findings": len(packet.findings),
+                }
+                for result in runtime.pending_reviews(limit)
+                if (packet := result.pending_review) is not None
+            ]
 
     @server.tool(annotations=READ_ONLY, structured_output=True)
     def nexo_get_review(
@@ -190,10 +185,11 @@ def register_review_tools(
             "execute_tool nexo_get_review",
             {"gen_ai.tool.name": "nexo_get_review", **caller},
         ):
-            packet = _packet(awaiting(thread_id))
-            packet["passages"] = runtime.review_passages(thread_id, clearance)
-            packet["clearance"] = clearance.value
-            return packet
+            view = _review_view(thread_id, awaiting(thread_id))
+            passages = runtime.review_passages(thread_id, clearance)
+            view["passages"] = [p.model_dump(mode="json") for p in passages]
+            view["clearance"] = clearance.value
+            return view
 
     def confirm(
         ctx: Context,
@@ -203,7 +199,7 @@ def register_review_tools(
         acknowledge_findings: bool = False,
     ) -> Elicit[ReviewConfirmation]:
         """Resolver: ask the person, through the client, before the tool body runs."""
-        packet = _packet(awaiting(thread_id))
+        packet = awaiting(thread_id)
         if not supports_form_elicitation(ctx):
             raise ToolError(
                 "This client cannot ask the person to confirm, so nothing was submitted. "
@@ -211,7 +207,7 @@ def register_review_tools(
                 + cli_command(thread_id, decision, comment, acknowledge_findings)
             )
         passages = runtime.review_passages(thread_id, clearance)
-        text = _confirmation_text(packet, passages, decision, clearance)
+        text = _confirmation_text(thread_id, packet, passages, decision, clearance)
         if comment:
             text += f"\nThe assistant's comment: {comment}"
         return Elicit(text, ReviewConfirmation)
@@ -248,11 +244,9 @@ def register_review_tools(
                     "reason": f"the person chose {confirmation.action}",
                 }
             chosen = confirmation.data
-            packet = _packet(awaiting(thread_id))
-            blocking = bool(packet["compliance_report"].get("blocking"))
             if (
                 chosen.decision == "approve"
-                and blocking
+                and awaiting(thread_id).blocking
                 and not chosen.acknowledge_findings
             ):
                 raise ToolError(
@@ -273,10 +267,8 @@ def register_review_tools(
                 )
             except ValueError as exc:
                 raise ToolError(str(exc)) from exc
-            if result.status != "completed":
-                raise ToolError(
-                    f"review not accepted: {(result.pending_review or {}).get('error')}"
-                )
+            if result.pending_review is not None:
+                raise ToolError(f"review not accepted: {result.pending_review.error}")
             return {
                 "submitted": True,
                 "thread_id": thread_id,

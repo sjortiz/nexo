@@ -30,7 +30,7 @@ sources:
    investigation is auto-rejected with no human step. If the
    [review policy](../operations/human-review.md#review-policy) (`spec.review`, default `on-findings`)
    releases the answer, it is approved as `reviewer: system:auto` with no pause; an answer with a
-   `block` finding never is. Otherwise the node calls `interrupt()` with a review packet; the run
+   `block` finding never is. Otherwise the node calls `interrupt()` with a review packet (`ReviewPacket`); the run
    pauses and its state is checkpointed.[^graph]
 5. **Review.** `Runtime.review(thread_id, decision)` resumes with `Command(resume=decision)`. Invalid
    input, or an approval of blocking findings without `acknowledged_findings: true`, pauses again with

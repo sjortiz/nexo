@@ -29,7 +29,7 @@ from nexo.config import Settings
 from nexo.logging_setup import CONTENT_LOGGER
 from nexo.llm import build_chat_model, build_embeddings, build_strands_model
 from nexo.orchestration.graph import GraphDependencies, build_graph
-from nexo.orchestration.state import ReviewDecision
+from nexo.orchestration.state import ReviewDecision, ReviewPacket, ReviewPassage
 from nexo.storage.graph_store import GraphStore
 from nexo.storage.ingest import ExtractionAids, IngestionTargets, KnowledgeGraphIngestor
 from nexo.storage.ontology import Ontology
@@ -71,7 +71,7 @@ class RunResult(BaseModel):
     routing_reason: str | None = None
     approval_status: str | None = None
     final_response: str | None = None
-    pending_review: dict[str, Any] | None = None
+    pending_review: ReviewPacket | None = None
 
 
 @contextmanager
@@ -188,15 +188,14 @@ class Runtime:
 
     def review_passages(
         self, thread_id: str, clearance: Sensitivity | str
-    ) -> list[dict[str, Any]]:
+    ) -> list[ReviewPassage]:
         """The cited chunks of a paused review, read as a caller with this clearance.
 
-        One dict per citation, in citation order: `chunk_id`, `source`, `text`,
-        `classification` and `status` (`shown`, `withheld` or `not_found`). `text` is
-        None unless the status is `shown`; above the clearance it is masked by the
-        ChunkRedactor (`[EMAIL]`, `[PHONE]`) when only detected personal details make
-        the chunk sensitive, and otherwise withheld. Raises ValueError for a thread that is not
-        awaiting review, and when the runtime has no chunk store.
+        One passage per citation, in citation order. `text` is None unless the status
+        is `shown`; above the clearance it is masked by the ChunkRedactor (`[EMAIL]`,
+        `[PHONE]`) when only detected personal details make the chunk sensitive, and
+        otherwise withheld. Raises ValueError for a thread that is not awaiting review,
+        and when the runtime has no chunk store.
         """
         pending = self._pending(thread_id)
         if pending is None:
@@ -204,7 +203,7 @@ class Runtime:
         if self.chunks is None:
             raise ValueError("this runtime has no chunk store")
         scope = ChunkFilter(max_sensitivity=Sensitivity(clearance))
-        ids = list(dict.fromkeys(pending.get("citations") or []))
+        ids = list(dict.fromkeys(pending.citations))
         records = {r.chunk_id: r for r in self.chunks.get_by_ids(ids)}
         return [
             _passage(chunk_id, records.get(chunk_id), scope, self.redactor)
@@ -262,14 +261,14 @@ class Runtime:
             )
             return result
 
-    def _pending(self, thread_id: str) -> dict[str, Any] | None:
+    def _pending(self, thread_id: str) -> ReviewPacket | None:
         snapshot = self.graph.get_state(self._config(thread_id))
         for t in snapshot.tasks:
             if t.interrupts:
-                return t.interrupts[-1].value
+                return ReviewPacket.model_validate(t.interrupts[-1].value)
         return None
 
-    def _result(self, thread_id: str, pending: dict[str, Any] | None) -> RunResult:
+    def _result(self, thread_id: str, pending: ReviewPacket | None) -> RunResult:
         values = self.graph.get_state(self._config(thread_id)).values
         return RunResult(
             thread_id=thread_id,
@@ -283,7 +282,7 @@ class Runtime:
         )
 
 
-def _outcome(values: dict[str, Any], pending: dict[str, Any] | None) -> str | None:
+def _outcome(values: dict[str, Any], pending: ReviewPacket | None) -> str | None:
     """Say how a thread ended, so a rejection never reads as plain success.
 
     `rejected: <reason>` is a system rejection (the router refused the question, or
@@ -388,26 +387,20 @@ def _passage(
     record: ChunkRecord | None,
     scope: ChunkFilter,
     redactor: ChunkRedactor,
-) -> dict[str, Any]:
+) -> ReviewPassage:
     """One review passage: as stored, masked by the redactor, or withheld."""
     if record is None:
-        return {
-            "chunk_id": chunk_id,
-            "source": None,
-            "text": None,
-            "classification": None,
-            "status": "not_found",
-        }
+        return ReviewPassage(chunk_id=chunk_id, status="not_found")
     shown = redactor.visible(record, scope)
-    return {
-        "chunk_id": chunk_id,
-        "source": " > ".join(
+    return ReviewPassage(
+        chunk_id=chunk_id,
+        source=" > ".join(
             p for p in [record.title or record.source_id, *record.section_path] if p
         ),
-        "text": shown.text if shown else None,
-        "classification": record.sensitivity.value,
-        "status": "shown" if shown else "withheld",
-    }
+        text=shown.text if shown else None,
+        classification=record.sensitivity.value,
+        status="shown" if shown else "withheld",
+    )
 
 
 def chunk_store_from_settings(
