@@ -38,6 +38,10 @@ For one document, `KnowledgeGraphIngestor.ingest(text, metadata)`:[^ingest]
    mentions in one Neo4j transaction.
 9. **Delete stale vectors.** Chunks of this document that are not in the new version.
 
+`ingest()` needs both a chunk store and a graph writer in its `IngestionTargets` and raises
+`ValueError` without them. `extract_triples(text, metadata)` runs steps 1–3, 5 and 6 only, with no
+writes and no resolution, so its targets may be None; `nexo eval-extraction` uses it.
+
 Steps 4 → 8 → 9 keep the [chunk_id contract](../architecture/data-model.md#the-chunk_id-contract):
 Neo4j never references a chunk the store cannot return, even if the process dies mid-way.
 
@@ -66,7 +70,7 @@ nexo ingest docs/memo.md --source-id memo-2025-06 --doc-type memo \
 ```
 
 Retry-on-validation-error, evidence dropping, previous-chunk context, ontology mapping, resolution,
-PII classification, failed-chunk reporting, re-ingestion and redaction are each covered by tests.[^test-ingest]
+PII classification, failed-chunk reporting, re-ingestion, redaction and the missing-targets error are each covered by tests.[^test-ingest]
 
 [^ingest]: KnowledgeGraphIngestor
 [^test-ingest]: Ingestion tests

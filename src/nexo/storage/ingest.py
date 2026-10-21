@@ -120,7 +120,7 @@ def _normalize(text: str) -> str:
 
 @dataclass(frozen=True)
 class IngestionTargets:
-    """Where ingestion writes; None skips that store (e.g. extraction-only evaluation)."""
+    """Where ingestion writes: `ingest()` needs both, `extract_triples()` neither."""
 
     chunk_store: ChunkStore | None
     graph_writer: GraphWriter | None
@@ -187,6 +187,11 @@ class KnowledgeGraphIngestor:
     # --- public API ---------------------------------------------------------------
     def ingest(self, text: str, metadata: DocumentMetadata) -> IngestionReport:
         """Ingest one document into the chunk store and graph, replacing its old version."""
+        if self._targets.chunk_store is None or self._targets.graph_writer is None:
+            raise ValueError(
+                "ingest() needs a chunk store and a graph writer; "
+                "use extract_triples() to extract without writing"
+            )
         with traced_span(
             "ingest.document",
             {
