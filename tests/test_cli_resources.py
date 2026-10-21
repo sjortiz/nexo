@@ -94,7 +94,7 @@ def test_clearance_choices_follow_sensitivity():
     assert cli.CLEARANCES == ["public", "internal", "pii", "phi"]
 
 
-class _FailingInvestigator(_Investigator):
+class _FailingInvestigator(_Investigator):  # pylint: disable=too-few-public-methods
     """Raises on the second question, like an agent hitting a hard limit."""
 
     def investigate(self, question, *, scope) -> AgentOutput:
