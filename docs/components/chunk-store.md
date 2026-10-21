@@ -88,8 +88,13 @@ store from `CALL dbms.components()`:[^neo4j-store]
 | 5.26 (compose and CI default) up to 2026.08 | `db.index.vector.queryNodes` and `db.index.fulltext.queryNodes`; 2026.x deprecates them. |
 
 `SEARCH` reads vector indexes from 2026.01 and full-text indexes from 2026.09, so the store switches
-both at 2026.09. Both forms ask the index for the same number of hits and rank them the same; the Neo4j integration
-tests compare them on each server (`make test-neo4j NEO4J_TEST_IMAGE=neo4j:2026.10-community`).
+both at 2026.09. A version it cannot read, or a user not allowed to call `dbms.components()`, gets
+the procedures and one warning in the log. A long-running process (`nexo mcp`, `nexo review-ui`)
+keeps its first choice until it restarts, so restart it after upgrading Neo4j.
+
+Both forms ask the index for the same number of hits and rank them the same; the Neo4j integration
+tests compare them on each server, and CI runs them on 5.26 and 2026.10
+(`make test-neo4j NEO4J_TEST_IMAGE=neo4j:2026.10-community` locally).
 
 [^vector-store]: ChunkStore and LocalChunkStore
 [^neo4j-store]: Neo4jChunkStore

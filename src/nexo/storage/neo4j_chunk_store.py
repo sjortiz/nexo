@@ -14,6 +14,7 @@ with the `db.index.*.queryNodes` procedures, which 2026.x deprecates.
 from __future__ import annotations
 
 import json
+import logging
 import re
 from collections.abc import Sequence
 from datetime import date, datetime
@@ -23,6 +24,7 @@ from typing import Any, LiteralString, NamedTuple
 
 from langchain_core.embeddings import Embeddings
 from neo4j import ManagedTransaction
+from neo4j.exceptions import Neo4jError
 from opentelemetry.trace import SpanKind
 
 from nexo.storage.graph_store import GraphStore
@@ -37,6 +39,8 @@ from nexo.storage.vector_store import (
     tokenize,
 )
 from nexo.telemetry import traced_span
+
+logger = logging.getLogger(__name__)
 
 VECTOR_INDEX = "chunk_embedding"
 TEXT_INDEX = "chunk_search_text"
@@ -144,9 +148,20 @@ def _rows(
 
 
 def index_queries(components: list[dict[str, Any]]) -> IndexQueries:
-    """SEARCH on Neo4j 2026.09+, the procedures before, from `dbms.components()` rows."""
-    kernel = next(row for row in components if row["name"] == "Neo4j Kernel")
-    major, minor = (int(part) for part in re.findall(r"\d+", kernel["versions"][0])[:2])
+    """SEARCH on Neo4j 2026.09+, the procedures otherwise, from `dbms.components()` rows.
+
+    A kernel version it cannot read gets the procedures, which every supported server has.
+    """
+    kernel = [row["versions"] for row in components if row["name"] == "Neo4j Kernel"]
+    version = kernel[0][0] if kernel and kernel[0] else None
+    match = re.match(r"(\d+)\.(\d+)", version or "")
+    if match is None:
+        logger.warning(
+            "unreadable Neo4j version %r: chunk search uses db.index.*.queryNodes",
+            version,
+        )
+        return _PROCEDURES
+    major, minor = int(match[1]), int(match[2])
     return _SEARCH_CLAUSE if (major, minor) >= SEARCH_CLAUSE_SINCE else _PROCEDURES
 
 
@@ -243,8 +258,16 @@ class Neo4jChunkStore:
     @cached_property
     def _queries(self) -> IndexQueries:
         """The index lookups this server supports, decided once per store."""
-        with self._graph.session(write=False) as session:
-            return index_queries(session.execute_read(_rows, _COMPONENTS))
+        try:
+            with self._graph.session(write=False) as session:
+                components = session.execute_read(_rows, _COMPONENTS)
+        except Neo4jError as exc:  # e.g. dbms.components() not granted to this user
+            logger.warning(
+                "dbms.components() failed (%s): chunk search uses db.index.*.queryNodes",
+                exc.code,
+            )
+            return _PROCEDURES
+        return index_queries(components)
 
     def get_by_ids(self, chunk_ids: Sequence[str]) -> list[ChunkRecord]:
         """Return the stored chunks for these ids, in order; unknown ids are skipped."""
