@@ -47,6 +47,8 @@ STORED_SECRETS = (
     "VLLM_API_KEY",
     "EMBEDDING_API_KEY",
     "QUERY_HASH_KEY",
+    "LANGFUSE_PUBLIC_KEY",
+    "LANGFUSE_SECRET_KEY",
 )
 
 
@@ -221,6 +223,12 @@ class Settings(BaseSettings):
     judge_base_url: str | None = None
     judge_api_key: SecretStr | None = None
     judge_model: str | None = None
+    # Langfuse add-on (addons.langfuse): `nexo eval` uploads the golden set as a dataset,
+    # runs it as an experiment and posts each case's metrics as scores. Unset = off;
+    # `nexo setup` sets it when the add-on is on. The keys are the `nexo` project's.
+    langfuse_host: str | None = None
+    langfuse_public_key: SecretStr | None = None
+    langfuse_secret_key: SecretStr | None = None
 
     # --- Observability ---------------------------------------------------------
     otel_service_name: str = "nexo"
@@ -277,7 +285,7 @@ class Settings(BaseSettings):
     remote_profile: str | None = None
     remote_base_url: str = "http://localhost:11435/v1"
 
-    @field_validator("local_profile", "remote_profile", mode="before")
+    @field_validator("local_profile", "remote_profile", "langfuse_host", mode="before")
     @classmethod
     def _blank_is_unset(cls, value: str | None) -> str | None:
         # `nexo setup` writes REMOTE_PROFILE= to override a stale .env; blank means unset.

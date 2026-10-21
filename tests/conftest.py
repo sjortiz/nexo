@@ -23,10 +23,11 @@ from nexo.llm import build_embeddings
 from nexo.storage.graph_store import ReadResult
 from nexo.storage.schemas import ChunkRecord, Sensitivity
 from nexo.storage.vector_store import LocalChunkStore
-from nexo.telemetry import instrument_openai
+from nexo.telemetry import BaggageAttributes, instrument_openai
 
 _EXPORTER = InMemorySpanExporter()
 _provider = TracerProvider()
+_provider.add_span_processor(BaggageAttributes("langfuse."))  # as setup_telemetry does
 _provider.add_span_processor(SimpleSpanProcessor(_EXPORTER))
 trace.set_tracer_provider(_provider)
 os.environ.pop("OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT", None)

@@ -13,6 +13,9 @@ sources:
   - id: profiles
     resource: ../../src/nexo/local_profiles.py
     title: Local model profiles
+  - id: experiments
+    resource: ../../src/nexo/experiments.py
+    title: Langfuse experiments
 ---
 
 # Golden set
@@ -49,6 +52,27 @@ chunks the reviewer confirmed become `relevant_chunk_ids`.
 
 `nexo eval` calls the investigator directly. It skips the router and human review, so it measures
 retrieval and generation only.[^cli]
+
+# In Langfuse
+
+With the langfuse add-on on (`make up LANGFUSE=1` or `addons.langfuse` in `nexo.yaml`), `nexo setup`
+sets `LANGFUSE_HOST`, and every `nexo eval` run is also a Langfuse experiment:[^experiments]
+
+| In Langfuse | From |
+|---|---|
+| Dataset | The golden set, named after the file (`--dataset-name` to change it). One item per case: input `question`, `strategy`, `clearance`; expected output `answer` (`reference_answer`), `relevant_chunk_ids`, `answer_contains`. A rerun updates the same items. |
+| Experiment | One per run, named after the agent model and the time (`--run-name` to change it), with the agent and judge models as metadata. |
+| Experiment item | Each case's trace, rooted at its `eval.case` span and linked to its dataset item. |
+| Scores | Each case's non-null metrics, as numeric scores on that span. |
+
+Compare runs in **Datasets** → the dataset → its experiments. If Langfuse cannot be reached when the
+run starts, `nexo eval` stops before running a case; a score that fails later is logged and the run
+goes on.
+
+Answers stay off spans, as everywhere else, so Langfuse shows each case's input, expected output,
+scores and trace (timings, tool calls, tokens) but not the answer: that is in `results.jsonl`.
+Langfuse's own LLM-as-judge evaluators read trace output, so use Nexo's judge instead
+([below](#judge-scores)), whose scores arrive as `generation.faithfulness` and `generation.relevancy`.
 
 # Judge scores
 
@@ -109,3 +133,4 @@ written to stdout, one JSON object per line (`"case": "overall"` last). Use it b
 
 [^cli]: nexo eval
 [^profiles]: Local model profiles
+[^experiments]: Langfuse experiments

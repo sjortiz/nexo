@@ -30,6 +30,7 @@ from nexo.evaluation import (
     retrieval_scores,
     triple_key,
 )
+from nexo.experiments import Experiment, LangfuseError
 from nexo.llm import (
     build_chat_model,
     build_embeddings,
@@ -190,24 +191,51 @@ def _eval(args: argparse.Namespace) -> int:
     "clearance"?: "public"|"internal"|"pii"|"phi"}.
 
     Eval skips the router, so `strategy` replays its choice (default hybrid) and `clearance`
-    stands for the caller's (default DEFAULT_CLEARANCE).
+    stands for the caller's (default DEFAULT_CLEARANCE). With LANGFUSE_HOST set (the
+    langfuse add-on), the run is also a Langfuse experiment on the golden set's dataset.
     """
 
     settings = get_settings()
     setup_telemetry(settings)
+    cases = _read_jsonl(args.dataset)
+    experiment = None
+    if settings.langfuse_host:
+        try:
+            experiment = Experiment.start(
+                settings,
+                cases,
+                dataset=args.dataset_name or Path(args.dataset).stem,
+                run_name=args.run_name,
+            )
+        except LangfuseError as exc:
+            log.error("%s", exc)
+            return 1
+        log.info(
+            "langfuse experiment %r on dataset %r",
+            experiment.run_name,
+            experiment.dataset,
+        )
     with GraphStore.from_settings(settings, read_only=True) as graph:
         chunks = chunk_store_from_settings(settings, graph)
         investigator = build_investigator(settings, graph, chunks)
         judge = _judge(settings, chunks) if settings.judge_model else None
-        for line in Path(args.dataset).read_text(encoding="utf-8").splitlines():
-            if not line.strip():
-                continue
-            with traced_span("eval.case"):
-                row = _score_case(
-                    json.loads(line), investigator, judge, settings.default_clearance
+        for case in cases:
+            with (
+                experiment.case_span(case) if experiment else traced_span("eval.case")
+            ) as span:
+                scored = _score_case(
+                    case, investigator, judge, settings.default_clearance
                 )
-            _emit(row, "eval case scored", indent=None)
+                if experiment:
+                    experiment.score(span, scored.metrics)
+            _emit(scored.row, "eval case scored", indent=None)
     return 0
+
+
+def _read_jsonl(path: str) -> list[dict]:
+    """One JSON object per non-blank line."""
+    lines = Path(path).read_text(encoding="utf-8").splitlines()
+    return [json.loads(line) for line in lines if line.strip()]
 
 
 class _Judge(NamedTuple):
@@ -227,10 +255,17 @@ def _judge(settings, chunks: ChunkStore) -> _Judge:
     )
 
 
+class _Scored(NamedTuple):
+    """One golden case's metrics, and its output row (the metrics beside the answer)."""
+
+    metrics: dict[str, float | None]
+    row: dict
+
+
 def _score_case(
     case: dict, investigator: Investigator, judge: _Judge | None, clearance: str
-) -> dict:
-    """Investigate one golden case and return its output row with the scores."""
+) -> _Scored:
+    """Investigate one golden case and score it."""
     scope = InvestigationScope(
         strategy=case.get("strategy", "hybrid"),
         chunk_filter=ChunkFilter(max_sensitivity=case.get("clearance", clearance)),
@@ -250,13 +285,14 @@ def _score_case(
             judge.model, case["question"], output.answer
         ).score
     record_metrics(metrics)
-    return {
+    row = {
         "question": case["question"],
         **metrics,
         "answer": output.answer,
         "tool_calls": len(output.tool_calls),
         "stop_reason": output.stop_reason,
     }
+    return _Scored(metrics, row)
 
 
 def _judge_evidence(chunks, redactor, chunk_filter, chunk_ids) -> list[str]:
@@ -572,6 +608,12 @@ def main(argv: list[str] | None = None) -> int:
         "eval", help="run the investigator over a JSONL golden set"
     )
     evaluate.add_argument("dataset")
+    evaluate.add_argument(
+        "--dataset-name", help="Langfuse dataset (default: the file's name)"
+    )
+    evaluate.add_argument(
+        "--run-name", help="Langfuse experiment (default: agent model and time)"
+    )
     evaluate.set_defaults(handler=_eval)
 
     evaluate_extraction = sub.add_parser(

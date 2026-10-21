@@ -34,7 +34,8 @@ from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
 from typing import Any
 
-from opentelemetry import _logs, metrics, trace
+from opentelemetry import _logs, baggage, metrics, trace
+from opentelemetry.context import Context
 from opentelemetry.exporter.otlp.proto.http._log_exporter import OTLPLogExporter
 from opentelemetry.exporter.otlp.proto.http.metric_exporter import OTLPMetricExporter
 from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
@@ -45,7 +46,8 @@ from opentelemetry.sdk._logs.export import BatchLogRecordProcessor
 from opentelemetry.sdk.metrics import MeterProvider
 from opentelemetry.sdk.metrics.export import PeriodicExportingMetricReader
 from opentelemetry.sdk.resources import Resource
-from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace import Span as SdkSpan
+from opentelemetry.sdk.trace import SpanProcessor, TracerProvider
 from opentelemetry.sdk.trace.export import (
     BatchSpanProcessor,
     ConsoleSpanExporter,
@@ -94,6 +96,23 @@ class OtelLogHandler(LoggingHandler):
         super().emit(record)
 
 
+class BaggageAttributes(SpanProcessor):
+    """Copy baggage entries under a prefix onto each span as it starts.
+
+    `nexo eval` puts a Langfuse experiment's ids in baggage (nexo.experiments), so every
+    span of a case's trace carries them. Only ids go in baggage: it can reach outbound
+    request headers.
+    """
+
+    def __init__(self, prefix: str) -> None:
+        self._prefix = prefix
+
+    def on_start(self, span: SdkSpan, parent_context: Context | None = None) -> None:
+        for key, value in baggage.get_all(parent_context).items():
+            if key.startswith(self._prefix):
+                span.set_attribute(key, str(value))
+
+
 def apply_genai_env(settings: Settings) -> None:
     """Export GenAI telemetry switches for libraries that read os.environ.
 
@@ -126,6 +145,7 @@ def setup_telemetry(settings: Settings) -> TracerProvider:
             }
         )
         tracer_provider = TracerProvider(resource=resource)
+        tracer_provider.add_span_processor(BaggageAttributes("langfuse."))
         meter_provider: MeterProvider | None = None
         if settings.otel_exporter_otlp_endpoint:
             base = settings.otel_exporter_otlp_endpoint.rstrip("/")

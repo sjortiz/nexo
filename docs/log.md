@@ -1,6 +1,7 @@
 # Bundle Update Log
 
 ## 2026-10-21
+* **Update**: `nexo eval` is wired to Langfuse's evaluation features, opt-in with the langfuse add-on: `nexo setup` sets `LANGFUSE_HOST`, the golden set becomes a dataset, each run an experiment whose items are the cases' traces, and each case's metrics are scores; answers stay off spans ([Evaluation playbook](operations/evaluation.md#in-langfuse), [Langfuse](references/langfuse.md#experiments), ADR-0015 amended).
 * **Update**: An edge's `evidence` quote keeps the rank of the chunk it came from (`evidence_rank`), and the graph tools drop it above the caller's clearance, so an `internal` edge first stated in a PHI note no longer quotes the note; the quote goes when its chunk stops supporting the edge, and edges written before have no evidence until re-ingested ([Graph store](components/graph-store.md#read-only-enforcement), ADR-0006 amended). An entity whose rank is projected as null counts as PHI. ADR-0006 accepts `withheld` counts as a pairwise oracle for hidden direct edges.
 
 ## 2026-10-20

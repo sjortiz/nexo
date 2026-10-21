@@ -33,7 +33,8 @@ sources:
 which cancels position bias. These metric families follow the healthcare RAG guidance.[^aws-health]
 
 Use a judge model different from the generator (`JUDGE_MODEL`, `JUDGE_BASE_URL`) to limit
-self-preference. How to run it: [Evaluation playbook](../operations/evaluation.md). Moving the
+self-preference. How to run it: [Evaluation playbook](../operations/evaluation.md). With the
+langfuse add-on on, each metric is also a score in a [Langfuse experiment](../operations/evaluation.md#in-langfuse). Moving the
 runner and generic judges to LangSmith is proposed in
 [ADR-0011](../decisions/adr-0011-langsmith-adoption.md); the extraction and retrieval metrics would
 stay as custom evaluators.[^evaluation]

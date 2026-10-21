@@ -20,12 +20,15 @@ sources:
   - id: compose
     resource: ../../deploy/signoz/compose.yml
     title: Nexo's SigNoz compose file
+  - id: experiments
+    resource: ../operations/evaluation.md#in-langfuse
+    title: Evaluation playbook, in Langfuse
 ---
 
 # Context
 
 [ADR-0014](adr-0014-langfuse-default-trace-backend.md) made Langfuse the default. In Nexo it was only a
-trace viewer: its evaluation features (datasets, experiments, scores) are not wired to `nexo eval`. The
+trace viewer: its evaluation features (datasets, experiments, scores) were not wired to `nexo eval`. The
 default pipeline dropped metrics and logs, so no single place showed traces, metrics, logs and alerts.[^collector]
 
 # Decision
@@ -36,6 +39,11 @@ default pipeline dropped metrics and logs, so no single place showed traces, met
   the same content stripping.
 - **Langfuse becomes an add-on** for LLM evaluation and fine-tuning work (datasets, experiments, scores,
   LLM-as-judge, annotation queues): `make up LANGFUSE=1`.[^langfuse] Jaeger and LangSmith stay add-ons.
+- **`nexo eval` is wired to Langfuse's evaluation features, opt-in with the add-on** (amended
+  2026-10-20): with it on, the golden set is a dataset, each run an experiment whose items are the
+  cases' traces, and each case's metrics are scores on its trace. Answers stay off spans, so
+  Langfuse's own LLM-as-judge has no output to read; Nexo's judge scores arrive instead. With the
+  add-on off, nothing goes to Langfuse.[^experiments]
 - **The Grafana LGTM add-on is removed**: SigNoz stores the same traces, metrics and logs.
 - **Host and container metrics** (CPU, load, memory, disk and filesystem per host; CPU, memory,
   network and I/O per container) come from the collector's `host_metrics` and `docker_stats` receivers.
@@ -58,7 +66,8 @@ default pipeline dropped metrics and logs, so no single place showed traces, met
   0.9-1.1 GB), against 3.1 GB for the Langfuse stack. The default stack with the m5-pro-24 models is
   about 8.4 GB (10.2 GB before); with every add-on, 5.1 GB of containers and about 11.6 GB in all.
 - With `LANGFUSE=1` there are two ClickHouse instances.
-- SigNoz has no LLM evaluation features, which is why Langfuse stays as an add-on.
+- SigNoz has no LLM evaluation features, which is why Langfuse stays as an add-on. `nexo eval` scores
+  reach SigNoz as `eval.*` span attributes either way.
 - SigNoz releases often: images are pinned, and an upgrade re-generates the compose file with foundryctl
   and diffs it against `deploy/signoz/`.
 - The collector runs as root in its container to read the container engine's socket (with rootless
@@ -69,3 +78,4 @@ default pipeline dropped metrics and logs, so no single place showed traces, met
 [^langfuse]: Langfuse
 [^collector]: Collector configuration
 [^compose]: Nexo's SigNoz compose file
+[^experiments]: Evaluation playbook, in Langfuse
