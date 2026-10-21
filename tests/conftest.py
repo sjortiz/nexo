@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 from pathlib import Path
 from dataclasses import dataclass, field
@@ -121,6 +122,16 @@ def make_chunk(
         ingested_at=datetime.now(UTC),
         **extra,
     )
+
+
+def model_text(result: dict[str, Any]) -> str:
+    """The text a tool result shows the model, as Strands' OpenAI provider writes it."""
+    return json.dumps(result["content"][0]["json"], ensure_ascii=False)
+
+
+def as_model_text(agent_tool: Any) -> Any:
+    """Call agent_tool directly and get back the text the model would read."""
+    return lambda *args, **kwargs: model_text(agent_tool(*args, **kwargs))
 
 
 @pytest.fixture(name="chunk_store")

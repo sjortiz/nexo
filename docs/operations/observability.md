@@ -46,7 +46,7 @@ invoke_workflow nexo-investigation           INTERNAL  gen_ai.operation.name=inv
 │     └─ execute_event_loop_cycle            INTERNAL  Strands, one per turn
 │        ├─ chat                             INTERNAL  Strands model wrapper
 │        │  └─ chat {model}                  CLIENT    the vLLM HTTP call
-│        ├─ execute_tool query_knowledge_graph  INTERNAL  nexo.graph.rows, nexo.graph.truncated
+│        ├─ execute_tool query_knowledge_graph  INTERNAL  nexo.graph.rows, nexo.graph.truncated, error.type
 │        │  └─ agent_query                   CLIENT    db.system.name=neo4j, db.namespace, server.*
 │        └─ execute_tool fetch_vector_chunks INTERNAL  nexo.chunks.returned / withheld
 │           └─ chunk_store get_by_ids        INTERNAL
@@ -56,6 +56,31 @@ invoke_workflow nexo-investigation           INTERNAL  gen_ai.operation.name=inv
 Ingestion adds `ingest.document`, one `ingest.extract_triples` per chunk (each with its
 `chat {model}` and resolution calls), `embeddings {model}` and the `replace_source` /
 `find_candidates` Neo4j spans.
+
+# Failed tool calls
+
+A tool call that returns an error to the model (unknown entity key, Cypher syntax error, budget
+exhausted, store down) is a failed call: compliance counts it in `tool_errors`, and its
+`execute_tool` span has status Error, `gen_ai.tool.status=error` and an `error.type`:
+
+| `error.type` | Cause |
+|---|---|
+| `unknown_key` | `find_paths` or `entity_neighbours` got a key that matches no visible entity |
+| `same_entity` | `find_paths` got the same key twice |
+| `unsafe_cypher` | the read-only guard rejected the query |
+| `Neo.ClientError...` | the Neo4j error code (syntax error, timeout, access mode) |
+| `graph_unavailable` | Neo4j unreachable after retries |
+| `budget_exhausted` | the tool budget was used up |
+| exception class name | the chunk store failed (its exception is recorded on the span) |
+
+The span status description is Strands' generic "tool returned error status": the error text the
+model received is message content (a Cypher error can quote the query), so it stays off the tool
+span unless capture is on.
+
+In SigNoz, Traces Explorer: filter `name LIKE 'execute_tool %'` and `hasError = true` (or
+`gen_ai.tool.status = error`), group by `error.type`. Strands' tool metrics agree with the spans:
+`strands.tool.error_count` (by `tool_name`) counts the same calls, so a dashboard panel can chart
+either.
 
 # Metrics
 

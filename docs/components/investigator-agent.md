@@ -45,7 +45,7 @@ never calls a tool.[^llm]
 |---|---|---|---|
 | Loop turns | `AGENT_MAX_TURNS` | 12 | `stop_reason: limit_turns` |
 | Cumulative tokens | `AGENT_MAX_TOTAL_TOKENS` | 120000 | `stop_reason: limit_total_tokens` |
-| Tool calls | `AGENT_MAX_TOOL_CALLS`, at most `AGENT_MAX_TURNS` - 1 | 11 | tools return a "budget exhausted" error |
+| Tool calls | `AGENT_MAX_TOOL_CALLS`, at most `AGENT_MAX_TURNS` - 1 | 11 | tools return a "budget exhausted" error, recorded as a failed call |
 | Wall clock | `AGENT_TIMEOUT_S` | 300 | investigation recorded as failed |
 
 Every tool result reports `tool_calls_left`, and the tool budget stops one turn before the turn limit,
@@ -55,8 +55,9 @@ so the model is told to answer while it still can instead of needing a follow-up
 
 Strands emits `invoke_agent relationship-investigator`, one `execute_event_loop_cycle` per turn, and
 `chat` / `execute_tool` spans; Nexo sets `gen_ai.conversation.id` (the thread id) on all of them and
-adds tool result counts. Message content is redacted unless capture is enabled
-([Observability](../operations/observability.md)).
+adds tool result counts. A failed tool call (an error returned to the model) has an error span with
+`error.type` ([Observability](../operations/observability.md#failed-tool-calls)). Message content is
+redacted unless capture is enabled ([Observability](../operations/observability.md)).
 
 # Output
 

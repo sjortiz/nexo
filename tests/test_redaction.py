@@ -26,7 +26,7 @@ from nexo.storage.schemas import Sensitivity
 from nexo.storage.sensitive_data import Detection, NoopDetector, RegexDetector
 from nexo.llm import build_embeddings
 from nexo.storage.vector_store import ChunkFilter, LocalChunkStore
-from tests.conftest import FakeGraph, make_chunk
+from tests.conftest import FakeGraph, as_model_text, make_chunk
 from tests.test_agent import ScriptedClient, _completion, _tool_call
 
 EMAIL = "jane.roe@beta.example"
@@ -48,7 +48,7 @@ def _tools(settings, chunk_store, clearance, detector=DETECTOR, budget=10):
         scope=InvestigationScope(chunk_filter=ChunkFilter(max_sensitivity=clearance)),
     )
     tools = {
-        t.tool_name: t
+        t.tool_name: as_model_text(t)
         for t in build_investigation_tools(
             graph=FakeGraph(),
             chunks=chunk_store,

@@ -6,10 +6,12 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+from dataclasses import dataclass
 from typing import Any
 
 import pytest
 from neo4j.exceptions import Neo4jError, ServiceUnavailable
+from opentelemetry.trace import StatusCode
 from openai.types.chat import ChatCompletion
 from strands.models.openai import OpenAIModel
 from strands.telemetry import tracer as strands_tracer
@@ -17,10 +19,13 @@ from strands.telemetry import tracer as strands_tracer
 from nexo.agents.investigator import Investigator, extract_citations
 from nexo.agents.models import InvestigationScope
 from nexo.agents.tools import InvestigationContext, build_investigation_tools
+from nexo.orchestration.compliance import run_compliance_checks
+from nexo.storage.graph_store import ReadResult
 from nexo.storage.schemas import Sensitivity
+from nexo.storage.sensitive_data import NoopDetector
 from nexo.storage.vector_store import ChunkFilter
 from nexo.telemetry import apply_genai_env
-from tests.conftest import FakeGraph, make_chunk
+from tests.conftest import FakeGraph, as_model_text, make_chunk
 
 
 def _named_tools(
@@ -35,7 +40,7 @@ def _named_tools(
     tools = build_investigation_tools(
         graph=graph, chunks=chunk_store, ctx=ctx, settings=settings
     )
-    return ctx, {t.tool_name: t for t in tools}
+    return ctx, {t.tool_name: as_model_text(t) for t in tools}
 
 
 def _tools(settings, graph, chunk_store, *, clearance=Sensitivity.INTERNAL, budget=10):
@@ -338,6 +343,36 @@ def _tool_call(call_id: str, name: str, args: dict[str, Any]) -> ChatCompletion:
     )
 
 
+def test_fetch_tool_drops_trailing_chunks_to_fit_and_counts_only_those_sent(
+    settings, chunk_store
+):
+    """Chunks dropped for size are counted in omitted_for_size and are not evidence."""
+    first, second = (
+        make_chunk("d", i, f"{'Acme acquired Beta. ' * 20}{i}") for i in (0, 1)
+    )
+    chunk_store.upsert([first, second], [first.text, second.text])
+    small = settings.model_copy(update={"tool_result_max_chars": 800})
+    ctx, _, fetch, _ = _tools(small, FakeGraph(), chunk_store)
+
+    out = json.loads(fetch([first.chunk_id, second.chunk_id]))
+    assert [c["chunk_id"] for c in out["chunks"]] == [first.chunk_id]
+    assert out["omitted_for_size"] == 1
+    assert ctx.evidence.fetched == {first.chunk_id: "internal"}
+
+
+def test_refused_calls_are_recorded_and_reserved_slots_hidden(settings, chunk_store):
+    """A call past the budget is a failed call; a running call's slot is not listed."""
+    ctx, tools = _named_tools(settings, FakeGraph(), chunk_store, budget=1)
+    tools["entity_neighbours"]("X:a")
+    tools["find_paths"]("X:a", "X:b")
+    assert [(c.tool, c.ok, c.detail) for c in ctx.completed_calls()] == [
+        ("entity_neighbours", False, "unknown key"),
+        ("find_paths", False, "budget exhausted"),
+    ]
+    ctx.max_tool_calls = 3
+    assert ctx.reserve_call() and len(ctx.completed_calls()) == 2
+
+
 class ScriptedClient:  # pylint: disable=too-few-public-methods  # fakes one endpoint only
     """Mimics openai.AsyncOpenAI.chat.completions for a vLLM server."""
 
@@ -395,6 +430,74 @@ def test_strands_spans_carry_conversation_and_tool_attributes(
     assert fetch_tool.attributes["nexo.chunks.returned"] == 1
     assert (
         finished["chunk_store get_by_ids"].parent.span_id == fetch_tool.context.span_id
+    )
+
+
+@dataclass
+class _ErrorOnTypo(FakeGraph):
+    """Fails Cypher containing RETRN; lookups (with parameters) find nothing."""
+
+    def run_read_query(self, cypher, parameters=None):
+        if "RETRN" in cypher:
+            raise Neo4jError._hydrate_neo4j(  # pylint: disable=protected-access
+                code="Neo.ClientError.Statement.SyntaxError", message="Invalid input"
+            )
+        return ReadResult(rows=[] if parameters else [{"n": 1}], truncated=False)
+
+
+def test_failed_tool_calls_are_failed_spans_and_match_compliance(
+    settings, chunk_store, spans
+):
+    """Each failed call marks its execute_tool span; the model reads the same JSON."""
+    client = ScriptedClient(
+        [
+            _tool_call("t1", "find_paths", {"from_key": "X:a", "to_key": "X:b"}),
+            _tool_call(
+                "t2", "query_knowledge_graph", {"cypher_query": "MATCH (n) RETRN n"}
+            ),
+            _tool_call(
+                "t3",
+                "query_knowledge_graph",
+                {"cypher_query": "MATCH (n) RETURN 1 AS n"},
+            ),
+            _completion({"content": "Nothing found."}, "stop"),
+        ]
+    )
+    output = Investigator(
+        model=OpenAIModel(client=client, model_id="m", stream=False),
+        graph=_ErrorOnTypo(),
+        chunks=chunk_store,
+        settings=settings,
+    ).investigate("q", scope=InvestigationScope(strategy="graph"))
+
+    tool_spans = [
+        s for s in spans.get_finished_spans() if s.name.startswith("execute_tool ")
+    ]
+    failed = [s for s in tool_spans if s.status.status_code is StatusCode.ERROR]
+    assert [s.attributes["error.type"] for s in failed] == [
+        "unknown_key",
+        "Neo.ClientError.Statement.SyntaxError",
+    ]
+    assert all(s.attributes["gen_ai.tool.status"] == "error" for s in failed)
+    assert {s.status.description for s in failed} == {"tool returned error status"}
+    assert [(s.attributes["gen_ai.tool.name"], s in failed) for s in tool_spans] == [
+        (c.tool, not c.ok) for c in output.tool_calls
+    ]
+    [finding] = [
+        f
+        for f in run_compliance_checks(output, NoopDetector()).findings
+        if f.code == "tool_errors"
+    ]
+    assert finding.detail == f"{len(failed)} of {len(tool_spans)} tool calls failed"
+
+    # The model reads the error as plain JSON text, as before the error status.
+    unknown_key = next(
+        m for m in client.requests[-1]["messages"] if m["role"] == "tool"
+    )
+    assert unknown_key["content"] == (
+        '{"error": "unknown entity key; look entities up by name and alias with '
+        'query_knowledge_graph, or search_chunks for the text", "tool_calls_left": '
+        f"{json.loads(unknown_key['content'])['tool_calls_left']}}}"
     )
 
 

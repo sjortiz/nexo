@@ -41,7 +41,9 @@ Success:
  "chunk_ids_found": ["chk_3f1a..."]}
 ```
 
-Errors are returned to the model as data so it can correct itself:
+Errors are returned to the model as data so it can correct itself. The call is recorded as failed
+and its `execute_tool` span is marked failed with an `error.type`
+([Observability](../operations/observability.md#failed-tool-calls)):
 
 | Cause | Result |
 |---|---|

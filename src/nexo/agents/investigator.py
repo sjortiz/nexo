@@ -266,7 +266,7 @@ class Investigator:
             fetched_chunk_ids=sorted(ctx.evidence.fetched),
             fetched_sensitivity=dict(ctx.evidence.fetched),
             withheld_chunk_ids=sorted(ctx.evidence.withheld),
-            tool_calls=[c for c in ctx.calls if c.tool != "(reserved)"],
+            tool_calls=ctx.completed_calls(),
             stop_reason=str(result.stop_reason),
             usage=_usage(result),
         )
