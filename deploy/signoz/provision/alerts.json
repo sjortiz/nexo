@@ -1,0 +1,113 @@
+[
+ {
+  "alert": "Nexo: slow question",
+  "alertType": "TRACES_BASED_ALERT",
+  "ruleType": "threshold_rule",
+  "version": "v5",
+  "evalWindow": "15m0s",
+  "frequency": "5m0s",
+  "labels": {
+   "severity": "warning",
+   "stack": "nexo"
+  },
+  "annotations": {
+   "summary": "A question took longer than expected end to end (p95 over 15 minutes).",
+   "description": "A question took longer than expected end to end (p95 over 15 minutes). Threshold: {{$threshold}}, value: {{$value}}."
+  },
+  "condition": {
+   "compositeQuery": {
+    "queryType": "clickhouse_sql",
+    "panelType": "graph",
+    "unit": "s",
+    "queries": [
+     {
+      "type": "clickhouse_sql",
+      "spec": {
+       "name": "A",
+       "query": "SELECT toStartOfInterval(timestamp, INTERVAL 1 MINUTE) AS ts, quantile(0.95)(duration_nano)/1e9 AS value FROM signoz_traces.distributed_signoz_index_v3 WHERE name LIKE 'invoke_workflow%' AND attributes_string['nexo.operation'] = 'start' AND timestamp BETWEEN {{.start_datetime}} AND {{.end_datetime}} GROUP BY ts ORDER BY ts",
+       "disabled": false
+      }
+     }
+    ]
+   },
+   "selectedQueryName": "A",
+   "op": "1",
+   "target": 300,
+   "matchType": "1"
+  }
+ },
+ {
+  "alert": "Nexo: too many model calls per question",
+  "alertType": "TRACES_BASED_ALERT",
+  "ruleType": "threshold_rule",
+  "version": "v5",
+  "evalWindow": "15m0s",
+  "frequency": "5m0s",
+  "labels": {
+   "severity": "warning",
+   "stack": "nexo"
+  },
+  "annotations": {
+   "summary": "Questions are making more model calls than a healthy investigation needs; the agent may be looping.",
+   "description": "Questions are making more model calls than a healthy investigation needs; the agent may be looping. Threshold: {{$threshold}}, value: {{$value}}."
+  },
+  "condition": {
+   "compositeQuery": {
+    "queryType": "clickhouse_sql",
+    "panelType": "graph",
+    "unit": "none",
+    "queries": [
+     {
+      "type": "clickhouse_sql",
+      "spec": {
+       "name": "A",
+       "query": "SELECT toStartOfInterval(min_ts, INTERVAL 1 MINUTE) AS ts, avg(calls) AS value FROM (SELECT trace_id, min(timestamp) AS min_ts, countIf(name LIKE 'chat%') AS calls FROM signoz_traces.distributed_signoz_index_v3 WHERE timestamp BETWEEN {{.start_datetime}} AND {{.end_datetime}} GROUP BY trace_id HAVING countIf(name LIKE 'invoke_workflow%') > 0) GROUP BY ts ORDER BY ts",
+       "disabled": false
+      }
+     }
+    ]
+   },
+   "selectedQueryName": "A",
+   "op": "1",
+   "target": 12,
+   "matchType": "1"
+  }
+ },
+ {
+  "alert": "Nexo: error rate",
+  "alertType": "TRACES_BASED_ALERT",
+  "ruleType": "threshold_rule",
+  "version": "v5",
+  "evalWindow": "15m0s",
+  "frequency": "5m0s",
+  "labels": {
+   "severity": "critical",
+   "stack": "nexo"
+  },
+  "annotations": {
+   "summary": "More than 5% of Nexo spans ended in an error.",
+   "description": "More than 5% of Nexo spans ended in an error. Threshold: {{$threshold}}, value: {{$value}}."
+  },
+  "condition": {
+   "compositeQuery": {
+    "queryType": "clickhouse_sql",
+    "panelType": "graph",
+    "unit": "percentunit",
+    "queries": [
+     {
+      "type": "clickhouse_sql",
+      "spec": {
+       "name": "A",
+       "query": "SELECT toStartOfInterval(timestamp, INTERVAL 1 MINUTE) AS ts, countIf(has_error) / count() AS value FROM signoz_traces.distributed_signoz_index_v3 WHERE serviceName = 'nexo' AND timestamp BETWEEN {{.start_datetime}} AND {{.end_datetime}} GROUP BY ts ORDER BY ts",
+       "disabled": false
+      }
+     }
+    ]
+   },
+   "selectedQueryName": "A",
+   "op": "1",
+   "target": 0.05,
+   "matchType": "1"
+  }
+ }
+]

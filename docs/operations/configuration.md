@@ -155,6 +155,7 @@ No policy approves an answer with a `block` finding.
 
 | Variable | Default | Effect |
 |---|---|---|
+| `SIGNOZ_ALERT_WEBHOOK` | unset | Where the Nexo alerts are sent (a webhook URL, set in `.env`); unset, they only show in SigNoz. See [Dashboard and alerts](observability.md#dashboard-and-alerts). |
 | `OTEL_SERVICE_NAME` | `nexo` | `service.name` resource attribute. |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | unset | OTLP/HTTP base URL; unset disables export. |
 | `OTEL_CONSOLE_EXPORT` | `false` | Print spans to stderr, including the released question and answer (`nexo.content` events). |

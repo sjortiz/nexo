@@ -43,6 +43,7 @@ from nexo.setup.components import COMPONENTS, UIS
 from nexo.setup.engine import Machines, activate
 from nexo.setup.envfile import ensure_secrets, read_env, stack_secrets
 from nexo.setup.lock import Lock, served_locally
+from nexo.setup.signoz import SignozClient, SignozError, provision
 from nexo.setup.lock import lock as resolve_lock
 from nexo.setup.render import (
     RENDER_DIR,
@@ -175,6 +176,30 @@ def _neo4j_accepts(stack: _Stack, store: SecretStore, name: str, uri: str) -> in
     else:
         log.error("Neo4j does not answer at %s", uri)
     return 1
+
+
+def _provision_signoz(stack: _Stack, port: int) -> None:
+    """Load the committed Nexo dashboard and alerts; a failure is a warning, not a stop."""
+    password = stack.secrets.get("SIGNOZ_USER_PASSWORD")
+    if not password:
+        return
+    dot_env = read_env(Path.cwd() / ".env")
+    client = SignozClient(f"http://127.0.0.1:{port}")
+    try:
+        client.login(dot_env.get("SIGNOZ_USER_EMAIL") or "admin@nexo.local", password)
+        loaded = provision(client, Path.cwd(), dot_env.get("SIGNOZ_ALERT_WEBHOOK"))
+    except (SignozError, OSError, KeyError, ValueError) as exc:
+        log.warning("signoz: dashboard and alerts not loaded: %s", exc)
+        return
+    log.info(
+        "signoz: Nexo dashboard and %d alerts loaded%s",
+        loaded["rules"],
+        (
+            ""
+            if dot_env.get("SIGNOZ_ALERT_WEBHOOK")
+            else " (no SIGNOZ_ALERT_WEBHOOK: shown, not sent)"
+        ),
+    )
 
 
 def _native(casting: Casting) -> bool:
@@ -456,6 +481,8 @@ def _up(args: argparse.Namespace) -> int:
         code := _neo4j_accepts(stack, store, lock.name, ports.bolt)
     ):
         return code
+    if "signoz" in services:
+        _provision_signoz(stack, ports.signoz)
     for name in sorted(services & UIS.keys()):
         log.info("%s: http://localhost:%s", name, getattr(ports, UIS[name]))
     if "agentInbox" in services:

@@ -199,6 +199,34 @@ exported. A run's question and answer are exported on their own record, by sensi
 [Question and answer logs](#question-and-answer-logs)). SigNoz stores them and links each line to its trace. The setting defaults to `none` in code; the
 local template sets `otlp`.
 
+# Dashboard and alerts
+
+`nexo setup up` loads a **Nexo** dashboard and three alerts into SigNoz from
+`deploy/signoz/provision/` (headless, as the root user the stack creates; re-running replaces them by
+name). The panels are ClickHouse queries over the spans described above:
+
+| Panel | What it answers |
+|---|---|
+| Questions and how they ended | Runs per operation, status and approval (`not_required` is a router refusal). |
+| Question latency | p50 and p95 of `invoke_workflow` for new questions. |
+| Time per step | Count, average, p95 and total time of nodes, model calls, tool calls, Neo4j queries and embeddings. |
+| Model calls per question | Average `chat` spans per question trace; three or four is typical. |
+| Tokens per model | Calls, input and output tokens and the average prompt per model (one model per role). |
+| Tool calls and failures | Calls, failed calls and their `error.type` per tool. |
+| How investigations stopped | `stop_reason` (`limit_turns` is a turn-limit hit), follow-up calls and empty answers, from `nexo.investigation.*` on the investigator node. |
+| Reviews | Answers the review policy approved as `system:auto` against those that waited. |
+| Neo4j query time | p95 per kind of graph store call. |
+
+| Alert | Fires when |
+|---|---|
+| Nexo: slow question | p95 question latency over 15 minutes is above 300 s. |
+| Nexo: too many model calls per question | The average is above 12. |
+| Nexo: error rate | More than 5% of `nexo` spans end in an error. |
+
+Alerts go to a webhook channel named `nexo`: set `SIGNOZ_ALERT_WEBHOOK` in `.env` to be notified;
+without it they still show as firing on SigNoz's Alerts page. Edit the thresholds in
+`deploy/signoz/provision/alerts.json` and run `make up` again.
+
 # Backends
 
 The application exports OTLP to the collector; the collector chooses the backends

@@ -250,39 +250,50 @@ def _eval(args: argparse.Namespace) -> int:
         chunks = chunk_store_from_settings(settings, graph)
         investigator = build_investigator(settings, graph, chunks)
         judge = _judge(settings, chunks) if settings.judge_model else None
-        failed = 0
         repeats = max(1, getattr(args, "repeat", 1))
-        runs: dict[str, list[dict]] = {}  # question -> one metrics dict per repeat
+        scorer = _CaseScorer(
+            investigator, judge, settings.default_clearance, experiment
+        )
         for rep in range(1, repeats + 1):
             for case in cases:
-                with (
-                    experiment.case_span(case)
-                    if experiment
-                    else traced_span("eval.case")
-                ) as span:
-                    try:
-                        scored = _score_case(
-                            case, investigator, judge, settings.default_clearance
-                        )
-                    except Exception as exc:  # pylint: disable=broad-exception-caught
-                        # One case must not end the run; the row says why it has no scores.
-                        failed += 1
-                        row = {
-                            "question": case.get("question"),
-                            "error": type(exc).__name__,
-                        }
-                    else:
-                        if experiment:
-                            experiment.score(span, scored.metrics)
-                        row = scored.row
-                        runs.setdefault(case["question"], []).append(scored.metrics)
-                if repeats > 1:
-                    row = {**row, "rep": rep}
-                _emit(row, "eval case scored", indent=None)
+                row = scorer.score(case)
+                _emit(
+                    {**row, "rep": rep} if repeats > 1 else row,
+                    "eval case scored",
+                    indent=None,
+                )
         if repeats > 1:
-            for question, metrics in runs.items():
+            for question, metrics in scorer.runs.items():
                 _emit(_summary_row(question, metrics), "eval summary", indent=None)
-    return 1 if failed else 0
+    return 1 if scorer.failed else 0
+
+
+class _CaseScorer:
+    """Scores golden cases one at a time, keeping each question's metrics per repeat."""
+
+    def __init__(self, investigator, judge, clearance: str, experiment) -> None:
+        self.investigator, self.judge = investigator, judge
+        self.clearance, self.experiment = clearance, experiment
+        self.failed = 0
+        self.runs: dict[str, list[dict]] = {}  # question -> one metrics dict per repeat
+
+    def score(self, case: dict) -> dict:
+        """The case's output row; a case that raises becomes an error row, not a stop."""
+        experiment = self.experiment
+        with (
+            experiment.case_span(case) if experiment else traced_span("eval.case")
+        ) as span:
+            try:
+                scored = _score_case(
+                    case, self.investigator, self.judge, self.clearance
+                )
+            except Exception as exc:  # pylint: disable=broad-exception-caught
+                self.failed += 1
+                return {"question": case.get("question"), "error": type(exc).__name__}
+            if experiment:
+                experiment.score(span, scored.metrics)
+        self.runs.setdefault(case["question"], []).append(scored.metrics)
+        return scored.row
 
 
 def _summary_row(question: str, runs: list[dict]) -> dict:
