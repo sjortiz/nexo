@@ -26,6 +26,7 @@ from pydantic import BaseModel
 from nexo.agents.investigator import Investigator
 from nexo.agents.redaction import ChunkRedactor
 from nexo.config import Settings
+from nexo.logging_setup import CONTENT_LOGGER
 from nexo.llm import build_chat_model, build_embeddings, build_strands_model
 from nexo.orchestration.graph import GraphDependencies, build_graph
 from nexo.orchestration.state import ReviewDecision
@@ -53,6 +54,9 @@ CONTENT_EVENT = "nexo.content"
 _INTERRUPT_CHANNEL = "__interrupt__"  # where LangGraph stores a pending interrupt
 
 log = logging.getLogger("nexo.service")
+# Its own logger, pinned to INFO by configure_logging: the audit record reaches OTLP
+# whatever LOG_LEVEL is.
+content_log = logging.getLogger(CONTENT_LOGGER)
 
 
 class RunResult(BaseModel):
@@ -253,7 +257,7 @@ class Runtime:
             if content:
                 span.add_event(CONTENT_EVENT, content)
             # Only the OTLP handler exports `content`; stderr gets the verdict.
-            log.info(
+            content_log.info(
                 "thread %s: content: %s", thread_id, verdict, extra={"content": content}
             )
             return result
@@ -311,7 +315,8 @@ def content_gate(
     export: the question, the released answer, the reviewer's comment and the router's
     reason, or nothing when withheld. They are exported when the run's level (see
     `run_sensitivity`) is at or below TELEMETRY_CONTENT_MAX_SENSITIVITY; content
-    capture exports them whatever the level. Fails closed: no detector, or one that
+    capture exports them whatever the level. Fails closed: no detector (None, or the
+    NoopDetector of SENSITIVE_DATA_PROVIDER=none, which cannot classify), or one that
     raises, withholds them (ADR-0009, amended).
     """
     texts = {
@@ -326,7 +331,7 @@ def content_gate(
     limit = settings.telemetry_content_max_sensitivity
     if limit == "none":
         return "withheld (telemetry content none)", {}
-    if detector is None:
+    if detector is None or isinstance(detector, NoopDetector):
         return "withheld (no detector)", {}
     try:
         level = run_sensitivity(values, detector, texts.values())
@@ -344,11 +349,14 @@ def run_sensitivity(
     """A run's level: the highest of the chunks its agent read and the detector's findings.
 
     The chunks are the evidence ledger (`fetched_sensitivity`) that grounds citations;
-    the texts are what would be exported. A level Nexo does not rank counts as phi.
+    the texts are what would be exported. A level Nexo does not rank counts as phi,
+    and so does a failed agent run with no ledger: a timeout or crash drops what it read.
     """
     levels = [Sensitivity.PUBLIC]
     for output in values.get("agent_outputs") or []:
         fetched = output.get("fetched_sensitivity") or {}
+        if output.get("error") and not fetched:
+            levels.append(Sensitivity.PHI)
         levels += [_ranked(level) for level in fetched.values()]
     for text in texts:
         levels += [_ranked(d.sensitivity) for d in detector.detect(text)]

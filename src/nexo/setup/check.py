@@ -10,6 +10,7 @@ import shutil
 import socket
 import subprocess
 import urllib.request
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -17,7 +18,9 @@ from typing import Any
 import yaml
 from neo4j import GraphDatabase
 from neo4j.exceptions import AuthError, DriverError, Neo4jError
+from pydantic import ValidationError
 
+from nexo.config import Settings
 from nexo.local_profiles import MODEL_SIZES_GB, parse_profile
 from nexo.secret_store import SecretStore, SecretStoreError
 from nexo.setup.components import MEMORY_GB
@@ -280,28 +283,44 @@ def review_finding(casting: Casting) -> Finding:
     return Finding("review", True, detail)
 
 
-def content_finding(casting: Casting) -> Finding:
+def content_finding(
+    casting: Casting, load: Callable[[], Settings] = Settings
+) -> Finding:
     """Which runs' questions and answers are logged (spec.telemetry.content, ADR-0009).
 
-    Like review_finding: nexo.env always carries the setting, so only the process
-    environment overrides it, and the content-capture switch there logs every run.
+    Read through Settings, as Nexo will: nexo.env always carries the threshold, so only
+    the process environment overrides it, while the detector and the content-capture
+    switch may come from .env too. With no detector nothing is logged (fail closed).
     """
     declared = casting.spec.telemetry.content
-    effective = os.environ.get("TELEMETRY_CONTENT_MAX_SENSITIVITY") or declared
+    try:
+        settings = load()
+    except ValidationError as exc:
+        invalid = ", ".join(sorted({str(e["loc"][0]).upper() for e in exc.errors()}))
+        return Finding(
+            "content", False, f"cannot tell what is logged: {invalid} invalid"
+        )
+    effective = settings.telemetry_content_max_sensitivity
+    provider = settings.sensitive_data_provider
     if effective == "none":
         detail = "none: no question or answer is logged"
+    elif provider == "none":
+        detail = (
+            f"{effective}, detector none (SENSITIVE_DATA_PROVIDER): runs cannot be"
+            " classified, so no question or answer is logged"
+        )
     else:
         detail = (
-            f"{effective}: questions and answers of runs at or below {effective}"
-            " are logged; the rest are withheld"
+            f"{effective}, detector {provider}: questions and answers of runs at or"
+            f" below {effective} are logged; the rest are withheld"
         )
     if effective != declared:
         detail += (
             " (TELEMETRY_CONTENT_MAX_SENSITIVITY in the environment overrides"
             f" spec.telemetry.content {declared})"
         )
-    capture = os.environ.get("OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT")
-    if capture in ("span_only", "span_and_event"):
+    if settings.capture_content:
+        capture = settings.otel_instrumentation_genai_capture_message_content
         detail += (
             f" (OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT={capture}"
             " logs every run)"

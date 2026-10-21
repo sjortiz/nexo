@@ -20,6 +20,10 @@ from opentelemetry.instrumentation.logging.handler import LoggingHandler
 
 from nexo.config import Settings
 
+# A run's question-and-answer audit record (service.content_gate): always INFO, so OTLP
+# export does not depend on LOG_LEVEL.
+CONTENT_LOGGER = "nexo.content"
+
 # `result` is the command's stdout output and `content` a run's gated question and
 # answer; only the OTLP handler exports them.
 _STANDARD_ATTRS = set(vars(logging.makeLogRecord({}))) | {
@@ -90,5 +94,8 @@ def configure_logging(settings: Settings, stream=None) -> None:
         *(h for h in root.handlers if isinstance(h, LoggingHandler)),
     ]
     root.setLevel(settings.log_level.upper())
+    # The content record always reaches the OTLP handler; stderr still follows LOG_LEVEL.
+    handler.setLevel(root.level)
+    logging.getLogger(CONTENT_LOGGER).setLevel(logging.INFO)
     for noisy in ("httpx", "httpcore", "neo4j", "openai"):
         logging.getLogger(noisy).setLevel(max(logging.WARNING, root.level))
