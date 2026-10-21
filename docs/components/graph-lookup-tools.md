@@ -42,7 +42,9 @@ query_knowledge_graph.[^test-agent]
 
 The MCP server's `nexo_neighbors` runs the same neighbour query and the same `visible_neighbours`
 filter, and keeps its own result shape; like here, an unknown key and an entity above clearance get
-the same `unknown entity key` error ([MCP server](mcp-server.md)).
+the same `unknown entity key` error ([MCP server](mcp-server.md)). Both read `predicate` (only on
+`RELATED_TO` edges) and `valid_at` (only on dated edges) as `properties(r)['...']`, so Neo4j logs no
+`01N52` "property key does not exist" warning on graphs without them.
 
 [^tools]: Investigation tools
 [^test-agent]: Tool tests
