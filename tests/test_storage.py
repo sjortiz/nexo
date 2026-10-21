@@ -5,6 +5,8 @@ from __future__ import annotations
 from datetime import date
 
 import pytest
+from langchain_core.embeddings import DeterministicFakeEmbedding
+from neo4j.exceptions import Neo4jError
 from pydantic import ValidationError
 
 from nexo.llm import build_embeddings
@@ -14,7 +16,14 @@ from nexo.storage.chunking import (
     lint_document,
     split_document,
 )
+from nexo.storage.neo4j_chunk_store import (
+    _PROCEDURES,
+    _SEARCH_CLAUSE,
+    Neo4jChunkStore,
+    index_queries,
+)
 from nexo.storage.graph_store import (
+    _RANK,
     UnsafeCypherError,
     _plan_writes,
     validate_read_only_cypher,
@@ -261,3 +270,90 @@ def test_plan_writes_rejects_unsafe_relation_types():
     )
     with pytest.raises(ValueError, match="unsafe relationship type"):
         _plan_writes([row])
+
+
+def test_rank_case_follows_sensitivity_and_counts_unknown_levels_as_phi():
+    """Each level maps to its rank; anything else, including null, ranks as phi."""
+    for level in Sensitivity:
+        assert f"WHEN '{level}' THEN {level.rank} " in _RANK
+    assert _RANK.endswith(f"ELSE {Sensitivity.PHI.rank} END")
+
+
+def _kernel(*versions):
+    """dbms.components() rows for a kernel reporting these versions."""
+    return [
+        {"name": "Neo4j Kernel", "versions": list(versions)},
+        {"name": "Cypher", "versions": ["5", "25"]},
+    ]
+
+
+@pytest.mark.parametrize(
+    ("components", "expected"),
+    [
+        (_kernel("5.26.32"), _PROCEDURES),
+        (_kernel("2025.12.0-aura"), _PROCEDURES),
+        (_kernel("2026.08.1"), _PROCEDURES),
+        (_kernel("2026.09.0"), _SEARCH_CLAUSE),
+        (_kernel("2026.9"), _SEARCH_CLAUSE),
+        (_kernel("2026.10.0-rc1"), _SEARCH_CLAUSE),
+        (_kernel("2027.01.0"), _SEARCH_CLAUSE),
+        # Unreadable versions fall back to the procedures every server has.
+        (_kernel("5-aura"), _PROCEDURES),
+        (_kernel("2026"), _PROCEDURES),
+        (_kernel("dev"), _PROCEDURES),
+        (_kernel(), _PROCEDURES),
+        ([{"name": "Cypher", "versions": ["25"]}], _PROCEDURES),
+    ],
+)
+def test_chunk_search_uses_the_search_clause_from_neo4j_2026_09(components, expected):
+    """dbms.components() picks SEARCH on 2026.09+ and the queryNodes procedures otherwise."""
+    assert index_queries(components) is expected
+
+
+def test_unreadable_neo4j_version_is_logged_once(caplog):
+    """The fallback names the version it could not read."""
+    with caplog.at_level("WARNING", logger="nexo.storage.neo4j_chunk_store"):
+        index_queries(_kernel("5-aura"))
+    assert [r.getMessage() for r in caplog.records] == [
+        "unreadable Neo4j version '5-aura': chunk search uses db.index.*.queryNodes"
+    ]
+
+
+class _DeniedSession:
+    """A session whose reads fail as if dbms.components() were not granted."""
+
+    calls = 0
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+    def execute_read(self, *_args, **_kwargs):
+        """Count the call and refuse it."""
+        _DeniedSession.calls += 1
+        # pylint: disable-next=protected-access  # no public constructor with a code
+        raise Neo4jError._hydrate_neo4j(
+            code="Neo.ClientError.Security.Forbidden", message="denied"
+        )
+
+
+class _DeniedGraph:  # pylint: disable=too-few-public-methods
+    """Just enough GraphStore for Neo4jChunkStore._queries."""
+
+    def session(self, *, write):
+        """A session that refuses reads."""
+        assert not write
+        return _DeniedSession()
+
+
+def test_denied_dbms_components_falls_back_to_procedures_once():
+    """A server that refuses dbms.components() gets the procedures, decided once."""
+    store = Neo4jChunkStore(
+        _DeniedGraph(), DeterministicFakeEmbedding(size=4), dimensions=4
+    )
+    # pylint: disable=protected-access
+    assert store._queries is _PROCEDURES
+    assert store._queries is _PROCEDURES
+    assert _DeniedSession.calls == 1

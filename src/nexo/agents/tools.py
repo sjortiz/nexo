@@ -100,17 +100,15 @@ class InvestigationContext:
             self.evidence.withheld.update(withheld)
 
 
-def collect_chunk_ids(value: Any, found: set[str]) -> None:
-    """Add every chunk id string nested anywhere in value to found."""
+def collect_chunk_ids(value: Any) -> set[str]:
+    """Every chunk id string nested anywhere in value."""
     if isinstance(value, str):
-        if CHUNK_ID_RE.fullmatch(value):
-            found.add(value)
-    elif isinstance(value, dict):
-        for item in value.values():
-            collect_chunk_ids(item, found)
-    elif isinstance(value, (list, tuple)):
-        for item in value:
-            collect_chunk_ids(item, found)
+        return {value} if CHUNK_ID_RE.fullmatch(value) else set()
+    if isinstance(value, dict):
+        return collect_chunk_ids(list(value.values()))
+    if isinstance(value, (list, tuple)):
+        return set().union(*(collect_chunk_ids(item) for item in value))
+    return set()
 
 
 # Chunk text is served only by the chunk tools, through the redactor; graph
@@ -171,17 +169,17 @@ RETURN [n IN nodes(p) | n {{.key, .name, .type, .sensitivity_rank}}] AS nodes,
        [r IN relationships(p) | r {{from: startNode(r).key, relation: type(r), to: endNode(r).key,
            predicate: properties(r)['predicate'], valid_at: properties(r)['valid_at'],
            .certainty, .evidence, .chunk_ids,
-           sensitivity_rank: coalesce(r.sensitivity_rank, 3)}}] AS hops"""
+           sensitivity_rank: coalesce(r.sensitivity_rank, {unranked})}}] AS hops"""
 
-_NEIGHBOURS = """\
-MATCH (e:Entity {key: $key})
+_NEIGHBOURS = f"""\
+MATCH (e:Entity {{key: $key}})
 OPTIONAL MATCH (e)-[r]-(n:Entity)
 WITH e, r, n ORDER BY size(coalesce(r.chunk_ids, [])) DESC LIMIT $limit
-RETURN e {.key, .name, .type, .sensitivity_rank} AS entity,
-       r {relation: type(r), outgoing: startNode(r) = e, predicate: properties(r)['predicate'],
+RETURN e {{.key, .name, .type, .sensitivity_rank}} AS entity,
+       r {{relation: type(r), outgoing: startNode(r) = e, predicate: properties(r)['predicate'],
           valid_at: properties(r)['valid_at'], .certainty, .evidence, .chunk_ids,
-          sensitivity_rank: coalesce(r.sensitivity_rank, 3)} AS edge,
-       n {.key, .name, .type, .sensitivity_rank} AS neighbour"""
+          sensitivity_rank: coalesce(r.sensitivity_rank, {_UNKNOWN_RANK})}} AS edge,
+       n {{.key, .name, .type, .sensitivity_rank}} AS neighbour"""
 
 _UNKNOWN_KEY = {
     "error": "unknown entity key; look entities up by name and alias with "
@@ -267,8 +265,7 @@ class _Call:
 
     def reply(self, payload: dict[str, Any], detail: str, max_chars: int) -> str:
         """Record the chunk ids in payload as discovered and return it to the model."""
-        found: set[str] = set()
-        collect_chunk_ids(payload, found)
+        found = collect_chunk_ids(payload)
         self.ctx.record_discovered(found)
         payload["chunk_ids_found"] = sorted(found)
         trace.get_current_span().set_attribute("nexo.graph.chunk_ids_found", len(found))
@@ -413,7 +410,7 @@ def _lookup_tools(
         result = _read_graph(
             graph,
             call,
-            _PATHS.format(paths=paths, hops=hops),
+            _PATHS.format(paths=paths, hops=hops, unranked=_UNKNOWN_RANK),
             {"from_key": from_key, "to_key": to_key},
         )
         if isinstance(result, str):

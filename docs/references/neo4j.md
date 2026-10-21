@@ -25,7 +25,9 @@ sources:
 
 Neo4j stores the graph: `Document`/`Chunk` nodes (lexical graph) and resolved entities with
 evidence-carrying relationships (domain graph), each pointing back to its chunks. The agent queries it
-with read-only Cypher. Server: Neo4j 5.26 Community in compose; the test suite also passes on 2026.09.
+with read-only Cypher. Server: Neo4j 5.26 Community in compose; the test suite also passes on
+2026.09 and 2026.10, where chunk search uses the `SEARCH` clause
+([Chunk store](../components/chunk-store.md#neo4j-versions)).
 Driver pinned as `neo4j>=6.4,<7`. Schema: [Knowledge graph data model](../architecture/data-model.md).
 
 # Features used

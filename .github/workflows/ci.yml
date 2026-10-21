@@ -10,11 +10,16 @@ permissions:
 
 jobs:
   test:
-    name: test (${{ matrix.os }})
+    name: test (${{ matrix.os }}, ${{ matrix.neo4j }})
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest]
+        neo4j: ["neo4j:5.26-community"]
+        # Chunk search uses SEARCH on 2026.09+ and the procedures on 5.26: test both.
+        include:
+          - os: ubuntu-latest
+            neo4j: "neo4j:2026.10-community"
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v7
@@ -30,7 +35,7 @@ jobs:
       # Containers only run on Linux runners; the Neo4j tests skip elsewhere.
       - name: Start Neo4j
         if: runner.os == 'Linux'
-        run: make neo4j-test CONTAINER=docker
+        run: make neo4j-test CONTAINER=docker NEO4J_TEST_IMAGE=${{ matrix.neo4j }}
       - name: Test
         env:
           NEO4J_TEST_URI: ${{ runner.os == 'Linux' && 'bolt://127.0.0.1:7688' || '' }}

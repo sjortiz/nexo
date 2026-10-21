@@ -60,7 +60,9 @@ date-bounded filter.
 
 BM25 runs in-process over the embedded text (title, section path, chunk, glossary notes), with
 case- and accent-folded tokens so "compró" matches "compro". The index rebuilds lazily after any
-write. Each search is a `retrieval nexo-chunks` span with `nexo.retrieval.mode`.
+write. Before fusion each ranking keeps `candidate_count(k, mode)` allowed hits (`k` in `vector`
+mode, else `max(4k, 20)`), the same in both stores. Each search is a `retrieval nexo-chunks` span
+with `nexo.retrieval.mode`.
 
 # Implementations
 
@@ -74,6 +76,25 @@ write. Each search is a `retrieval nexo-chunks` span with `nexo.retrieval.mode`.
 The recommendation follows the AWS vector database guidance's decision criteria.[^aws-vdb] See
 [ADR-0018](../decisions/adr-0018-chunks-in-neo4j.md), which supersedes
 [ADR-0004](../decisions/adr-0004-chunk-store-interface-and-pgvector.md).
+
+# Neo4j versions
+
+`Neo4jChunkStore` reads its two indexes in whichever form the server supports, decided once per
+store from `CALL dbms.components()`:[^neo4j-store]
+
+| Neo4j | Index lookup |
+|---|---|
+| 2026.09 and later | `CYPHER 25 ... SEARCH c IN (VECTOR INDEX ... )` and `(FULLTEXT INDEX ...)`: no deprecation notifications. |
+| 5.26 (compose and CI default) up to 2026.08 | `db.index.vector.queryNodes` and `db.index.fulltext.queryNodes`; 2026.x deprecates them. |
+
+`SEARCH` reads vector indexes from 2026.01 and full-text indexes from 2026.09, so the store switches
+both at 2026.09. A version it cannot read, or a user not allowed to call `dbms.components()`, gets
+the procedures and one warning in the log. A long-running process (`nexo mcp`, `nexo review-ui`)
+keeps its first choice until it restarts, so restart it after upgrading Neo4j.
+
+Both forms ask the index for the same number of hits and rank them the same; the Neo4j integration
+tests compare them on each server, and CI runs them on 5.26 and 2026.10
+(`make test-neo4j NEO4J_TEST_IMAGE=neo4j:2026.10-community` locally).
 
 [^vector-store]: ChunkStore and LocalChunkStore
 [^neo4j-store]: Neo4jChunkStore

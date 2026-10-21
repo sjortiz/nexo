@@ -9,6 +9,7 @@ NEO4J_TEST_URI=bolt://127.0.0.1:7688 NEO4J_TEST_PASSWORD=nexo-test-pass \
 from __future__ import annotations
 
 import json
+import logging
 import os
 import uuid
 from datetime import UTC, datetime
@@ -29,13 +30,14 @@ from nexo.agents.models import InvestigationScope
 from nexo.agents.tools import (
     _NEIGHBOURS,
     _PATHS,
+    _UNKNOWN_RANK,
     InvestigationContext,
     build_investigation_tools,
 )
 from nexo.mcp_server import build_mcp_server
 from nexo.orchestration.graph import GraphDependencies, build_graph
 from nexo.service import Runtime
-from nexo.storage.graph_store import GraphStore, QueryLimits
+from nexo.storage.graph_store import GraphStore, QueryLimits, _refresh_derived
 from nexo.storage.ingest import (
     ExtractionAids,
     IngestionTargets,
@@ -54,7 +56,11 @@ from nexo.storage.schemas import (
     Triple,
 )
 from nexo.storage.sensitive_data import NoopDetector, RegexDetector
-from nexo.storage.neo4j_chunk_store import Neo4jChunkStore, import_local_store
+from nexo.storage.neo4j_chunk_store import (
+    _PROCEDURES,
+    Neo4jChunkStore,
+    import_local_store,
+)
 from nexo.storage.vector_store import ChunkFilter, LocalChunkStore
 from tests.conftest import RecordingChatModel, make_chunk
 from tests.test_agent import ScriptedClient, _completion, _tool_call
@@ -383,6 +389,54 @@ def test_sensitivity_is_the_least_sensitive_source_and_follows_withdrawals(store
     assert state() == (3, {"PII", "PHI"}, [3])  # back to PHI; labels return
 
 
+def _acme_rank_and_labels(store):
+    """Acme's sensitivity rank, its :PII/:PHI labels, and its ACQUIRED edges' ranks."""
+    entity = store.run_read_query(
+        "MATCH (e:Entity {name: 'Acme'}) RETURN e.sensitivity_rank AS rank, labels(e) AS labels"
+    ).rows[0]
+    edges = store.run_read_query(
+        "MATCH (:Entity)-[r:ACQUIRED]->(:Entity) RETURN r.sensitivity_rank AS rank"
+    ).rows
+    return (
+        entity["rank"],
+        {"PII", "PHI"} & set(entity["labels"]),
+        [e["rank"] for e in edges],
+    )
+
+
+def test_pii_sources_label_pii_without_phi(store):
+    """Rank 2 (pii) sets the :PII label alone; :PHI needs rank 3."""
+    acme, beta = _resolved("Acme"), _resolved("Beta")
+    pii = Sensitivity.PII
+    store.replace_source(
+        DocumentMetadata(source_id="hr", sensitivity=pii),
+        _chunks("hr", C1, sensitivity=pii),
+        [_row(C1, "hr", (acme, "ACQUIRED", beta), pii)],
+    )
+    assert _acme_rank_and_labels(store) == (2, {"PII"}, [2])
+
+
+@pytest.mark.parametrize("level", ["secret", None])
+def test_unknown_chunk_sensitivity_ranks_as_phi(store, level):
+    """A chunk whose sensitivity is unknown or missing makes what it supports PHI."""
+    acme, beta = _resolved("Acme"), _resolved("Beta")
+    store.replace_source(
+        DocumentMetadata(source_id="memo"),
+        _chunks("memo", C1),
+        [_row(C1, "memo", (acme, "ACQUIRED", beta))],
+    )
+    assert _acme_rank_and_labels(store) == (1, set(), [1])
+
+    with store.session(write=True) as session:
+        session.run(
+            "MATCH (c:Chunk {chunk_id: $id}) SET c.sensitivity = $level",
+            id=C1,
+            level=level,
+        ).consume()
+        session.execute_write(_refresh_derived, [acme.key, beta.key])
+    assert _acme_rank_and_labels(store) == (3, {"PII", "PHI"}, [3])
+
+
 def test_mcp_tools_against_a_real_graph(store, settings, chunk_store):
     """MCP tools list, find, traverse and query a real graph while withholding PHI."""
     acme, beta, jane = (
@@ -587,7 +641,10 @@ def test_lookups_read_predicate_without_unknown_property_warnings(
     )
     reads = [
         (_NEIGHBOURS, {"key": acme.key, "limit": 25}),
-        (_PATHS.format(paths=5, hops=3), {"from_key": acme.key, "to_key": beta.key}),
+        (
+            _PATHS.format(paths=5, hops=3, unranked=_UNKNOWN_RANK),
+            {"from_key": acme.key, "to_key": beta.key},
+        ),
     ]
     # Earlier tests may have created these keys; keys Neo4j has never seen show
     # whether the queries would warn on a graph that never had them.
@@ -791,6 +848,37 @@ def test_neo4j_chunk_store_round_trip_and_filters(store, chunks_in_neo4j):
     assert chunks_in_neo4j.delete_source("memo", keep={memo.chunk_id}) == 0
     assert chunks_in_neo4j.delete_source("memo") == 1
     assert not chunks_in_neo4j.get_by_ids([memo.chunk_id])
+
+
+def test_hybrid_search_ranks_alike_on_search_and_procedures(
+    store, chunks_in_neo4j, caplog
+):
+    """The store's index lookups match the procedures' ranking and raise no deprecation."""
+    texts = [
+        "Acme Holdings acquired Beta Labs in 2023.",
+        "Beta Labs makes diagnostic kits for clinics.",
+        "Order XR-7731 shipped to Gamma Clinics.",
+        "Quarterly revenue grew across every region.",
+        "Gamma Clinics buys kits from Beta Labs.",
+    ]
+    chunks = [make_chunk("memo", i, text) for i, text in enumerate(texts)]
+    chunks_in_neo4j.upsert(chunks, texts)
+    everyone = ChunkFilter(max_sensitivity=Sensitivity.PHI)
+
+    with caplog.at_level(logging.WARNING, logger="neo4j.notifications"):
+        ranked = [
+            c.chunk_id for c in chunks_in_neo4j.search("Beta Labs kits", 4, everyone)
+        ]
+    assert not [r for r in caplog.records if "deprecated" in r.getMessage()]
+
+    procedures = Neo4jChunkStore(
+        store, DeterministicFakeEmbedding(size=DIMS), dimensions=DIMS
+    )
+    procedures._queries = _PROCEDURES  # pylint: disable=protected-access
+    assert [
+        c.chunk_id for c in procedures.search("Beta Labs kits", 4, everyone)
+    ] == ranked
+    assert len(ranked) == 4
 
 
 def test_chunk_text_survives_the_graph_swap(store, chunks_in_neo4j):

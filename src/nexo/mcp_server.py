@@ -339,8 +339,7 @@ def build_mcp_server(  # pylint: disable=too-many-locals  # one closure per tool
                 raise ToolError(str(exc)) from exc
             result = read(query)
             rows = redact_above_clearance(result.rows, clearance.rank)
-            found: set[str] = set()
-            collect_chunk_ids(rows, found)
+            found = collect_chunk_ids(rows)
             return {
                 "rows": rows,
                 "truncated": result.truncated,
