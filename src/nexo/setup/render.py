@@ -14,6 +14,7 @@ host name left to compose) into the committed docker-compose.yml and deploy/rend
 from __future__ import annotations
 
 import re
+from collections.abc import Collection
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -175,7 +176,7 @@ def _compose_fragment(
     return {k: v for k, v in fragment.items() if not k.startswith("x-")}
 
 
-def _app_secrets(casting: Casting) -> dict[str, str]:
+def _app_secrets(casting: Casting, on: set[str]) -> dict[str, str]:
     """Generated secrets the local nexo container reads, interpolated by compose.
 
     Local only: on your own machine compose hands them over as environment variables. A
@@ -184,16 +185,20 @@ def _app_secrets(casting: Casting) -> dict[str, str]:
     keys = ["NEO4J_PASSWORD"]
     if casting.spec.models.provider == "vllm":
         keys += ["VLLM_API_KEY", "EMBEDDING_API_KEY"]
+    if "langfuse" in on:  # nexo eval's experiments
+        keys += ["LANGFUSE_PUBLIC_KEY", "LANGFUSE_SECRET_KEY"]
     return {key: f"${{{key}}}" for key in keys}
 
 
-def _app_environment(casting: Casting, host: Host) -> dict[str, str]:
+def _app_environment(casting: Casting, host: Host, on: set[str]) -> dict[str, str]:
     """Endpoints as the nexo container sees them (macOS: through the engine's gateway)."""
     models = casting.spec.models
     env = {
         "OTEL_EXPORTER_OTLP_ENDPOINT": "http://otel-collector:4318",
         "NEO4J_URI": "neo4j://neo4j:7687",
     }
+    if "langfuse" in on:
+        env["LANGFUSE_HOST"] = "http://langfuse-web:3000"
     if models.local is not None:
         env["LOCAL_BASE_URL"] = f"http://{host.gateway}:{models.local.port}/v1"
     if models.remote is not None:
@@ -268,12 +273,12 @@ def build_compose(
         {"path": layout.path(out / "nexo.env"), "required": True},
     ]
     # The secrets Nexo reads, from the environment `nexo setup` gives compose: no file.
-    app["environment"] = _app_secrets(casting)
+    app["environment"] = _app_secrets(casting, on)
     # Rootless Podman on Linux cannot reach the host's 127.0.0.1 from a bridge network.
     if host.os == "linux":
         app["network_mode"] = "host"
     else:
-        app["environment"] |= _app_environment(casting, host)
+        app["environment"] |= _app_environment(casting, host, on)
     if casting.spec.models.provider == "vllm":
         _configure_vllm(services, casting.spec.models.vllm)
     if layout.portable:
@@ -380,7 +385,7 @@ def secrets_options(casting: Casting) -> dict[str, str]:
     return options
 
 
-def build_env(casting: Casting) -> dict[str, str]:
+def build_env(casting: Casting, on: Collection[str] = ()) -> dict[str, str]:
     """Settings Nexo reads after .env (so the setup file wins); endpoints as the host sees them."""
     spec = casting.spec
     native = spec.target.mode == "native"
@@ -395,6 +400,12 @@ def build_env(casting: Casting) -> dict[str, str]:
         "TRACE_QUERY_TEXT": "true" if spec.telemetry.query_text else "false",
         # Always set, like REVIEW_POLICY: a stale value in .env must not widen what is logged.
         "TELEMETRY_CONTENT_MAX_SENSITIVITY": spec.telemetry.content,
+        # Always set (blank when off or native): nexo eval runs a Langfuse experiment when set.
+        "LANGFUSE_HOST": (
+            f"http://localhost:{spec.ports.langfuse}"
+            if "langfuse" in on and not native
+            else ""
+        ),
     }
     env |= secrets_options(casting)
     models = spec.models
@@ -461,7 +472,7 @@ def rendered_files(
     header = PORTABLE_HEADER if layout.portable else HEADER
     if source := lock.get("source"):
         header += SOURCE_LINE.format(file=source["file"], digest=source["sha256"])
-    env_lines = [f"{key}={value}" for key, value in build_env(casting).items()]
+    env_lines = [f"{key}={value}" for key, value in build_env(casting, on).items()]
     env_file = {f"{layout.out}/nexo.env": header + "\n".join(env_lines) + "\n"}
     if casting.spec.target.mode == "native":
         if extra_addons:

@@ -26,6 +26,15 @@ sources:
   - id: api
     resource: https://langfuse.com/docs/api-and-data-platform/features/public-api
     title: Langfuse public API
+  - id: otel-experiments
+    resource: https://langfuse.com/integrations/native/opentelemetry/experiments
+    title: Ingest experiment spans with OpenTelemetry
+  - id: api-reference
+    resource: https://api.reference.langfuse.com
+    title: Langfuse API reference
+  - id: experiments
+    resource: ../../src/nexo/experiments.py
+    title: Nexo's Langfuse experiments
   - id: local
     resource: ../../deploy/langfuse/compose.yml
     title: Nexo's Langfuse compose file
@@ -38,7 +47,8 @@ sources:
 
 An opt-in add-on for LLM evaluation and fine-tuning work (datasets, experiments, scores, LLM-as-judge,
 annotation queues): `make up LANGFUSE=1` starts it, and the collector then also sends every trace to it
-after stripping message content. It shows GenAI spans as generations with model and token usage.
+after stripping message content. It shows GenAI spans as generations with model and token usage, and
+`nexo eval` runs as an experiment on a dataset of the golden set ([below](#experiments)).
 SigNoz is the default backend ([ADR-0015](../decisions/adr-0015-signoz-default-observability.md);
 [ADR-0014](../decisions/adr-0014-langfuse-default-trace-backend.md) made Langfuse the default before).
 
@@ -82,7 +92,29 @@ and an admin login (`LANGFUSE_USER_EMAIL`, default `admin@nexo.local`, and
 Langfuse v4 reads observations from `/api/public/v2/observations` (filter by `traceId`). The v3
 endpoint `/api/public/traces` returns 404.[^api]
 
+# Experiments
+
+Langfuse v4 has no endpoint that links a trace to a dataset run: it builds experiments from
+OpenTelemetry attributes.[^otel-experiments] `nexo eval` uses the public API only for the dataset and
+the scores:[^experiments][^api-reference]
+
+| Step | How |
+|---|---|
+| Dataset | `POST /api/public/v2/datasets` with the name; the same name updates it. |
+| Items | `POST /api/public/dataset-items` with an `id` (unique in the project, 255 characters at most); the same id updates the item and returns a new `version`. |
+| Experiment | Baggage on each case's root span: `langfuse.experiment.id`, `.name`, `.dataset.id`, `.metadata.*`. The root has no parent, so each case is its own trace. |
+| Item | On the root and, through baggage, its children: `langfuse.experiment.item.id`, `.version` and `.root_observation_id` (the root's own span id). |
+| Scores | `POST /api/public/scores` with `traceId` and `observationId` (the root span), `dataType: NUMERIC`; the same `id` overwrites a score. |
+
+Verified on 4.64.0: one OTLP trace with these attributes became an experiment on the dataset with one
+item, and a score posted on its root appeared on that item (`/api/public/experiment-items`, which
+needs `fromStartTime`). Experiment ids, names and model names are the only values in baggage, which
+can reach outbound request headers.
+
 [^otel]: Langfuse OpenTelemetry integration
+[^otel-experiments]: Ingest experiment spans with OpenTelemetry
+[^api-reference]: Langfuse API reference
+[^experiments]: Nexo's Langfuse experiments
 [^compose]: Langfuse self-hosting with Docker Compose
 [^headless]: Langfuse headless initialization
 [^blob]: Langfuse blob storage

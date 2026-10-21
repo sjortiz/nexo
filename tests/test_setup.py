@@ -132,6 +132,22 @@ def test_an_addon_brings_its_services_pipeline_and_required_keys(workdir):
     assert "LANGFUSE" not in yaml.safe_dump(compose)
 
 
+def test_langfuse_points_nexo_eval_at_it_only_when_on(workdir):
+    """With the add-on, nexo eval on the host and in the container finds Langfuse and its keys."""
+    path = _setup(
+        workdir, "mac-single", lambda d: d["spec"].update(ports={"langfuse": 13000})
+    )
+    compose, _, env = _render(workdir, path, addons={"langfuse"})
+    assert env["LANGFUSE_HOST"] == "http://localhost:13000"
+    app = compose["services"]["nexo"]["environment"]
+    assert app["LANGFUSE_HOST"] == "http://langfuse-web:3000"
+    assert app["LANGFUSE_SECRET_KEY"] == "${LANGFUSE_SECRET_KEY}"
+
+    _, _, env = _render(workdir, path)
+    assert env["LANGFUSE_HOST"] == ""  # overrides a LANGFUSE_HOST left in .env
+    assert Settings(_env_file=None, langfuse_host="").langfuse_host is None
+
+
 def test_agent_inbox_renders_only_when_enabled_and_only_on_loopback(workdir):
     """Off by default; on by the flag or by nexo.yaml, published on 127.0.0.1 at the set port."""
     plain = _setup(workdir, "mac-single")

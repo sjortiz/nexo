@@ -40,6 +40,7 @@ def test_native_renders_only_nexo_env_and_removes_the_container_files(workdir):
     assert env["NEO4J_URI"] == "bolt://localhost:7687"
     assert env["OTEL_EXPORTER_OTLP_ENDPOINT"] == ""  # overrides one left in .env
     assert env["OTEL_LOGS_EXPORTER"] == "none"
+    assert env["LANGFUSE_HOST"] == ""  # no add-ons: nexo eval stays off Langfuse
     assert env["NEXO_SECRETS_PROVIDER"] == "file" and env["NEXO_STACK"] == "nexo"
     assert "NEO4J_PASSWORD" not in env  # it stays in the store
 
