@@ -25,14 +25,10 @@ from strands.types.agent import Limits
 
 from nexo.agents.models import AgentOutput, InvestigationScope
 from nexo.agents.redaction import ChunkRedactor
-from nexo.agents.tools import (
-    GraphReader,
-    InvestigationContext,
-    build_investigation_tools,
-)
+from nexo.agents.tools import InvestigationContext, build_investigation_tools
 from nexo.aio import run_sync
 from nexo.config import Settings
-from nexo.storage.graph_store import DATA_MODEL
+from nexo.storage.graph_store import DATA_MODEL, GraphReader
 from nexo.storage.schemas import CHUNK_ID_RE, ChunkRecord
 from nexo.storage.sensitive_data import NoopDetector, SensitiveDataDetector
 from nexo.storage.vector_store import ChunkFilter, ChunkStore

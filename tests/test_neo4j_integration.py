@@ -414,6 +414,8 @@ def test_mcp_tools_against_a_real_graph(store, settings, chunk_store):
     assert neighbors["withheld"] == 1  # Jane Roe is PHI
     hidden = call(server, "nexo_neighbors", {"entity_key": "Person:jane roe"})
     assert hidden.is_error and "clearance" in hidden.content[0].text
+    unknown = data(call(server, "nexo_neighbors", {"entity_key": "X:none"}))
+    assert unknown["edges"] == [] and unknown["withheld"] == 0
 
     rows = data(
         call(
@@ -428,6 +430,16 @@ def test_mcp_tools_against_a_real_graph(store, settings, chunk_store):
     assert rows["rows"] == [{"a": "Acme Holdings", "b": "Beta Labs", "c": C1}] and rows[
         "chunk_ids_found"
     ] == [C1]
+
+    # An edge without a rank (written before ranks existed) is treated as PHI.
+    with GraphDatabase.driver(
+        URI, auth=("neo4j", os.environ["NEO4J_TEST_PASSWORD"])
+    ) as driver:
+        driver.execute_query("MATCH ()-[r:ACQUIRED]->() REMOVE r.sensitivity_rank")
+    neighbors = data(
+        call(server, "nexo_neighbors", {"entity_key": "Organization:beta labs"})
+    )
+    assert neighbors["edges"] == [] and neighbors["withheld"] == 2
 
 
 def test_read_transaction_rejects_writes_server_side(store):

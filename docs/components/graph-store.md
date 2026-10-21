@@ -26,6 +26,9 @@ sources:
 | `run_read_query(cypher)` | agent tool | READ transaction, `NEO4J_QUERY_TIMEOUT_S` (15 s) timeout, `NEO4J_MAX_ROWS` (50) cap with a `truncated` flag. |
 | `describe_schema()` | runtime | Static data model plus the relation patterns present, with counts and direction, injected into the agent prompt. |
 
+The agent tools and the [MCP server](mcp-server.md) depend on `GraphReader`, a protocol with just
+`run_read_query` and `describe_schema`, so tests can pass a fake.
+
 Data model: [Knowledge graph data model](../architecture/data-model.md).[^graph-store]
 
 # Read-only enforcement
