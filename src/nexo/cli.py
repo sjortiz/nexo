@@ -248,11 +248,12 @@ def _eval(args: argparse.Namespace) -> int:
         )
     with GraphStore.from_settings(settings, read_only=True) as graph:
         chunks = chunk_store_from_settings(settings, graph)
-        investigator = build_investigator(settings, graph, chunks)
-        judge = _judge(settings, chunks) if settings.judge_model else None
         repeats = max(1, getattr(args, "repeat", 1))
         scorer = _CaseScorer(
-            investigator, judge, settings.default_clearance, experiment
+            build_investigator(settings, graph, chunks),
+            _judge(settings, chunks) if settings.judge_model else None,
+            settings.default_clearance,
+            experiment,
         )
         for rep in range(1, repeats + 1):
             for case in cases:
@@ -268,7 +269,7 @@ def _eval(args: argparse.Namespace) -> int:
     return 1 if scorer.failed else 0
 
 
-class _CaseScorer:
+class _CaseScorer:  # pylint: disable=too-few-public-methods
     """Scores golden cases one at a time, keeping each question's metrics per repeat."""
 
     def __init__(self, investigator, judge, clearance: str, experiment) -> None:

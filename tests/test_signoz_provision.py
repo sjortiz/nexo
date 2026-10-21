@@ -8,7 +8,7 @@ from nexo.setup.signoz import CHANNEL, DISCARD, PROVISION, provision
 ROOT = Path(__file__).resolve().parent.parent
 
 
-class _FakeSignoz:
+class _FakeSignoz:  # pylint: disable=too-few-public-methods
     """Keeps dashboards, channels and rules in memory, like the SigNoz API does."""
 
     def __init__(self) -> None:
