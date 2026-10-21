@@ -24,7 +24,13 @@ from nexo.agents.tools import (
     build_investigation_tools,
 )
 from nexo.mcp_server import _INDEX_DOCUMENTS, build_mcp_server
-from nexo.storage.schemas import DocumentMetadata, GroundedTriple, Sensitivity
+from nexo.storage.schemas import (
+    Attribute,
+    DocumentMetadata,
+    GroundedAttribute,
+    GroundedTriple,
+    Sensitivity,
+)
 from nexo.storage.vector_store import ChunkFilter
 from tests.conftest import as_model_text
 from tests.test_mcp_server import call, data
@@ -465,3 +471,36 @@ def test_index_reads_undated_documents_without_unknown_property_warnings(store):
     assert _warnings(_INDEX_DOCUMENTS, {}) == []
     for key in ("title", "doc_type", "effective_date"):
         assert _warnings(_INDEX_DOCUMENTS.replace(key, unseen + key), {}) == []
+
+
+def test_attributes_ride_on_mentions_and_leave_with_the_document(store):
+    """An attribute is stored on its MENTIONED_IN edge; re-ingesting without it removes it."""
+    clinic = _resolved("Gamma Clinics")
+    attribute = GroundedAttribute(
+        attribute=Attribute(
+            entity=clinic.ref, name="rating", value="4.8 stars", evidence="4.8 stars"
+        ),
+        chunk_id=C1,
+        source_id="shops",
+        entity=clinic,
+    )
+
+    def stored():
+        with store.session(write=False) as session:
+            return [
+                json.loads(r["a"]) if r["a"] else None
+                for r in session.run(
+                    "MATCH (:Entity {key: $key})-[m:MENTIONED_IN]->(:Chunk)"
+                    " RETURN m.attributes_json AS a",
+                    key=clinic.key,
+                )
+            ]
+
+    store.replace_source(
+        DocumentMetadata(source_id="shops"), _chunks("shops", C1), [], [attribute]
+    )
+    assert stored() == [
+        [{"evidence": "4.8 stars", "name": "rating", "value": "4.8 stars"}]
+    ]
+    store.replace_source(DocumentMetadata(source_id="shops"), _chunks("shops", C1), [])
+    assert not stored()  # the mention, and the entity it alone supported, are gone

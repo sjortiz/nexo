@@ -4,6 +4,7 @@
 * [Structure-aware chunking](chunking.md) - Heading-aware splits, table flattening, glossary notes and document lint.
 * [Triple extraction](triple-extraction.md) - Guided-JSON LLM extraction of entity-relation-entity triples with evidence grounding.
 * [Graph store](graph-store.md) - Neo4j access: atomic document replacement and read-only agent queries.
+* [Ingest exclusions and amount entities](ingest-exclusions.md) - Rules that keep content out of document, search or extraction; amounts become attributes.
 * [Relation ontology](relation-ontology.md) - Canonical relations with synonyms, inverses and type constraints; RELATED_TO fallback.
 * [Entity resolution](entity-resolution.md) - Exact, alias and model-arbitrated merging of mentions into canonical entities.
 * [Chunk store](chunk-store.md) - Get-by-id, filtered similarity search and delete-by-document for chunk text.

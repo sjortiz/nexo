@@ -229,7 +229,7 @@ def test_types_never_merge_and_model_failure_keeps_mentions_separate():
         resolved["Organization:acme"].key == "Organization:acme"
     )  # same-name Product never matches
     assert all(r.method is Resolution.NEW for r in resolved.values())
-    assert catalog.calls[0][0] is ORG
+    assert catalog.calls[0][0] == ORG
     assert (
         len(llm.prompts) == 2
     )  # the model was consulted (and retried) but failed: nothing merged

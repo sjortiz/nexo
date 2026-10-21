@@ -37,8 +37,11 @@ from nexo.storage.schemas import (
     RELATION_RE,
     ChunkRecord,
     DocumentMetadata,
+    ENTITY_TYPE_RE,
     EntityType,
+    GroundedAttribute,
     GroundedTriple,
+    ResolvedEntity,
     Sensitivity,
 )
 from nexo.telemetry import traced_span
@@ -51,13 +54,15 @@ DATA_MODEL = (
 (:Entity:<EntityType>[:PII][:PHI] {key, name, aliases, type, description, \
 chunk_id, chunk_ids, source_ids,
                                   sensitivity_rank, proposed_codes_json})
-(:Entity)-[:MENTIONED_IN {surface, resolution}]->(:Chunk)
+(:Entity)-[:MENTIONED_IN {surface, resolution, attributes_json}]->(:Chunk)   \
+# attributes_json: quantities the chunk states about the entity, [{name, value, evidence}]
 (:Entity)-[:<RELATION> {chunk_id, chunk_ids, evidence, evidence_rank, certainty, valid_at, \
 extracted_as, sensitivity_rank}]->(:Entity)
 (:Entity)-[:RELATED_TO {predicate, ...same properties}]->(:Entity)   \
 # predicate outside the ontology
 EntityType is one of: """
     + ", ".join(t.value for t in EntityType)
+    + " (built-in; a deployment may add its own, see the index)"
     + """
 sensitivity_rank (least sensitive supporting source): """
     + " ".join(f"{level.rank}={level}" for level in Sensitivity)
@@ -202,6 +207,17 @@ class GraphStore:
             for statement in _SCHEMA_STATEMENTS:
                 session.run(statement).consume()
 
+    def document_types(self) -> set[str]:
+        """The doc types of the ingested documents."""
+        with self.session(write=False) as session:
+            return {
+                r["t"]
+                for r in session.run(
+                    "MATCH (d:Document) WHERE d.doc_type IS NOT NULL "
+                    "RETURN DISTINCT d.doc_type AS t"
+                )
+            }
+
     # --- writes (ingestion) ------------------------------------------------------
     @_connection_retry
     def replace_source(
@@ -209,22 +225,23 @@ class GraphStore:
         document: DocumentMetadata,
         chunks: Sequence[ChunkRecord],
         triples: Sequence[GroundedTriple],
+        attributes: Sequence[GroundedAttribute] = (),
     ) -> SourceSwap:
         """Swap a document's lexical and domain subgraph in one transaction.
 
         Detaches the previous version's provenance (dropping what only it
         supported) and its stale chunks, writes Document/Chunk nodes, then upserts
-        the new triples. Current chunks keep their nodes, so text and embeddings
+        the new triples and attributes. Current chunks keep their nodes, so text and embeddings
         stored on them (the Neo4j chunk store) survive the swap.
         """
-        plan = _plan_writes(triples)
+        plan = _plan_writes(triples, attributes)
         keep = sorted(c.chunk_id for c in chunks)
 
         def work(tx: ManagedTransaction) -> int:
             affected, removed = _delete_source(tx, document.source_id, keep)
             if chunks:
                 _write_lexical(tx, document, chunks)
-            if triples:
+            if triples or attributes:
                 _write_domain(tx, plan)
             _refresh_derived(tx, sorted(affected | {m["key"] for m in plan.mentions}))
             return removed
@@ -253,12 +270,12 @@ class GraphStore:
 
     @_connection_retry
     def find_candidates(
-        self, entity_type: EntityType, tokens: Sequence[str], limit: int
+        self, entity_type: str, tokens: Sequence[str], limit: int
     ) -> list[Candidate]:
         """Resolution blocking: same-type entities whose name or alias contains a token."""
         with self._span("find_candidates"), self.session(write=False) as session:
             return session.execute_read(
-                _find_candidates, entity_type.value, list(tokens), limit
+                _find_candidates, str(entity_type), list(tokens), limit
             )
 
     # --- reads (agent tool) ----------------------------------------------------
@@ -333,43 +350,55 @@ class WritePlan(NamedTuple):
     relations: dict[str, list[dict[str, Any]]]
 
 
-def _plan_writes(triples: Sequence[GroundedTriple]) -> WritePlan:
+def _plan_writes(
+    triples: Sequence[GroundedTriple], attributes: Sequence[GroundedAttribute] = ()
+) -> WritePlan:
     entities: dict[str, dict[str, Any]] = {}
     mentions: dict[tuple[str, str, str], dict[str, Any]] = {}
     relations: dict[str, list[dict[str, Any]]] = defaultdict(list)
-    for grounded in triples:
-        for resolved in (grounded.head, grounded.tail):
-            ref = resolved.ref
-            row = entities.setdefault(
-                f"{resolved.key}\x1f{grounded.chunk_id}",
+
+    def mention(resolved: ResolvedEntity, chunk_id: str, source_id: str) -> None:
+        """Plan the entity row and one MENTIONED_IN row per surface form."""
+        ref = resolved.ref
+        row = entities.setdefault(
+            f"{resolved.key}\x1f{chunk_id}",
+            {
+                "key": resolved.key,
+                "name": ref.name,  # only used when the entity is new
+                "type": str(ref.type),
+                "description": ref.description,
+                "chunk_id": chunk_id,
+                "source_id": source_id,
+                "codes": json.dumps(
+                    {k.value: v for k, v in ref.proposed_codes.items()},
+                    sort_keys=True,
+                ),
+            },
+        )
+        row["description"] = row["description"] or ref.description
+        for surface in {ref.name, *ref.aliases}:
+            mentions.setdefault(
+                (resolved.key, chunk_id, surface),
                 {
                     "key": resolved.key,
-                    "name": ref.name,  # only used when the entity is new
-                    "type": ref.type.value,
-                    "description": ref.description,
-                    "chunk_id": grounded.chunk_id,
-                    "source_id": grounded.source_id,
-                    "codes": json.dumps(
-                        {k.value: v for k, v in ref.proposed_codes.items()},
-                        sort_keys=True,
+                    "chunk_id": chunk_id,
+                    "surface": surface,
+                    "method": (
+                        resolved.method.value if surface == ref.name else "stated_alias"
                     ),
+                    "attributes": [],
                 },
             )
-            row["description"] = row["description"] or ref.description
-            for surface in {ref.name, *ref.aliases}:
-                mentions.setdefault(
-                    (resolved.key, grounded.chunk_id, surface),
-                    {
-                        "key": resolved.key,
-                        "chunk_id": grounded.chunk_id,
-                        "surface": surface,
-                        "method": (
-                            resolved.method.value
-                            if surface == ref.name
-                            else "stated_alias"
-                        ),
-                    },
-                )
+
+    for placed in attributes:
+        mention(placed.entity, placed.chunk_id, placed.source_id)
+        a = placed.attribute
+        mentions[(placed.entity.key, placed.chunk_id, placed.entity.ref.name)][
+            "attributes"
+        ].append({"name": a.name, "value": a.value, "evidence": a.evidence})
+    for grounded in triples:
+        for resolved in (grounded.head, grounded.tail):
+            mention(resolved, grounded.chunk_id, grounded.source_id)
         # Defence in depth for the f-string below.
         if not RELATION_RE.fullmatch(grounded.relation):
             raise ValueError(f"unsafe relationship type {grounded.relation!r}")
@@ -388,6 +417,9 @@ def _plan_writes(triples: Sequence[GroundedTriple]) -> WritePlan:
     by_label: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for row in entities.values():
         by_label[row["type"]].append(row)
+    for row in mentions.values():
+        found = row.pop("attributes")
+        row["attributes_json"] = json.dumps(found, sort_keys=True) if found else None
     return WritePlan(by_label, list(mentions.values()), relations)
 
 
@@ -437,8 +469,9 @@ def _write_lexical(
 
 def _write_domain(tx: ManagedTransaction, plan: WritePlan) -> None:
     for label, rows in plan.entities.items():
-        # Labels cannot be parameters; only closed-enum literals reach here.
-        EntityType(label)
+        # Labels cannot be parameters: only plain identifiers (validated type names) reach here.
+        if not ENTITY_TYPE_RE.fullmatch(label):
+            raise ValueError(f"unsafe entity label {label!r}")
         tx.run(
             cast(
                 LiteralString,
@@ -461,7 +494,7 @@ def _write_domain(tx: ManagedTransaction, plan: WritePlan) -> None:
         UNWIND $rows AS row
         MATCH (e:Entity {key: row.key}), (c:Chunk {chunk_id: row.chunk_id})
         MERGE (e)-[m:MENTIONED_IN {surface: row.surface}]->(c)
-        SET m.resolution = row.method
+        SET m.resolution = row.method, m.attributes_json = row.attributes_json
         """,
         rows=plan.mentions,
     ).consume()

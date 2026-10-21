@@ -2,7 +2,8 @@
 
 Pipeline for one document:
 
-1. Lint + flatten tables, heading-aware chunking (`chunking.py`).
+1. Lint, mark exclusion regions (`exclusions.py`), flatten tables,
+   heading-aware chunking (`chunking.py`).
 2. Sensitivity classification per chunk (declared floor + PII/PHI detector),
    optional redaction before anything is embedded or extracted.
 3. Upsert chunks into the vector store under deterministic `chunk_id`s.
@@ -11,8 +12,9 @@ Pipeline for one document:
    The tail of the previous chunk is shown as context so cross-chunk
    references resolve; evidence must still come from the chunk itself.
 5. Drop triples whose evidence quote is not in the chunk (hallucination
-   guard); map predicates onto the ontology (synonyms, inverses, type
-   constraints, RELATED_TO fallback).
+   guard) or whose entity an exclusion rule names; turn a triple that made an
+   amount an entity into an attribute (`AMOUNT_ENTITIES`); map predicates onto
+   the ontology (synonyms, inverses, type constraints, RELATED_TO fallback).
 6. Resolve entities against each other and the existing graph.
 7. Replace the document's lexical + domain subgraph in one transaction.
 8. Delete superseded vector chunks.
@@ -37,21 +39,30 @@ from langchain_core.runnables import RunnableConfig
 from pydantic import BaseModel, Field
 
 from nexo.llm import StructuredOutputError, invoke_structured
+from nexo.storage.amounts import attribute_name, is_amount
 from nexo.storage.chunking import (
     flatten_markdown_tables,
     glossary_notes,
     lint_document,
     split_document,
 )
+from nexo.storage.entity_types import EntityTypes
+from nexo.storage.exclusions import (
+    IngestExclusions,
+    Marked,
+    stage_texts,
+    strip_markers,
+)
 from nexo.storage.ontology import FALLBACK_RELATION, Ontology
 from nexo.storage.resolution import EntityResolver
 from nexo.storage.schemas import (
     SourceSwap,
+    Attribute,
     ChunkRecord,
     DocumentMetadata,
     EntityRef,
-    EntityType,
     ExtractionResult,
+    GroundedAttribute,
     GroundedTriple,
     ResolvedEntity,
     Triple,
@@ -66,7 +77,8 @@ EXTRACTION_SYSTEM_PROMPT = """\
 You extract a knowledge graph from one passage of a document.
 
 Return entity-relation-entity triples as JSON matching the schema.
-- Entity types: {entity_types}. Pick the most specific type; skip entities that fit none.
+- Entity types (pick the most specific; skip entities that fit none):
+{entity_types}
 - Use the most complete name for each entity ("Acme Holdings Inc.", not "the company" or "Acme"),
   including names introduced in the preceding text; resolve pronouns.
 - aliases: other names the passage itself uses for the same entity (acronyms, short or former names).
@@ -76,11 +88,13 @@ Return entity-relation-entity triples as JSON matching the schema.
 - Former roles and past relationships count as much as current ones ("previously led product at
   Delta Devices" is a Person-EMPLOYED_BY-Organization fact): extract them, with valid_at the date
   they held when the passage gives one.
-- No separate entities for dates, amounts or quantities: put a date the fact holds in valid_at.
+- Dates, amounts, prices, ratings, percentages and other quantities are never entities: put a
+  date the fact holds in valid_at, and a quantity in attributes, on the entity it describes
+  (name: what is measured, value: as written with its unit, evidence: a verbatim quote).
 - evidence: a verbatim quote (max ~200 characters) from the passage that states the fact.
 - certainty: "asserted", "possible" (hedged: may, suspected) or "negated" (ruled out, denied).
 - proposed_codes: only codes printed in the passage (ICD-10-CM, RxNorm, SNOMED CT, MeSH, UMLS).
-- Return {{"triples": []}} if the passage states no relationships.
+- Return {{"triples": [], "attributes": []}} if the passage states no relationships.
 """
 
 
@@ -92,6 +106,7 @@ class GraphWriter(Protocol):  # pylint: disable=too-few-public-methods  # protoc
         document: DocumentMetadata,
         chunks: Sequence[ChunkRecord],
         triples: Sequence[GroundedTriple],
+        attributes: Sequence[GroundedAttribute] = (),
     ) -> SourceSwap:
         """Replace everything the document contributed; say what changed."""
 
@@ -104,6 +119,13 @@ class IngestionReport(BaseModel):
     triples_extracted: int
     triples_written: int
     dropped: dict[str, int] = Field(default_factory=dict)
+    converted: dict[str, int] = Field(
+        default_factory=dict, description="triples turned into attributes, by reason"
+    )
+    attributes_written: int = 0
+    excluded: dict[str, int] = Field(
+        default_factory=dict, description="regions each exclusion rule matched"
+    )
     relations: dict[str, int] = Field(
         default_factory=dict, description="canonical, remapped, fallback"
     )
@@ -132,7 +154,7 @@ def _pair(kept: _Kept) -> tuple:
 
 
 @dataclass(frozen=True)
-class IngestionLimits:
+class IngestionLimits:  # pylint: disable=too-many-instance-attributes  # one field per setting
     """Sizes and policies ingestion reads once; the service builds it from Settings."""
 
     chunk_size: int
@@ -142,6 +164,7 @@ class IngestionLimits:
     extraction_context_chars: int
     require_grounded_evidence: bool
     sensitive_data_policy: str
+    amount_entities: str = "convert"
 
     @classmethod
     def from_settings(cls, settings: Any) -> IngestionLimits:
@@ -154,6 +177,7 @@ class IngestionLimits:
             extraction_context_chars=settings.extraction_context_chars,
             require_grounded_evidence=settings.require_grounded_evidence,
             sensitive_data_policy=settings.sensitive_data_policy,
+            amount_entities=settings.amount_entities,
         )
 
 
@@ -164,6 +188,7 @@ class _Counts:
     triples_extracted: int = 0
     failed_chunk_ids: list[str] = field(default_factory=list)
     dropped: Counter[str] = field(default_factory=Counter)
+    converted: Counter[str] = field(default_factory=Counter)
     relations: Counter[str] = field(default_factory=Counter)
     resolution: Counter[str] = field(default_factory=Counter)
 
@@ -184,6 +209,8 @@ class ExtractionAids:
     ontology: Ontology | None = None
     resolver: EntityResolver | None = None
     callbacks: list = field(default_factory=list)
+    exclusions: IngestExclusions | None = None
+    entity_types: EntityTypes = field(default_factory=EntityTypes)
 
 
 class _Kept(NamedTuple):
@@ -194,6 +221,32 @@ class _Kept(NamedTuple):
     relation: str
     swap: bool  # store tail -> head
     original: str | None  # the extracted predicate, when the ontology rewrote it
+
+
+class _KeptAttribute(NamedTuple):
+    """A grounded attribute, before entity resolution."""
+
+    chunk: ChunkRecord
+    attribute: Attribute
+
+
+@dataclass
+class _Prepared:
+    """Chunks as stored, plus the text each stage sees of them (by chunk_id)."""
+
+    chunks: list[ChunkRecord]
+    warnings: list[str]
+    search: dict[str, str]
+    extraction: dict[str, str]
+    excluded: Counter[str]
+
+    def views(self, stage: str) -> list[ChunkRecord]:
+        """The chunks with the text that stage sees."""
+        texts = self.search if stage == "search" else self.extraction
+        return [c.model_copy(update={"text": texts[c.chunk_id]}) for c in self.chunks]
+
+
+_DROP = object()  # an amount triple to discard
 
 
 class KnowledgeGraphIngestor:
@@ -231,7 +284,7 @@ class KnowledgeGraphIngestor:
             else ""
         )
         self._system_prompt = EXTRACTION_SYSTEM_PROMPT.format(
-            entity_types=", ".join(t.value for t in EntityType),
+            entity_types=aids.entity_types.prompt_block(),
             relation_rule=relation_rule,
         )
 
@@ -250,17 +303,20 @@ class KnowledgeGraphIngestor:
                 "document.doc_type": metadata.doc_type,
             },
         ) as span:
-            chunks, warnings = self._prepare(text, metadata)
+            prepared = self._prepare(text, metadata)
+            chunks = prepared.chunks
             self._targets.chunk_store.upsert(
                 chunks,
                 [
                     c.embedding_text(glossary_notes(c.text, self._aids.glossary))
-                    for c in chunks
+                    for c in prepared.views("search")
                 ],
             )
 
-            grounded, counts = self._triples(chunks, resolve=True)
-            swap = self._targets.graph_writer.replace_source(metadata, chunks, grounded)
+            grounded, attributes, counts = self._triples(prepared, resolve=True)
+            swap = self._targets.graph_writer.replace_source(
+                metadata, chunks, grounded, attributes
+            )
             # The graph swap removes stale chunks itself when they live in Neo4j.
             stale = max(
                 swap.chunks_removed,
@@ -277,10 +333,10 @@ class KnowledgeGraphIngestor:
             )
             return self._report(
                 metadata,
-                chunks,
-                warnings,
+                prepared,
                 counts,
                 triples_written=swap.triples_written,
+                attributes_written=len(attributes),
                 stale_chunks_deleted=stale,
                 sensitivity=dict(Counter(c.sensitivity.value for c in chunks)),
             )
@@ -289,48 +345,78 @@ class KnowledgeGraphIngestor:
         self, text: str, metadata: DocumentMetadata
     ) -> tuple[list[GroundedTriple], IngestionReport]:
         """Extract triples without writes or graph resolution, for evaluation against gold."""
-        chunks, warnings = self._prepare(text, metadata)
-        grounded, counts = self._triples(chunks, resolve=False)
-        return grounded, self._report(metadata, chunks, warnings, counts)
+        prepared = self._prepare(text, metadata)
+        grounded, _, counts = self._triples(prepared, resolve=False)
+        return grounded, self._report(metadata, prepared, counts)
 
     @staticmethod
     def _report(
         metadata: DocumentMetadata,
-        chunks: list[ChunkRecord],
-        warnings: list[str],
+        prepared: _Prepared,
         counts: _Counts,
         **written: Any,
     ) -> IngestionReport:
         return IngestionReport(
             source_id=metadata.source_id,
-            chunk_count=len(chunks),
+            chunk_count=len(prepared.chunks),
             triples_extracted=counts.triples_extracted,
             triples_written=written.pop("triples_written", 0),
             dropped=dict(counts.dropped),
+            converted=dict(counts.converted),
+            excluded=dict(prepared.excluded),
             relations=dict(counts.relations),
             resolution=dict(counts.resolution),
             failed_chunk_ids=counts.failed_chunk_ids,
-            lint_warnings=warnings,
+            lint_warnings=prepared.warnings,
             **written,
         )
 
     # --- stages ------------------------------------------------------------------------
-    def _prepare(
-        self, text: str, metadata: DocumentMetadata
-    ) -> tuple[list[ChunkRecord], list[str]]:
+    def _prepare(self, text: str, metadata: DocumentMetadata) -> _Prepared:
+        """Chunks as stored, and what search and extraction see of each one.
+
+        Exclusion regions are marked before chunking (so a region split across
+        chunks is still recognised), then cut out per stage; the stored text and
+        chunk id are those of the chunk without its marker lines.
+        """
         warnings = lint_document(text)
-        text, tables = flatten_markdown_tables(text)
+        exclusions = self._aids.exclusions
+        marked = (
+            exclusions.mark(text, metadata.doc_type) if exclusions else Marked(text)
+        )
+        text, tables = flatten_markdown_tables(marked.text)
         if tables:
             warnings.append(
                 f"{tables} table(s) flattened to bullets; prefer prose/lists at the source"
             )
-        chunks = split_document(
-            text,
-            metadata,
-            chunk_size=self._limits.chunk_size,
-            chunk_overlap=self._limits.chunk_overlap,
+        chunks = self._classify(
+            split_document(
+                text,
+                metadata,
+                chunk_size=self._limits.chunk_size,
+                chunk_overlap=self._limits.chunk_overlap,
+            )
         )
-        return self._classify(chunks), warnings
+        raw = [c.text for c in chunks]
+        stored = [
+            c.model_copy(
+                update={
+                    "text": strip_markers(c.text),
+                    "chunk_id": ChunkRecord.make_id(
+                        c.source_id, c.ordinal, strip_markers(c.text)
+                    ),
+                }
+            )
+            for c in chunks
+        ]
+        ids = [c.chunk_id for c in stored]
+        return _Prepared(
+            chunks=stored,
+            warnings=warnings,
+            search=dict(zip(ids, stage_texts(raw, "search"), strict=True)),
+            extraction=dict(zip(ids, stage_texts(raw, "extraction"), strict=True)),
+            excluded=marked.matched,
+        )
 
     def _classify(self, chunks: list[ChunkRecord]) -> list[ChunkRecord]:
         classified: list[ChunkRecord] = []
@@ -357,34 +443,129 @@ class KnowledgeGraphIngestor:
         return classified
 
     def _triples(
-        self, chunks: list[ChunkRecord], *, resolve: bool
-    ) -> tuple[list[GroundedTriple], _Counts]:
-        """Grounded triples placed on resolved entities, and what the stages counted."""
+        self, prepared: _Prepared, *, resolve: bool
+    ) -> tuple[list[GroundedTriple], list[GroundedAttribute], _Counts]:
+        """Grounded triples and attributes on resolved entities, and what was counted."""
         counts = _Counts()
-        kept = self._grounded(chunks, counts)
+        # Chunks whose extraction text is empty (all excluded) cost no model call.
+        views = [c for c in prepared.views("extraction") if c.text.strip()]
+        kept, kept_attributes = self._grounded(views, counts)
         refs = [ref for k in kept for ref in (k.triple.head, k.triple.tail)]
+        refs += [k.attribute.entity for k in kept_attributes]
         resolved = self._aids.resolver.resolve(refs) if resolve else {}
         grounded = _place(kept, resolved, counts.dropped)
+        attributes = [
+            GroundedAttribute(
+                attribute=k.attribute,
+                chunk_id=k.chunk.chunk_id,
+                source_id=k.chunk.source_id,
+                entity=_placed(k.attribute.entity, resolved),
+            )
+            for k in kept_attributes
+        ]
         counts.resolution = Counter(e.method.value for e in resolved.values())
-        return grounded, counts
+        return grounded, attributes, counts
 
-    def _grounded(self, chunks: list[ChunkRecord], counts: _Counts) -> list[_Kept]:
-        """Extracted triples whose evidence is in the chunk, mapped onto the ontology."""
+    def _grounded(
+        self, chunks: list[ChunkRecord], counts: _Counts
+    ) -> tuple[list[_Kept], list[_KeptAttribute]]:
+        """Grounded triples mapped onto the ontology, and grounded attributes.
+
+        `chunks` carry the text extraction saw, so evidence is checked against it.
+        """
         kept: list[_Kept] = []
+        attributes: list[_KeptAttribute] = []
         for chunk, result in self._extract_all(chunks, counts.failed_chunk_ids):
             counts.triples_extracted += len(result.triples)
             haystack = _normalize(chunk.text)
             for triple in result.triples:
-                if (
-                    self._limits.require_grounded_evidence
-                    and _normalize(triple.evidence) not in haystack
-                ):
+                rule = self._excluded_entity(chunk, triple.head, triple.tail)
+                amount = self._amount_attribute(triple)
+                if not self._is_grounded(triple.evidence, haystack):
                     counts.dropped["evidence_not_in_chunk"] += 1
+                elif not self._types_enabled(triple.head, triple.tail):
+                    counts.dropped["entity_type_not_enabled"] += 1
+                elif rule is not None:
+                    counts.dropped[f"excluded_entity:{rule}"] += 1
+                elif amount is _DROP:
+                    counts.dropped["amount_entity"] += 1
+                elif amount is not None:
+                    counts.converted["amount_entity"] += 1
+                    attributes.append(_KeptAttribute(chunk, amount))
                 elif triple.head.key == triple.tail.key:
                     counts.dropped["self_loop"] += 1
                 else:
                     kept.append(self._mapped(chunk, triple, counts.relations))
-        return self._consistent(kept, counts.dropped)
+            attributes += self._grounded_attributes(chunk, result.attributes, counts)
+        return self._consistent(kept, counts.dropped), attributes
+
+    def _grounded_attributes(
+        self, chunk: ChunkRecord, extracted: list[Attribute], counts: _Counts
+    ) -> list[_KeptAttribute]:
+        """Attributes the model stated, with the same checks as triples."""
+        haystack = _normalize(chunk.text)
+        kept: list[_KeptAttribute] = []
+        for attribute in extracted:
+            rule = self._excluded_entity(chunk, attribute.entity)
+            if not self._is_grounded(attribute.evidence, haystack):
+                counts.dropped["attribute_evidence_not_in_chunk"] += 1
+            elif not self._types_enabled(attribute.entity):
+                counts.dropped["entity_type_not_enabled"] += 1
+            elif rule is not None:
+                counts.dropped[f"excluded_entity:{rule}"] += 1
+            elif self._amounts_checked and is_amount(attribute.entity.name):
+                counts.dropped["amount_entity"] += 1
+            else:
+                kept.append(_KeptAttribute(chunk, attribute))
+        return kept
+
+    def _is_grounded(self, evidence: str, haystack: str) -> bool:
+        return (
+            not self._limits.require_grounded_evidence
+            or _normalize(evidence) in haystack
+        )
+
+    def _types_enabled(self, *refs: EntityRef) -> bool:
+        """Whether every entity has a type this deployment allows (ENTITY_TYPES)."""
+        return all(ref.type in self._aids.entity_types.names for ref in refs)
+
+    def _excluded_entity(self, chunk: ChunkRecord, *refs: EntityRef) -> str | None:
+        """The exclusion rule that names one of these entities, if any."""
+        exclusions = self._aids.exclusions
+        if exclusions is None:
+            return None
+        for ref in refs:
+            rule = exclusions.excluded_entity(ref.name, chunk.doc_type)
+            if rule is not None:
+                return rule
+        return None
+
+    @property
+    def _amounts_checked(self) -> bool:
+        return self._limits.amount_entities != "keep"
+
+    def _amount_attribute(self, triple: Triple) -> Attribute | object | None:
+        """For a triple with an amount for an entity: its attribute, or _DROP.
+
+        None when neither end is an amount (or AMOUNT_ENTITIES=keep). Converting
+        needs exactly one amount end: the other end is the entity it describes.
+        """
+        if not self._amounts_checked:
+            return None
+        head, tail = is_amount(triple.head.name), is_amount(triple.tail.name)
+        if not head and not tail:
+            return None
+        if self._limits.amount_entities == "drop" or head == tail:
+            return _DROP
+        entity, amount = (
+            (triple.tail, triple.head) if head else (triple.head, triple.tail)
+        )
+        return Attribute(
+            entity=entity,
+            name=attribute_name(triple.relation),
+            value=amount.name,
+            evidence=triple.evidence,
+        )
 
     def _consistent(self, kept: list[_Kept], dropped: Counter[str]) -> list[_Kept]:
         """Drop both sides when one chunk states a directional relation both ways.
@@ -466,7 +647,7 @@ class KnowledgeGraphIngestor:
         with traced_span("ingest.extract_triples", {"chunk.id": chunk.chunk_id}):
             return invoke_structured(
                 self._llm,
-                ExtractionResult,
+                self._aids.entity_types.extraction_schema,
                 [
                     SystemMessage(content=self._system_prompt),
                     HumanMessage(content="\n\n".join(parts)),

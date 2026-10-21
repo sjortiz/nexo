@@ -42,6 +42,10 @@ multi-hop paths - and to explain those connections with evidence from the source
 The graph is in Neo4j:
 {schema}
 
+A question that asks for a fact, number, price, definition, policy or process rather than a \
+connection ("what is the notice period in the supplier contract?") is a lookup: start with search_chunks \
+on its key terms, then read the passages; use the graph only if they name entities worth following.
+
 Look entities up by name first to get their keys, then use find_paths for how two entities \
 connect and entity_neighbours for one entity's direct relationships; they need no Cypher. \
 Questions about one entity's roles, owners, suppliers, partners and the like (who is the chief \

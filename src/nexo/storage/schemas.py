@@ -60,6 +60,26 @@ class EntityType(StrEnum):
     PROCEDURE = "Procedure"
 
 
+# What each type means, shown to the extractor so it can tell them apart.
+ENTITY_TYPE_DESCRIPTIONS: dict[EntityType, str] = {
+    EntityType.PERSON: "a named individual (never a group, role or audience)",
+    EntityType.ORGANIZATION: "a named company, team, department or institution",
+    EntityType.LOCATION: "a place: country, region, city, address",
+    EntityType.PRODUCT: "a product, service, feature, package or platform",
+    EntityType.EVENT: "something that happens at a time: launch, acquisition, meeting",
+    EntityType.CONCEPT: "an idea, metric, policy, process or framework",
+    EntityType.CONDITION: "a medical condition, diagnosis or symptom",
+    EntityType.MEDICATION: "a drug or medication",
+    EntityType.PROCEDURE: "a medical or clinical procedure",
+}
+
+# A type name doubles as a Neo4j label, so it must be a plain identifier. Built-in
+# types are EntityType; a deployment may add its own (ENTITY_TYPES_PATH).
+ENTITY_TYPE_PATTERN = r"^[A-Z][A-Za-z0-9]{0,39}$"
+ENTITY_TYPE_RE = re.compile(ENTITY_TYPE_PATTERN)
+EntityTypeName = Annotated[str, StringConstraints(pattern=ENTITY_TYPE_PATTERN)]
+
+
 class CodeSystem(StrEnum):
     """Terminology systems a proposed code may come from."""
 
@@ -212,7 +232,7 @@ _HONORIFICS = {
 }
 
 
-def normalize_name(name: str, entity_type: EntityType) -> str:
+def normalize_name(name: str, entity_type: str) -> str:
     """Surface form -> comparison form: 'The Acme Holdings, Inc.' -> 'acme holdings'.
 
     Only type-safe rules: legal suffixes for organizations, honorifics for
@@ -221,18 +241,18 @@ def normalize_name(name: str, entity_type: EntityType) -> str:
     tokens = re.sub(r"[^\w\s&-]", " ", name.casefold()).split()
     if tokens and tokens[0] == "the" and len(tokens) > 1:
         tokens = tokens[1:]
-    if entity_type is EntityType.ORGANIZATION:
+    if entity_type == EntityType.ORGANIZATION:
         while len(tokens) > 1 and tokens[-1] in _LEGAL_SUFFIXES:
             tokens = tokens[:-1]
-    if entity_type is EntityType.PERSON:
+    if entity_type == EntityType.PERSON:
         while len(tokens) > 1 and tokens[0] in _HONORIFICS:
             tokens = tokens[1:]
     return " ".join(tokens)
 
 
-def entity_key(name: str, entity_type: EntityType) -> str:
+def entity_key(name: str, entity_type: str) -> str:
     """Exact-match key: type + normalized name. Fuzzier merges happen in resolution."""
-    return f"{entity_type.value}:{normalize_name(name, entity_type)}"
+    return f"{entity_type}:{normalize_name(name, entity_type)}"
 
 
 class EntityRef(BaseModel):
@@ -243,7 +263,8 @@ class EntityRef(BaseModel):
     name: ShortText = Field(
         description="Canonical full name as written in the text, pronouns resolved"
     )
-    type: EntityType
+    # Built-in or deployment type; extraction restricts it to the configured set.
+    type: EntityTypeName
     description: str = Field(
         default="", max_length=300, description="Short description grounded in the text"
     )
@@ -300,12 +321,35 @@ class Triple(BaseModel):
         return normalized
 
 
+class Attribute(BaseModel):
+    """A quantity the text states about one entity: a price, rating, count or share.
+
+    Quantities are never entities; they hang off the entity they describe.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    entity: EntityRef
+    name: ShortText = Field(
+        description="What is measured, lower case: price, rating, review count, discount"
+    )
+    value: ShortText = Field(
+        description="The quantity as written, with its unit: '$35', '4.8 stars', '30%'"
+    )
+    evidence: str = Field(
+        min_length=1,
+        max_length=400,
+        description="Verbatim quote from the text stating the quantity",
+    )
+
+
 class ExtractionResult(BaseModel):
-    """Triples extracted from one chunk."""
+    """Triples and attributes extracted from one chunk."""
 
     model_config = ConfigDict(extra="forbid")
 
     triples: list[Triple] = Field(default_factory=list, max_length=100)
+    attributes: list[Attribute] = Field(default_factory=list, max_length=100)
 
 
 class Resolution(StrEnum):
@@ -339,6 +383,15 @@ class GroundedTriple(BaseModel):
     original_relation: str | None = None
     head: ResolvedEntity  # graph head (already swapped for inverse relations)
     tail: ResolvedEntity
+
+
+class GroundedAttribute(BaseModel):
+    """An attribute bound to its chunk and to the resolved entity it describes."""
+
+    attribute: Attribute
+    chunk_id: str
+    source_id: str
+    entity: ResolvedEntity
 
 
 @dataclass(frozen=True)

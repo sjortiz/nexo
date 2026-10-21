@@ -91,6 +91,9 @@ hosts ([Local on Apple Silicon](local-apple-silicon.md)).
 | `EXTRACTION_CONTEXT_CHARS` | `500` | Tail of the previous chunk shown to the extractor (context only); 0 disables. |
 | `ONTOLOGY_PATH` | unset | [Relation ontology](../components/relation-ontology.md) JSON; unset keeps free-form predicates. |
 | `GLOSSARY_PATH` | unset | JSON object of acronym → expansion. |
+| `INGEST_EXCLUSIONS_PATH` | unset | YAML/JSON [ingest exclusions](../components/ingest-exclusions.md): content kept out of the `document`, `search` or `extraction` stage. |
+| `ENTITY_TYPES_PATH` | unset | YAML/JSON: which built-in [entity types](../components/triple-extraction.md#entity-types) to extract and the deployment's own; unset = every built-in type. |
+| `AMOUNT_ENTITIES` | `convert` | A triple that made an amount an entity: `convert` (to an attribute of the other entity), `drop` or `keep`. |
 
 **Entity resolution**
 

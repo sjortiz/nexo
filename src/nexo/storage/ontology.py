@@ -21,7 +21,7 @@ from pydantic import (
     model_validator,
 )
 
-from nexo.storage.schemas import RELATION_RE, EntityType, normalize_relation
+from nexo.storage.schemas import RELATION_RE, EntityTypeName, normalize_relation
 
 FALLBACK_RELATION = "RELATED_TO"
 
@@ -33,10 +33,10 @@ class RelationSpec(BaseModel):
 
     name: str
     description: str
-    source_types: list[EntityType] = Field(
+    source_types: list[EntityTypeName] = Field(
         default_factory=list, description="Empty = any type"
     )
-    target_types: list[EntityType] = Field(
+    target_types: list[EntityTypeName] = Field(
         default_factory=list, description="Empty = any type"
     )
     synonyms: list[str] = Field(
@@ -56,7 +56,7 @@ class RelationSpec(BaseModel):
             raise ValueError(f"invalid relation name {value!r}")
         return name
 
-    def allows(self, head: EntityType, tail: EntityType) -> bool:
+    def allows(self, head: str, tail: str) -> bool:
         """Whether the head and tail types satisfy the type constraints."""
         return (not self.source_types or head in self.source_types) and (
             not self.target_types or tail in self.target_types
@@ -104,9 +104,7 @@ class Ontology(BaseModel):
         entry = self._by_name.get(relation)
         return bool(entry and entry[0].inverses)
 
-    def map(
-        self, predicate: str, head: EntityType, tail: EntityType
-    ) -> RelationMapping:
+    def map(self, predicate: str, head: str, tail: str) -> RelationMapping:
         """Canonical relation and direction for an extracted (head, predicate, tail)."""
         match = self._by_name.get(predicate)
         if match is not None:
@@ -124,7 +122,7 @@ class Ontology(BaseModel):
         """List the relations with their types and descriptions for the extraction prompt."""
         lines = []
         for spec in self.relations:
-            source = "|".join(t.value for t in spec.source_types) or "Any"
-            target = "|".join(t.value for t in spec.target_types) or "Any"
+            source = "|".join(spec.source_types) or "Any"
+            target = "|".join(spec.target_types) or "Any"
             lines.append(f"- {spec.name} ({source} -> {target}): {spec.description}")
         return "\n".join(lines)
