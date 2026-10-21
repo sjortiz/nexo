@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import uuid
 
 import pytest
@@ -164,7 +165,8 @@ def test_investigator_time_example_is_warning_free_on_undated_graph(store):
         [_row(C1, "timeline", (acme, "ACQUIRED", beta))],
     )
     prompt = SYSTEM_PROMPT.format(schema=store.describe_schema())
-    cypher = prompt.split("- Facts over time:\n", 1)[1].split("\n- ", 1)[0].strip()
+    example = re.search(r"- Facts over time[^\n]*:\n(.*?)\n- ", prompt, re.DOTALL)
+    cypher = example.group(1).strip()
     assert _warnings(cypher, {}) == []
     assert store.run_read_query(cypher).rows == []
     assert _warnings(cypher.replace("valid_at", f"never_{uuid.uuid4().hex}"), {}) == []
