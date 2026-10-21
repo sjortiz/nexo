@@ -1,24 +1,43 @@
 # Nexo
 
-Graph RAG investigation service: LangGraph orchestration, a Strands Agents micro-agent, a self-hosted vLLM
-model (Llama 3.3 70B), Neo4j and a vector chunk store, traced end to end with OpenTelemetry.
+Graph RAG investigation service: LangGraph orchestration, a Strands Agents investigator, models on
+OpenAI-compatible endpoints (Ollama or vLLM), and Neo4j for graph, chunk text and hybrid search.
 Overview: [sjortiz.github.io/nexo](https://sjortiz.github.io/nexo/). Step by step, with real outputs:
 [the walkthrough](https://sjortiz.github.io/nexo/walkthrough.html), also as a
 [Jupyter notebook](examples/walkthrough.ipynb).
 
 ```
-            ┌─────────────── LangGraph StateGraph (checkpointed) ──────────────┐
-request ──► │ router ──► investigator ─────────────► compliance ──interrupt──► │──► reviewer (or policy) approves ──► answer
-            │   │          │ @task: Strands Agent        (pure checks)         │
-            │   ▼          │   ├─ query_knowledge_graph ──► Neo4j (READ tx)    │
-            │  END         │   └─ fetch_vector_chunks  ──► chunk store         │
-            └──────────────┴──────────────── vLLM (OpenAI API) ────────────────┘
-ingest: document ─► heading-aware chunks ─► embeddings ─► chunk store
-                                         └► vLLM triple extraction ─► evidence check ─► ontology ─► entity resolution
-                                            ─► Neo4j: Document/Chunk lexical graph + entities (chunk_id on every node/edge)
++---------------------- LangGraph: checkpointed (SQLite / Postgres) -----------------------+
+| request -> router -> investigator -> compliance -> policy / human review -> answer       |
+|              |             |              |                   |             (approved)   |
+|              v             |              v                   v                          |
+|           refused          |         no draft: rejected    rejected (no answer)          |
++----------------------------|-------------------------------------------------------------+
+                             | Strands Agent (@task)
+                             +-> query_knowledge_graph --+
+                             +-> find_paths -------------+-> Neo4j graph (READ transactions)
+                             +-> entity_neighbours ------+
+                             +-> search_chunks ----------+-> ChunkStore: Neo4j (default) / local JSON
+                             +-> fetch_vector_chunks ----+
+                             +-> chat: Ollama / vLLM (OpenAI-compatible API)
+
+ ingest: document -> lint / flatten -> heading-aware chunks -> classify / optional redact
+         -> embeddings + chunk upsert -> triple extraction -> evidence / ontology -> entity resolution
+         -> Neo4j replace source (Document / Chunk / entities / relations) -> remove stale chunks
+
+ request / ingest / MCP / eval -> OpenTelemetry (OTLP) -> collector -> SigNoz (traces / metrics / logs)
+                                                            +-> Langfuse / Jaeger / LangSmith
+                                                                (opt-in traces)
 ```
 
-The LangGraph workflow, generated from the compiled graph (`nexo graph`):
+The router selects graph, vector or hybrid retrieval and applies document/date filters; clearance
+comes from the caller. The investigator follows relationships and reads source chunks. Compliance
+checks the draft and citations before the review policy decides whether to release it or pause for
+a person. Only an approved answer is released. MCP clients use the read tools directly.
+See the [request lifecycle](docs/architecture/request-lifecycle.md) and
+[glossary](docs/architecture/glossary.md).
+
+The LangGraph workflow, generated from the compiled graph with `nexo graph` (no services needed):
 
 ```mermaid
 ---
@@ -42,137 +61,238 @@ graph TD;
 	classDef last fill:#bfb6fc
 ```
 
-| Module | Code |
-| --- | --- |
-| A. Storage | `storage/` — `ingest.py`, `chunking.py`, `schemas.py`, `ontology.py`, `resolution.py`, `graph_store.py`, `vector_store.py`, `sensitive_data.py` |
-| B. Micro-agent | `agents/` — `investigator.py` (Strands Agent), `tools.py` (the agent's tools) |
-| C. Orchestration | `orchestration/` — `graph.py` (3 nodes), `state.py`, `compliance.py` |
-| Wiring | `service.py`, `cli.py`, `telemetry.py`, `logging_setup.py`, `llm.py`, `evaluation.py` |
+Review and the checkpointed interrupt happen inside `compliance`; they are not separate graph nodes.
+
+| Module | Code (under `src/nexo/`) | Responsibility |
+| --- | --- | --- |
+| A. Storage | `storage/` | Chunking, sensitivity, triple extraction, ontology, entity resolution, graph and chunk stores. |
+| B. Investigator | `agents/` | Strands loop, five retrieval tools, evidence ledger, masking and budgets. |
+| C. Orchestration | `orchestration/` | Routing, checkpointed investigation, deterministic checks and review policy. |
+| Runtime and CLI | `service.py`, `cli.py`, `llm.py` | Resource lifetimes, model roles, ingest/ask/review/status and servers. |
+| MCP and review surfaces | `mcp_server.py`, `mcp_review.py`, `review_ui.py`, `review_inbox.py` | Retrieval, confirmed MCP reviews, demo page and Agent Inbox adapter. |
+| Setup | `setup/`, `config.py`, `secret_store.py`, `local_profiles.py` | Setup schema, lock/render/check/up, settings, secrets and hardware profiles. |
+| Telemetry and evaluation | `telemetry.py`, `logging_setup.py`, `evaluation.py` | OpenTelemetry, correlated logs and retrieval/generation/extraction scores. |
 
 Full documentation lives in [`docs/`](docs/index.md) as an [Open Knowledge Format](docs/references/open-knowledge-format.md)
 bundle: architecture, components, operations, decisions and references.
 
 ## Run
 
-Pick your path first:
-
-| Machine | Preset | Guide |
-| --- | --- | --- |
-| Apple Silicon Mac, services in Podman | `mac-single` (`mac-two-machines` for two Macs) | [Local on Apple Silicon](docs/operations/local-apple-silicon.md) |
-| Apple Silicon Mac, no containers | `mac-native` | [Native path](docs/operations/local-apple-silicon.md#native-path) |
-| Linux, GPU or CPU, Ollama | `linux-gpu`, `linux-cpu`, `linux-native` | [Local on Linux](docs/operations/local-linux.md) |
-| Linux GPU server, vLLM (4x80 GB) | `linux-vllm` | below, and [Compose stack with vLLM](docs/operations/local-stack.md) |
-
-`make env PRESET=...` writes `nexo.yaml` with this machine's hardware profile; `make up` starts it;
-`make check` says what is missing. The GPU-server flow:
+From the checkout, with `uv`, a container engine (Podman or Docker) and model servers:
 
 ```bash
-uv sync && source .venv/bin/activate                  # Python 3.12 + deps from uv.lock
-make env PRESET=linux-vllm                             # nexo.yaml + secrets in ~/.config/nexo; HF_TOKEN in .env
-make up                                                # Neo4j, collector, SigNoz, vLLM (4x80GB GPUs)
-nexo ingest corpus/memo.md --doc-type memo --effective-date 2025-06-30
-nexo ask "How is Acme Holdings connected to Gamma Clinics?"   # answer, or thread_id + review packet on findings
-nexo review <thread_id> --approve --reviewer you@corp       # only for a paused thread
+uv sync                                      # Python 3.12 from .python-version; deps from uv.lock
+source .venv/bin/activate
+make env PRESET=linux-vllm                    # Linux NVIDIA setup; add HF_TOKEN to .env
+make up                                      # Neo4j, collector, SigNoz and vLLM (4 x 80 GB GPUs)
+make check                                   # preflight, ports, review/content policy and model roles
+nexo ingest examples/corpus/acme-portfolio-note.md --doc-type memo --effective-date 2025-06-30
+nexo ingest examples/corpus/gamma-supplier-review.md --doc-type memo
+nexo ask "How is Acme Holdings connected to Gamma Clinics?"
 ```
 
-Traces, metrics and logs: http://localhost:8080 (SigNoz; log in with `SIGNOZ_USER_EMAIL` / `SIGNOZ_USER_PASSWORD` from
-`~/.config/nexo/config`); raw metrics: http://localhost:8889/metrics. Telemetry follows the
-[OpenTelemetry GenAI conventions](docs/references/opentelemetry-genai-conventions.md) with message content off by default
-([Observability](docs/operations/observability.md)). Logs go to stderr with trace ids (`LOG_FORMAT=json` for log
-pipelines); stdout carries only each command's JSON result. Relation ontology example: `deploy/ontology.example.json`. Neo4j Enterprise least-privilege reader:
-`deploy/neo4j-rbac.cypher`.
+For Ollama on a Mac or Linux, use a preset [below](#run-locally-macos-and-linux). For vLLM requirements
+and container CLI use, see [Compose stack with vLLM](docs/operations/local-stack.md).
+`make env` keeps an existing `nexo.yaml` and creates missing secrets in `~/.config/nexo/config` by
+default. `nexo setup` resolves `nexo.lock` and renders `.nexo/render/`; edit the setup file, not its
+rendered files ([ADR-0016](docs/decisions/adr-0016-declarative-setup-file.md)). Settings and precedence:
+[Configuration](docs/operations/configuration.md).
+
+CLI results go to stdout as JSON; logs go to stderr with trace ids (`LOG_FORMAT=json` for log
+pipelines). `status: completed` means the thread ended, including rejection: read `approval_status`
+and `outcome`, such as `approved by system:auto`, `rejected by you@corp` or
+`rejected: no releasable output`.
+
+### Review
+
+`spec.review` in `nexo.yaml` sets `REVIEW_POLICY`:
+
+| Policy | Approved without a person | Pauses for review |
+| --- | --- | --- |
+| `on-findings` (default) | No findings, at least one citation, every cited chunk fetched | Any finding |
+| `always` | None | Every releasable draft |
+| `never` | No findings or only warnings | Any finding other than a warning |
+
+No policy auto-approves a blocking finding. Failed or empty investigations are rejected without a
+review step. Policy approvals are recorded as `reviewer: system:auto`.
+
+```mermaid
+flowchart TD
+    checks[Compliance checks] --> draft{Releasable draft?}
+    draft -->|No| reject[Completed: rejected, no answer]
+    draft -->|Yes| policy{Policy allows automatic approval?}
+    policy -->|Yes| auto[Approved as system:auto]
+    policy -->|No| pause[Checkpoint and interrupt: awaiting_review]
+    pause --> human{Human decision}
+    human -->|Approve and acknowledge blocking findings| answer[Completed: approved, answer released]
+    human -->|Reject| reject
+    human -->|Invalid or missing acknowledgement| pause
+    auto --> answer
+```
+
+Only for a paused thread (replace `THREAD_ID` with its id):
+
+```bash
+nexo status THREAD_ID
+nexo review THREAD_ID --approve --reviewer you@corp
+# To approve blocking findings, also pass --acknowledge-findings.
+```
+
+Review is also available over MCP. The optional [Agent Inbox](docs/operations/agent-inbox.md) uses
+`make up AGENT_INBOX=1` plus `make review-inbox`; `nexo review-ui` is a loopback-only demo with no
+authentication and is not started by `make up`. See [Human review](docs/operations/human-review.md).
+
+### Ingestion
+
+```mermaid
+flowchart TD
+    doc[Text / Markdown document] --> prep[Lint, flatten tables, heading-aware chunks]
+    prep --> classify[Classify sensitivity; optionally redact]
+    classify --> upsert[Embed and upsert chunks]
+    upsert --> extract[LLM triple extraction per chunk]
+    extract --> ground[Evidence check and optional ontology mapping]
+    ground --> resolve[Entity resolution]
+    resolve --> swap[Replace source subgraph in one Neo4j transaction]
+    swap --> stale[Remove stale chunks]
+```
+
+Graph evidence points to a stored `chunk_id`. `ingest()` requires both a chunk store and a graph
+writer; without either it raises `ValueError`. Use `extract_triples()` for extraction without writes
+or entity resolution. Failed chunks remain readable and are listed in the report; the ingest CLI
+exits non-zero. See [Ingestion pipeline](docs/components/ingestion-pipeline.md). Relation ontology
+example: `deploy/ontology.example.json`.
 
 ## Use from Claude Code (MCP)
 
-`nexo mcp` serves the knowledge graph as read-only MCP tools (index, hybrid search, chunks, entities,
-neighbors, read-only Cypher) with the same clearance and Cypher safeguards as the agent. The repository
-ships `.mcp.json` and a `nexo-knowledge` skill, so Claude Code in this directory can answer questions from
-your documents with a citation per claim: [Use from Claude Code](docs/operations/claude-code.md).
+`nexo mcp` serves six read-only retrieval tools: index, hybrid search, chunks, entities, neighbors and
+Cypher. Three review tools are on by default; submitting a review requires the person to confirm a
+client elicitation form. Clients without forms are directed to the CLI. Set `MCP_REVIEW_TOOLS=false`
+for retrieval only. The repository ships `.mcp.json` and a `nexo-knowledge` skill:
+[Use from Claude Code](docs/operations/claude-code.md).
+
+One server has one clearance (`MCP_CLEARANCE`, otherwise `DEFAULT_CLEARANCE`). Eligible chunks above
+it only because of detected PII are shown with those spans masked; other chunks above clearance,
+including PHI, are withheld. Search masks the query and requires matches in the visible
+text, excluding masked values and their fragments. Ranking still uses the stored text. Graph map
+redaction does not catch scalar Cypher projections or computed keys on Neo4j Community; Enterprise
+roles are needed to enforce those restrictions. Details and limits:
+[MCP server](docs/components/mcp-server.md).
+
+The default transport is stdio (stdout carries JSON-RPC). `nexo mcp --transport streamable-http`
+binds `127.0.0.1:8765` without authentication; use an authenticating proxy before exposing it.
+The CLI opens and closes its stores and runtime around the command; MCP keeps them open while serving.
 
 ## Run locally (macOS and Linux)
 
-Models run natively through Ollama, chosen by a hardware profile: `m1-max-64` / `m5-pro-24` on Apple
-Silicon, `gpu-24` (VRAM) or `cpu-64` on Linux. One file, `nexo.yaml`, describes the setup (models,
-add-ons, the container engine), foundry-style; `make` runs it through `nexo setup`
-([ADR-0016](docs/decisions/adr-0016-declarative-setup-file.md)).
+Ollama runs natively; Neo4j, the collector and SigNoz run in containers. Set `spec.models.local.profile`
+in `nexo.yaml` to match the machine: for example `m1-max-64` / `m5-pro-24` on Apple Silicon,
+`gpu-24` (VRAM) or `cpu-64` (RAM) on Linux.
 
 ```bash
-# One Mac
-make env PRESET=mac-single                   # nexo.yaml (profile detected; PROFILE= to override) + secrets
-make up                                      # Ollama's models, Neo4j, collector, SigNoz
-make check                                   # preflight + each role's model and server
-
-# One Mac, no containers: Homebrew's Neo4j, Ollama and Nexo from the .venv
-make env PRESET=mac-native && make neo4j-init && brew services start neo4j
-make up && make check
-
-# Two Macs: the remote Mac serves agent + extraction, this one router/embeddings/judge + Nexo
-deploy/local/ollama-setup.sh m1-max-64 heavy  # on the M1 Max
-make env PRESET=mac-two-machines              # on the M5 Pro
-ssh -N -L 11435:127.0.0.1:11434 you@m1-max.local
-make up && make check
-
-NEXO_LIVE=1 pytest -m live -v                 # exercise the real models
+make env PRESET=mac-single                   # or linux-cpu / linux-gpu; set the profile before up
+make up                                     # pull/start the profile's models and container services
+make check
 ```
 
-Presets: `mac-single`, `mac-two-machines`, `mac-native`, `linux-cpu`, `linux-gpu`, `linux-native`, `linux-vllm`
-(`examples/setups/`). `docker-compose.yml` is generated from `mac-single` (`make compose-file`) for
-plain `podman compose up -d`.
+For two Macs, the remote machine serves agent/extraction and this one serves router/embeddings/judge
+(when enabled):
+
+```bash
+deploy/local/ollama-setup.sh m1-max-64 heavy   # on the remote Mac
+make env PRESET=mac-two-machines             # on this Mac; set both profiles
+ssh -N -L 11435:127.0.0.1:11434 you@m1-max.local  # keep running in another terminal
+make up
+make check
+```
+
+Presets: `mac-single`, `mac-two-machines`, `linux-cpu`, `linux-gpu`, `linux-vllm`
+([`examples/setups/`](examples/setups/)). `docker-compose.yml` is generated from `mac-single`
+by `make compose-file`; prefer `make up` to supply secrets from the provider. Published ports are
+configurable through `spec.ports`; URLs here use the defaults.
 
 Which preset, models and add-ons to pick, with memory per combination:
-[Choosing a setup](docs/operations/decision-guide.md). How it fits together (roles, the profile
-catalog, ports): [How local setup works](docs/operations/local-setup.md).
-Step by step: [Local on Apple Silicon](docs/operations/local-apple-silicon.md) and
-[Local on Linux](docs/operations/local-linux.md) (`nexo setup` puts the Nexo container on the host
-network there).
-
-| Platform | Status |
-| --- | --- |
-| macOS (Apple Silicon) | Test suite passes; Podman and native paths verified up to the model server (`target.mode: native` is covered by tests, not yet run end to end). |
-| Linux | Test suite passes (verified on aarch64); Podman path uses host networking; vLLM GPU passthrough untested here. |
-| Windows | Not tested; WSL2 with the Linux instructions is the likely path. |
-| Neo4j 5.26 (Community) | Supported; the compose and CI default. Chunk search uses the `db.index.*.queryNodes` procedures. |
-| Neo4j 2026.09+ (Community) | Supported; integration tests pass on 2026.09 and 2026.10. Chunk search uses the `SEARCH` clause ([Chunk store](docs/components/chunk-store.md#neo4j-versions)). |
+[Choosing a setup](docs/operations/decision-guide.md). Roles, profiles, ports and setup commands:
+[How local setup works](docs/operations/local-setup.md). Step by step:
+[Local on Apple Silicon](docs/operations/local-apple-silicon.md) and
+[Local on Linux](docs/operations/local-linux.md) (the Nexo container uses host networking on Linux).
+Windows has no dedicated setup; see the [FAQ](docs/operations/faq.md) and
+[troubleshooting](docs/operations/troubleshooting.md).
 
 ## Test
 
 ```bash
-make test          # offline: fakes only at the model HTTP edge
+make test          # offline suite; real Neo4j tests also run if NEO4J_TEST_URI is set
 make test-neo4j    # integration tests on a throwaway Neo4j (127.0.0.1:7688)
-make test-live     # the real models, once they run
+make test-live     # real model servers required
 ```
 
-`make` lists every task (setup, models, services, ingest/ask, tests, the walkthrough and the site).
+Suites and prerequisites: [Testing](docs/operations/testing.md). `make` lists every task.
+
+`nexo eval` runs the investigator directly, skipping routing, compliance and review. It writes JSONL
+retrieval and answer scores, plus optional faithfulness/relevancy scores when `JUDGE_MODEL` is set:
+
+```bash
+nexo eval examples/golden/acme-gamma.jsonl > results.jsonl  # ingest both sample documents first
+nexo eval-extraction gold.jsonl                          # your text + gold triples; no store writes
+```
+
+Cases can set strategy and clearance; the judge receives cited evidence masked or withheld at that
+clearance. Scores are emitted as OpenTelemetry metrics and span attributes. With the Langfuse add-on,
+evaluation traces reach Langfuse; the current CLI does not create Langfuse datasets or experiments.
+Dataset format and judge setup: [Evaluation playbook](docs/operations/evaluation.md).
 
 ## Production notes
 
-- `LocalChunkStore` is single-node (hybrid BM25 + vector search in-process). Implement `ChunkStore` on PostgreSQL +
-  pgvector (exact id lookup, SQL metadata filters, ACID) or OpenSearch (high QPS); both open source.
-- Human review pauses must survive restarts: use `CHECKPOINT_BACKEND=postgres` with more than one replica.
-- `SENSITIVE_DATA_PROVIDER=comprehend_medical` sends chunk text to Amazon Comprehend Medical; enable only where that
-  flow is approved. Entity `proposed_codes` are LLM output until verified against a terminology service.
+- `Neo4jChunkStore` is the default: graph, chunk text, embeddings, vector and full-text indexes in one
+  database. `LocalChunkStore` is an in-process JSON alternative for offline runs and tests, not shared
+  storage. `nexo chunks status` finds graph chunks without text; `nexo chunks import` migrates an old
+  local store. See [Chunk store](docs/components/chunk-store.md).
+- Review checkpoints use per-stack SQLite by default. For multiple replicas, install the `postgres`
+  extra (`uv sync --extra postgres`), set `CHECKPOINT_BACKEND=postgres` and `CHECKPOINT_POSTGRES_URI`.
+- Use an Enterprise reader account for database-enforced least privilege (`deploy/neo4j-rbac.cypher`).
+  Cypher guards and READ transactions alone do not enforce property-level clearance.
+- Mount cluster secrets as files, or use SOPS / Vault through `spec.secrets`; the OS keychain is a
+  local opt-in. See [Choosing a setup](docs/operations/decision-guide.md#9-where-secrets-live).
+- `SENSITIVE_DATA_PROVIDER=comprehend_medical` sends text to Amazon Comprehend Medical; enable only
+  where that flow is approved. Regex detection does not cover all PHI. Entity `proposed_codes` remain
+  LLM output until verified against a terminology service. See
+  [Sensitive data detection](docs/components/sensitive-data-detection.md).
 
 ## Observability
 
-Nexo emits vendor-neutral OpenTelemetry. The collector strips message content and sends traces to a
-self-hosted [SigNoz](docs/references/signoz.md) (http://localhost:8080): traces, service map, metrics,
-logs, dashboards and alerts in one place, plus host and container metrics
-([ADR-0015](docs/decisions/adr-0015-signoz-default-observability.md)).
-Opt-in add-ons, each its own collector pipeline behind the same content stripping:
+Nexo emits vendor-neutral OpenTelemetry following the
+[GenAI conventions](docs/references/opentelemetry-genai-conventions.md). The collector sends traces,
+metrics and logs to self-hosted [SigNoz](docs/references/signoz.md), the default backend
+([ADR-0015](docs/decisions/adr-0015-signoz-default-observability.md)). UI: http://localhost:8080;
+log in with `SIGNOZ_USER_EMAIL` / `SIGNOZ_USER_PASSWORD` from the secrets provider
+(`~/.config/nexo/config` by default). Raw metrics: http://localhost:8889/metrics. Host/container metrics
+are on by default; on macOS these describe the container VM, not native Ollama.
+
+GenAI prompt/output capture is off by default, and the collector strips GenAI message content.
+Separately, `spec.telemetry.content` (default `internal`) gates export of the question, released
+answer, reviewer comment and routing reason by the highest sensitivity of chunks read and detector
+findings in that text. No detector (`SENSITIVE_DATA_PROVIDER=none`) or a failing detector withholds
+this content. Set `spec.telemetry.content` to `none` to disable these content records.
+Explicit GenAI content capture bypasses the gate. The `nexo.content` logger stays at INFO for OTLP;
+stderr still follows `LOG_LEVEL` and omits the text. `OTEL_CONSOLE_EXPORT=true` prints spans to
+stderr, including released content events. See
+[Observability](docs/operations/observability.md#question-and-answer-logs).
+
+Opt-in trace add-ons, each a collector pipeline:
 
 | Add-on | Start | Notes |
 | --- | --- | --- |
-| Langfuse | `make up LANGFUSE=1` | LLM evaluation and fine-tuning work (datasets, experiments, scores); UI on http://localhost:3000. |
+| Langfuse | `make up LANGFUSE=1` | LLM observations; UI on http://localhost:3000. Datasets/experiments are separate from the CLI scores. |
 | Jaeger | `make up JAEGER=1` | Span UI on http://localhost:16686. |
-| LangSmith | `make up LANGSMITH=1` | Needs `LANGSMITH_API_KEY` in `.env`; the project is `addons.langsmith.project`. |
+| LangSmith | `make up LANGSMITH=1` | Needs `LANGSMITH_API_KEY` in `.env`; project is `spec.addons.langsmith.project`. |
 
-Add-ons can be combined. `make up LANGFUSE=1` turns one on for one run; `addons:` in `nexo.yaml`
-keeps it on. Which to use when: [Choosing a setup](docs/operations/decision-guide.md#4-which-observability-to-turn-on).
-
-LangSmith also offers Studio for local graph debugging (`langgraph dev`) and evaluation tooling
-(datasets, experiments, `openevals` judges); see [the reference](docs/references/langsmith.md). No PHI
-in LangSmith until a BAA is signed or LangSmith is self-hosted. Leave `LANGSMITH_TRACING` unset in the
-app: the collector exports, so app-side tracing would duplicate traces.
+Add-ons can be combined. These switches apply to one run; `spec.addons` in `nexo.yaml` keeps them on.
+Which to use when: [Choosing a setup](docs/operations/decision-guide.md#4-which-observability-to-turn-on).
+Self-hosted trace backends receive sensitivity-released `nexo.content` events; the LangSmith pipeline
+removes them and query text. Leave `LANGSMITH_TRACING` unset to avoid duplicate app-side traces.
+For Studio and separate LangSmith evaluation tooling, see [the reference](docs/references/langsmith.md).
+No PHI in hosted LangSmith without an appropriate agreement. Full span, metric and export details:
+[Observability](docs/operations/observability.md).
 
 ## Sources
 
