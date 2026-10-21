@@ -6,6 +6,7 @@ import json
 from dataclasses import dataclass, field
 from pathlib import Path
 
+import pytest
 from langchain_core.language_models.fake_chat_models import GenericFakeChatModel
 from langchain_core.messages import AIMessage
 
@@ -308,3 +309,10 @@ def test_resolution_off_keeps_names_separate(settings, chunk_store):
         "Organization:acme holdings",
         "Organization:acme",
     }
+
+
+def test_ingest_without_targets_points_at_extract_triples(settings):
+    """Extraction-only targets refuse ingest() and name the method that works."""
+    ingestor = _ingestor(settings, None, [], None)
+    with pytest.raises(ValueError, match="extract_triples"):
+        ingestor.ingest(DOC, DocumentMetadata(source_id="d"))
