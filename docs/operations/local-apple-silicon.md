@@ -145,10 +145,25 @@ Containers compete with the models for memory, so give them a small machine of t
 and the telemetry in a second one, rootful so the host-metrics add-on can read the container socket:
 
 ```bash
-podman machine init --rootful --cpus 2 --memory 3072 nexo-telemetry
+podman machine init --rootful --cpus 2 --memory 4096 --disk-size 60 nexo-telemetry
 # nexo.yaml: spec.target.machine: nexo-telemetry
 make up SWITCH=1      # stops the running machine, and every container on it, then starts this one
 ```
+
+Minimum size for a Podman machine:
+
+| Runs on the machine | Memory | Disk |
+|---|---|---|
+| Collector and SigNoz (the telemetry machine) | 3 GiB | 30 GB |
+| The above, and building or running the Agent Inbox add-on | 4 GiB | 60 GB |
+| Neo4j, the collector, SigNoz and Langfuse (the full container stack) | 12 GiB | 90 GB |
+
+The containers themselves need about 1.5 GB for the collector and SigNoz; the rest is headroom for
+the VM, image builds and SigNoz's ClickHouse merges. `make check` computes the exact need for the
+add-ons you turned on and prints the `podman machine set --memory` value when the machine is too
+small. To grow an existing machine: `podman machine stop nexo-telemetry && podman machine set
+--memory 4096 --disk-size 60 nexo-telemetry && podman machine start nexo-telemetry` (the disk can
+only grow).
 
 Without `SWITCH=1`, `make up` stops with a message when another machine is running. `make check`
 reports the active machine against `nexo-telemetry`, and warns when the machine's memory is far
