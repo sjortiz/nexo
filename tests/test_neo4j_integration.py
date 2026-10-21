@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import os
+import uuid
 from datetime import UTC, datetime
 from urllib.parse import urlparse
 
@@ -25,7 +26,12 @@ from strands.models.openai import OpenAIModel
 
 from nexo.agents.investigator import Investigator
 from nexo.agents.models import InvestigationScope
-from nexo.agents.tools import InvestigationContext, build_investigation_tools
+from nexo.agents.tools import (
+    _NEIGHBOURS,
+    _PATHS,
+    InvestigationContext,
+    build_investigation_tools,
+)
 from nexo.mcp_server import build_mcp_server
 from nexo.orchestration.graph import GraphDependencies, build_graph
 from nexo.service import Runtime
@@ -553,6 +559,86 @@ def test_lookup_tools_follow_entity_edges_within_clearance(store, settings):
         driver.execute_query("MATCH ()-[r:SUPPLIES]->() REMOVE r.sensitivity_rank")
     out = json.loads(tools["find_paths"](acme.key, gamma.key))
     assert out["paths"] == [] and out["withheld"] == 1
+
+
+def _warnings(cypher: str, parameters: dict) -> list[str]:
+    """The GQL warning statuses (01xxx) Neo4j attaches to one query."""
+    with (
+        GraphDatabase.driver(
+            URI, auth=("neo4j", os.environ["NEO4J_TEST_PASSWORD"])
+        ) as driver,
+        driver.session(database="neo4j") as session,
+    ):
+        summary = session.run(cypher, parameters).consume()
+    return [
+        s.gql_status for s in summary.gql_status_objects if s.gql_status[:2] == "01"
+    ]
+
+
+def test_lookups_read_predicate_without_unknown_property_warnings(
+    store, settings, chunk_store
+):
+    """No 01N52 warning on undated, non-RELATED_TO edges; RELATED_TO still returns its predicate."""
+    acme, beta = _resolved("Acme"), _resolved("Beta")
+    store.replace_source(
+        DocumentMetadata(source_id="a"),
+        _chunks("a", C1),
+        [_row(C1, "a", (acme, "ACQUIRED", beta))],
+    )
+    reads = [
+        (_NEIGHBOURS, {"key": acme.key, "limit": 25}),
+        (_PATHS.format(paths=5, hops=3), {"from_key": acme.key, "to_key": beta.key}),
+    ]
+    # Earlier tests may have created these keys; keys Neo4j has never seen show
+    # whether the queries would warn on a graph that never had them.
+    unseen = f"never_{uuid.uuid4().hex}"
+    assert _warnings(f"MATCH ()-[r]->() RETURN r.{unseen}", {}) == ["01N52"]
+    for cypher, parameters in reads:
+        assert _warnings(cypher, parameters) == []
+        for key in ("predicate", "valid_at"):
+            assert _warnings(cypher.replace(key, unseen + key), parameters) == []
+
+    store.replace_source(
+        DocumentMetadata(source_id="b"),
+        _chunks("b", C2),
+        [_row(C2, "b", (acme, "RELATED_TO", beta), original="BANKROLLED")],
+    )
+    ctx = InvestigationContext(
+        request_id="r",
+        max_tool_calls=10,
+        scope=InvestigationScope(
+            chunk_filter=ChunkFilter(max_sensitivity=Sensitivity.INTERNAL)
+        ),
+    )
+    tools = {
+        t.tool_name: t
+        for t in build_investigation_tools(
+            graph=store, chunks=None, ctx=ctx, settings=settings
+        )
+    }
+    expected = [("ACQUIRED", None), ("RELATED_TO", "BANKROLLED")]
+    out = json.loads(tools["entity_neighbours"](acme.key))
+    assert (
+        sorted((e["edge"]["relation"], e["edge"]["predicate"]) for e in out["edges"])
+        == expected
+    )
+    out = json.loads(tools["find_paths"](acme.key, beta.key))
+    assert (
+        sorted(
+            (p["hops"][0]["relation"], p["hops"][0]["predicate"]) for p in out["paths"]
+        )
+        == expected
+    )
+    out = data(
+        call(
+            build_mcp_server(graph=store, chunks=chunk_store, settings=settings),
+            "nexo_neighbors",
+            {"entity_key": acme.key},
+        )
+    )
+    assert sorted((e["relation"], e["predicate"]) for e in out["edges"]) == expected
+    for cypher, parameters in reads:
+        assert _warnings(cypher, parameters) == []
 
 
 def _last_tool_payload(request: dict) -> dict:

@@ -1,6 +1,7 @@
 # Bundle Update Log
 
 ## 2026-10-20
+* **Update**: `entity_neighbours`, `find_paths` and `nexo_neighbors` no longer make Neo4j log a `01N52` "property key does not exist" warning on graphs without `RELATED_TO` or dated edges; `predicate` and `valid_at` are still returned where set ([find_paths and entity_neighbours](components/graph-lookup-tools.md)).
 * **Update**: One `GraphReader` protocol in `storage/graph_store.py` serves the agent tools and the MCP server; `nexo_neighbors` runs the investigator's neighbour query and clearance filter (`visible_neighbours`), with the same result shape; its edges now come best-supported first, and an unknown key and an entity above clearance both get the same `unknown entity key` error (an unknown key used to return no edges; a hidden one, a clearance error that showed it exists) ([MCP server](components/mcp-server.md), [find_paths and entity_neighbours](components/graph-lookup-tools.md)).
 * **Update**: `GraphStore` is a context manager and every `nexo` command opens the graph with `with`; `review-ui` and `review-inbox` serve through one helper, `--sensitivity` and `--clearance` take their choices from `Sensitivity`, and `nexo eval` builds the redactor only when a judge is set. Commands and output are unchanged.
 * **Update**: `KnowledgeGraphIngestor.ingest()` raises a `ValueError` naming `extract_triples()` when its targets lack a chunk store or graph writer, instead of an `AttributeError` mid-run ([Ingestion pipeline](components/ingestion-pipeline.md)).

@@ -161,13 +161,16 @@ def redact_above_clearance(value: Any, clearance_rank: int) -> Any:
 
 # Entity-to-Entity hops only: lexical edges (MENTIONED_IN, NEXT_CHUNK, ...) end at
 # Chunk or Document nodes. Hop and path counts are validated ints, inlined
-# because Cypher takes no parameters there.
+# because Cypher takes no parameters there. Only RELATED_TO edges have a predicate
+# and only dated edges a valid_at; reading them through properties(r) avoids
+# Neo4j's "property does not exist" warning on a graph that has none.
 _PATHS = """\
 MATCH (a:Entity {{key: $from_key}}), (b:Entity {{key: $to_key}})
 OPTIONAL MATCH p = SHORTEST {paths} (a)(()-[]-(:Entity)){{1,{hops}}}(b)
 RETURN [n IN nodes(p) | n {{.key, .name, .type, .sensitivity_rank}}] AS nodes,
        [r IN relationships(p) | r {{from: startNode(r).key, relation: type(r), to: endNode(r).key,
-           .predicate, .certainty, .valid_at, .evidence, .chunk_ids,
+           predicate: properties(r)['predicate'], valid_at: properties(r)['valid_at'],
+           .certainty, .evidence, .chunk_ids,
            sensitivity_rank: coalesce(r.sensitivity_rank, 3)}}] AS hops"""
 
 _NEIGHBOURS = """\
@@ -175,8 +178,9 @@ MATCH (e:Entity {key: $key})
 OPTIONAL MATCH (e)-[r]-(n:Entity)
 WITH e, r, n ORDER BY size(coalesce(r.chunk_ids, [])) DESC LIMIT $limit
 RETURN e {.key, .name, .type, .sensitivity_rank} AS entity,
-       r {relation: type(r), outgoing: startNode(r) = e, .predicate, .certainty,
-          .valid_at, .evidence, .chunk_ids, sensitivity_rank: coalesce(r.sensitivity_rank, 3)} AS edge,
+       r {relation: type(r), outgoing: startNode(r) = e, predicate: properties(r)['predicate'],
+          valid_at: properties(r)['valid_at'], .certainty, .evidence, .chunk_ids,
+          sensitivity_rank: coalesce(r.sensitivity_rank, 3)} AS edge,
        n {.key, .name, .type, .sensitivity_rank} AS neighbour"""
 
 _UNKNOWN_KEY = {
