@@ -254,6 +254,8 @@ def test_router_drops_filters_the_request_does_not_state(settings):
         ("Which memo docs changed in 2024?", {"report"}, None, True),  # not in corpus
         ("What did the memo say last quarter?", None, ["memo"], True),
         ("What does this package include?", None, None, False),  # "this" is no date
+        ("What was total revenue in 2025?", None, None, False),  # 2025 is the subject
+        ("What did the 2024 launch achieve?", None, None, False),
     ],
 )
 def test_stated_scope(query, known, kept_types, kept_dates):
