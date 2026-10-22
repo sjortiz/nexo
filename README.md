@@ -97,7 +97,9 @@ From the checkout, with `uv`, a container engine (Podman or Docker) and model se
 | Linux GPU server, vLLM (4x80 GB) | `linux-vllm` | below, and [Compose stack with vLLM](docs/operations/local-stack.md) |
 
 `make env PRESET=...` writes `nexo.yaml` with this machine's hardware profile; `make up` starts it;
-`make check` says what is missing. The GPU-server flow:
+`make check` says what is missing. Every way to run it (containers or native, one machine or two,
+Claude for a role, the CLI in a container, MCP) is in [Ways to run Nexo](docs/operations/ways-to-run.md);
+every command and flag in the [command line reference](docs/operations/cli.md). The GPU-server flow:
 
 ```bash
 uv sync                                      # Python 3.12 from .python-version; deps from uv.lock
@@ -161,8 +163,14 @@ Review is also available over MCP. The optional [Agent Inbox](docs/operations/ag
 `make up AGENT_INBOX=1` plus `make review-inbox`; `nexo review-ui` is a loopback-only demo with no
 authentication and is not started by `make up`. See [Human review](docs/operations/human-review.md).
 
-To see what ingestion built, `make visualize OPEN=1` writes `graph.html`, an interactive view of
-entities, relations and the documents that mention them ([Graph store](docs/components/graph-store.md#viewing-the-graph)).
+### Inspecting the corpus
+
+| Command | Shows |
+| --- | --- |
+| `make visualize OPEN=1` | `graph.html`: entities, relations and the documents that mention them. `LIVE=1` serves it on `127.0.0.1:8767` and updates it as you ingest; `FREEZE=1` stops the layout once it settles. [Viewing the graph](docs/components/graph-store.md#viewing-the-graph) |
+| `nexo access [--source ID]` | Per document: chunk access levels, the detector reasons behind them, and what each clearance sees. [Access levels](docs/operations/access-levels.md) |
+| `nexo entities duplicates` | Names stored under more than one entity type. |
+| `nexo entities merge --into KEY KEY...` | Merges them into one entity and records it in `CANONICAL_NAMES_PATH` so re-ingesting keeps it. [Entity resolution](docs/components/entity-resolution.md#canonical-names-and-merging) |
 
 ### Ingestion
 
@@ -182,7 +190,22 @@ Graph evidence points to a stored `chunk_id`. `ingest()` requires both a chunk s
 writer; without either it raises `ValueError`. Use `extract_triples()` for extraction without writes
 or entity resolution. Failed chunks remain readable and are listed in the report; the ingest CLI
 exits non-zero. See [Ingestion pipeline](docs/components/ingestion-pipeline.md). Relation ontology
-example: `deploy/ontology.example.json`.
+example: `deploy/ontology.example.json`. PDF, Word and HTML need `make install-formats`.
+
+Optional files shape what is extracted (examples in `deploy/`; keep your own in git-ignored `local/`):
+`INGEST_EXCLUSIONS_PATH` keeps lines, regions or names out of a stage
+([Ingest exclusions](docs/components/ingest-exclusions.md)); `ENTITY_TYPES_PATH` picks and adds entity
+types; `CANONICAL_NAMES_PATH` maps names typed several ways to one entity; `AMOUNT_ENTITIES` turns
+quantities into attributes. At question time the router writes `QUERY_EXPANSIONS` (default 2)
+alternative phrasings that the seed search fuses.
+
+### Claude for a role
+
+Any role but embeddings can run on Claude through the Claude Code CLI as the signed-in user, no API
+key: `AGENT_BASE_URL=claude-cli://` (or `EXTRACTION_`, `ROUTER_`, `JUDGE_`) with `<ROLE>_MODEL`. The
+agent then runs `claude -p` over the read-only `nexo mcp` tools, and compliance and review work the
+same. Text sent to a Claude role leaves the machine. See
+[Use Claude for a role](docs/operations/models.md#use-claude-for-a-role).
 
 ## Use from Claude Code (MCP)
 
@@ -274,7 +297,8 @@ nexo eval-extraction gold.jsonl                          # your text + gold trip
 
 Cases can set strategy and clearance; the judge receives cited evidence masked or withheld at that
 clearance. Scores are emitted as OpenTelemetry metrics and span attributes. With the Langfuse add-on,
-evaluation traces reach Langfuse; the current CLI does not create Langfuse datasets or experiments.
+each `nexo eval` run is also a Langfuse experiment (`--dataset-name`, `--run-name`); `--repeat N` runs
+each case N times and adds a mean/spread row.
 Dataset format and judge setup: [Evaluation playbook](docs/operations/evaluation.md).
 
 ## Production notes
@@ -319,7 +343,7 @@ Opt-in trace add-ons, each a collector pipeline:
 
 | Add-on | Start | Notes |
 | --- | --- | --- |
-| Langfuse | `make up LANGFUSE=1` | LLM observations; UI on http://localhost:3000. Datasets/experiments are separate from the CLI scores. |
+| Langfuse | `make up LANGFUSE=1` | LLM observations; UI on http://localhost:3000. Each `nexo eval` run becomes a dataset experiment. |
 | Jaeger | `make up JAEGER=1` | Span UI on http://localhost:16686. |
 | LangSmith | `make up LANGSMITH=1` | Needs `LANGSMITH_API_KEY` in `.env`; project is `spec.addons.langsmith.project`. |
 
