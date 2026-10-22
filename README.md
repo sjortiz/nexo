@@ -190,7 +190,9 @@ example: `deploy/ontology.example.json`.
 paths and Cypher. Three review tools are on by default; submitting a review requires the person to confirm a
 client elicitation form. Clients without forms are directed to the CLI. Set `MCP_REVIEW_TOOLS=false`
 for retrieval only. The repository ships `.mcp.json` and a `nexo-knowledge` skill:
-[Use from Claude Code](docs/operations/claude-code.md).
+[Use from Claude Code](docs/operations/claude-code.md). Run `uv run nexo mcp install --scope user`
+to use Nexo in every project, with an optional user-level skill; see
+[Use Nexo in every project](docs/operations/claude-code.md#use-nexo-in-every-project).
 
 One server has one clearance (`MCP_CLEARANCE`, otherwise `DEFAULT_CLEARANCE`). Eligible chunks above
 it only because of detected PII are shown with those spans masked; other chunks above clearance,
