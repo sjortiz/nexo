@@ -1,6 +1,10 @@
-"""The knowledge graph as a self-contained interactive HTML page.
+"""The knowledge graph as a self-contained interactive HTML page, or a live one.
 
     nexo visualize [--out graph.html] [--open]      (or: make visualize OPEN=1)
+    nexo visualize --live [--port 8767] [--interval 5] [--open]   (make visualize LIVE=1)
+
+Live mode serves the page on loopback and re-reads the graph every few seconds,
+applying only what changed, so you can watch an ingest fill it in.
 
 Reads Neo4j with the configured settings (the read-only user when one is set)
 and renders it with vis-network: documents are dark boxes; entities are dots
@@ -18,6 +22,7 @@ from __future__ import annotations
 import html
 import json
 import webbrowser
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
 
@@ -138,17 +143,74 @@ def to_network(graph: dict[str, list[dict[str, Any]]]) -> tuple[list[dict], list
     return nodes, edges
 
 
-def render(graph: dict[str, list[dict[str, Any]]]) -> str:
-    """The HTML page."""
+def summary(graph: dict[str, list[dict[str, Any]]]) -> str:
+    """'N documents, N entities, N relations'."""
+    return (
+        f"{len(graph['documents'])} documents, {len(graph['entities'])} entities, "
+        f"{len(graph['relations'])} relations"
+    )
+
+
+def live_payload(graph: dict[str, list[dict[str, Any]]]) -> dict[str, Any]:
+    """What a live page polls: the network and its summary."""
     nodes, edges = to_network(graph)
+    seen: dict[str, int] = {}
+    for edge in edges:  # stable ids, so an update changes edges instead of adding them
+        base = f"{edge['from']}|{edge.get('label', 'mention')}|{edge['to']}"
+        seen[base] = seen.get(base, 0) + 1  # RELATED_TO can repeat per predicate
+        edge["id"] = base if seen[base] == 1 else f"{base}|{seen[base]}"
+    return {"nodes": nodes, "edges": edges, "summary": summary(graph)}
+
+
+# Polls graph.json and applies the difference, so the layout does not restart.
+_LIVE_SCRIPT = """
+setInterval(async () => {{
+  try {{
+    const fresh = await (await fetch("graph.json", {{cache: "no-store"}})).json();
+    for (const [set, rows] of [[nodes, fresh.nodes], [edges, fresh.edges]]) {{
+      const keep = new Set(rows.map(r => r.id));
+      set.remove(set.getIds().filter(id => !keep.has(id)));
+      set.update(rows);
+    }}
+    document.getElementById("summary").textContent = fresh.summary;
+    document.getElementById("updated").textContent = new Date().toLocaleTimeString();
+  }} catch (e) {{
+    document.getElementById("updated").textContent = "update failed: " + e;
+  }}
+}}, {interval_ms});
+"""
+
+
+def render(
+    graph: dict[str, list[dict[str, Any]]],
+    *,
+    live_interval_s: float | None = None,
+    freeze: bool = False,
+) -> str:
+    """The HTML page; with `live_interval_s`, it re-reads graph.json at that interval.
+
+    The Pause button stops and restarts the layout; `freeze` stops it once the
+    first layout has settled, so nodes stay where they are.
+    """
+    nodes, edges = to_network(graph)
+    if live_interval_s:
+        payload_data = live_payload(graph)
+        nodes, edges = payload_data["nodes"], payload_data["edges"]
     legend = " ".join(
         f'<span style="background:{color};color:#fff;padding:2px 6px;'
         f'border-radius:3px">{html.escape(name)}</span>'
         for name, color in type_colors(graph).items()
     )
-    summary = (
-        f"{len(graph['documents'])} documents, {len(graph['entities'])} entities, "
-        f"{len(graph['relations'])} relations"
+    live = (
+        _LIVE_SCRIPT.format(interval_ms=int(live_interval_s * 1000))
+        if live_interval_s
+        else ""
+    )
+    updated = ' Live, updated <span id="updated">now</span>.' if live_interval_s else ""
+    freeze_script = (
+        'network.once("stabilizationIterationsDone", () => { if (moving) toggleLayout(); });\n'
+        if freeze
+        else ""
     )
     # json.dumps output is safe inside <script> once "</" cannot close the tag.
     data = {"nodes": nodes, "edges": edges}
@@ -162,28 +224,77 @@ header {{ padding: 8px 12px; border-bottom: 1px solid #ddd; }}
 #graph {{ height: 90vh; }}
 </style></head>
 <body>
-<header><b>Nexo graph</b>: {summary}. Dark boxes are documents; a thick border marks an
-entity found in 2+ documents; dashed lines are mentions. Hover for evidence and attributes.
+<header><b>Nexo graph</b>: <span id="summary">{summary(graph)}</span>.{updated}
+<button id="pause" onclick="toggleLayout()">Pause layout</button>
+Dark boxes are documents; a thick border marks an entity found in 2+ documents; dashed lines are mentions. Hover for evidence and attributes.
 <br>{legend}</header>
 <div id="graph"></div>
 <script>
 const data = {payload};
-new vis.Network(document.getElementById("graph"), {{
-  nodes: new vis.DataSet(data.nodes), edges: new vis.DataSet(data.edges)
-}}, {{
+const nodes = new vis.DataSet(data.nodes), edges = new vis.DataSet(data.edges);
+const network = new vis.Network(document.getElementById("graph"), {{ nodes, edges }}, {{
   nodes: {{ shape: "dot", scaling: {{ min: 8, max: 40 }}, font: {{ size: 12 }} }},
   physics: {{ solver: "forceAtlas2Based", stabilization: {{ iterations: 300 }} }},
   interaction: {{ hover: true, tooltipDelay: 100 }}
 }});
-</script>
+let moving = true;
+function toggleLayout() {{
+  moving = !moving;
+  network.setOptions({{ physics: {{ enabled: moving }} }});
+  document.getElementById("pause").textContent = moving ? "Pause layout" : "Resume layout";
+}}
+{freeze_script}{live}</script>
 </body></html>
 """
 
 
-def export(out: Path, *, open_browser: bool = False) -> dict[str, int]:
+def export(
+    out: Path, *, open_browser: bool = False, freeze: bool = False
+) -> dict[str, int]:
     """Write the page to `out` (optionally open it); return what it contains."""
     graph = read_graph()
-    out.write_text(render(graph), encoding="utf-8")
+    out.write_text(render(graph, freeze=freeze), encoding="utf-8")
     if open_browser:
         webbrowser.open(out.resolve().as_uri())
     return {name: len(rows) for name, rows in graph.items()}
+
+
+class _LiveHandler(BaseHTTPRequestHandler):
+    """GET / is the page, GET /graph.json the current network; nothing else."""
+
+    interval_s: float = 5.0
+    freeze: bool = False
+
+    def do_GET(self) -> None:  # pylint: disable=invalid-name  # http.server API
+        """Serve the page or the polled data, read from the graph on each request."""
+        path = self.path.split("?", 1)[0]
+        if path == "/":
+            body = render(
+                read_graph(), live_interval_s=self.interval_s, freeze=self.freeze
+            ).encode()
+            kind = "text/html; charset=utf-8"
+        elif path == "/graph.json":
+            body = json.dumps(live_payload(read_graph())).encode()
+            kind = "application/json"
+        else:
+            self.send_error(404)
+            return
+        self.send_response(200)
+        self.send_header("Content-Type", kind)
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def log_message(self, *args: Any) -> None:  # keep stdout and stderr quiet
+        """Polling would otherwise log a line every few seconds."""
+
+
+def live_server(
+    host: str, port: int, interval_s: float, *, freeze: bool = False
+) -> ThreadingHTTPServer:
+    """A server for the live page (loopback only: the caller checks the host)."""
+    handler = type(
+        "LiveHandler", (_LiveHandler,), {"interval_s": interval_s, "freeze": freeze}
+    )
+    return ThreadingHTTPServer((host, port), handler)
