@@ -35,6 +35,7 @@ from nexo.logging_setup import AUDIT_LOGGER, CONTENT_LOGGER
 from nexo.llm import build_chat_model, build_embeddings, build_strands_model
 from nexo.orchestration.graph import WORKFLOW_NAME, GraphDependencies, build_graph
 from nexo.orchestration.state import ReviewDecision, ReviewPacket, ReviewPassage
+from nexo.storage.canonical_names import CanonicalNames
 from nexo.storage.entity_types import EntityTypes
 from nexo.storage.exclusions import IngestExclusions
 from nexo.storage.graph_store import GraphStore
@@ -594,6 +595,7 @@ def open_ingestor(
                     else None
                 ),
                 entity_types=EntityTypes.from_settings(settings),
+                canonical_names=CanonicalNames.from_settings(settings),
                 exclusions=IngestExclusions.from_settings(settings),
                 resolver=EntityResolver(
                     catalog=graph_store,

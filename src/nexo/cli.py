@@ -57,7 +57,9 @@ from nexo.service import (
     remove_source,
 )
 from nexo.storage.convert import ConversionError, to_markdown
+from nexo.storage.entity_merge import find_duplicates, merge_entities
 from nexo.graph_view import export
+from nexo.storage.canonical_names import CanonicalNames
 from nexo.storage.entity_types import EntityTypes
 from nexo.storage.exclusions import IngestExclusions
 from nexo.storage.graph_store import GraphStore
@@ -407,6 +409,7 @@ def _eval_extraction(args: argparse.Namespace) -> int:
         aids=ExtractionAids(
             ontology=ontology,
             entity_types=EntityTypes.from_settings(settings),
+            canonical_names=CanonicalNames.from_settings(settings),
             exclusions=IngestExclusions.from_settings(settings),
         ),
     )
@@ -541,6 +544,60 @@ def _add_access_command(sub: argparse._SubParsersAction) -> None:
     )
     access.add_argument("--source", help="one document's source id (default: all)")
     access.set_defaults(handler=_access)
+
+
+def _entities_duplicates(_args: argparse.Namespace) -> int:
+    """Entities that share a name but not a type (candidates for `merge`)."""
+    settings = get_settings()
+    with GraphStore.from_settings(settings, read_only=True) as graph:
+        with graph.session(write=False) as session:
+            groups = find_duplicates(session)
+    _emit(
+        {"duplicates": groups},
+        "%d name(s) stored under more than one type",
+        len(groups),
+    )
+    return 0
+
+
+def _entities_merge(args: argparse.Namespace) -> int:
+    """Merge entities into one and record it in CANONICAL_NAMES_PATH."""
+    settings = get_settings()
+    with GraphStore.from_settings(settings, read_only=False) as graph:
+        with graph.session(write=True) as session:
+            result = session.execute_write(merge_entities, args.into, args.keys)
+    path = settings.canonical_names_path
+    if path and not args.no_record:
+        names = CanonicalNames.load(path)
+        names.record(result["target_name"], args.into.split(":", 1)[0], result["names"])
+        names.save(path)
+        result["recorded_in"] = str(path)
+    elif not args.no_record:
+        log.warning(
+            "CANONICAL_NAMES_PATH is unset: re-ingesting may split these entities again"
+        )
+    _emit(result, "merged %d entit(ies) into %s", len(result["merged"]), args.into)
+    return 0
+
+
+def _add_entity_commands(sub: argparse._SubParsersAction) -> None:
+    """`nexo entities duplicates|merge`: one node for a name typed several ways."""
+    entities = sub.add_parser(
+        "entities", help="entities stored under several types: duplicates, merge"
+    )
+    verbs = entities.add_subparsers(dest="entities_command", required=True)
+    verbs.add_parser(
+        "duplicates", help="list names stored under more than one entity type"
+    ).set_defaults(handler=_entities_duplicates)
+    merge = verbs.add_parser(
+        "merge", help="move entities onto one key and record it as a canonical name"
+    )
+    merge.add_argument("--into", required=True, help="the entity key to keep")
+    merge.add_argument("keys", nargs="+", help="entity keys to merge into it")
+    merge.add_argument(
+        "--no-record", action="store_true", help="do not write CANONICAL_NAMES_PATH"
+    )
+    merge.set_defaults(handler=_entities_merge)
 
 
 def _add_chunk_commands(sub: argparse._SubParsersAction) -> None:
@@ -829,6 +886,7 @@ def main(argv: list[str] | None = None) -> int:
     add_setup_parser(sub)
     _add_chunk_commands(sub)
     _add_access_command(sub)
+    _add_entity_commands(sub)
 
     args = parser.parse_args(argv)
     # Logs go to stderr: stdout is the command's JSON, or the protocol for MCP over stdio.

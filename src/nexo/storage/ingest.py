@@ -46,6 +46,7 @@ from nexo.storage.chunking import (
     lint_document,
     split_document,
 )
+from nexo.storage.canonical_names import CanonicalNames
 from nexo.storage.entity_types import EntityTypes
 from nexo.storage.exclusions import (
     IngestExclusions,
@@ -211,6 +212,7 @@ class ExtractionAids:
     callbacks: list = field(default_factory=list)
     exclusions: IngestExclusions | None = None
     entity_types: EntityTypes = field(default_factory=EntityTypes)
+    canonical_names: CanonicalNames | None = None
 
 
 class _Kept(NamedTuple):
@@ -491,6 +493,7 @@ class KnowledgeGraphIngestor:
             counts.triples_extracted += len(result.triples)
             haystack = _normalize(chunk.text)
             for triple in result.triples:
+                triple = self._canonical_triple(triple, counts)
                 rule = self._excluded_entity(chunk, triple.head, triple.tail)
                 amount = self._amount_attribute(triple)
                 if not self._is_grounded(triple.evidence, haystack):
@@ -518,6 +521,8 @@ class KnowledgeGraphIngestor:
         haystack = _normalize(chunk.text)
         kept: list[_KeptAttribute] = []
         for attribute in extracted:
+            entity = self._canonical(attribute.entity, counts)
+            attribute = attribute.model_copy(update={"entity": entity})
             rule = self._excluded_entity(chunk, attribute.entity)
             if not self._is_grounded(attribute.evidence, haystack):
                 counts.dropped["attribute_evidence_not_in_chunk"] += 1
@@ -536,6 +541,24 @@ class KnowledgeGraphIngestor:
             not self._limits.require_grounded_evidence
             or _normalize(evidence) in haystack
         )
+
+    def _canonical(self, ref: EntityRef, counts: _Counts) -> EntityRef:
+        """The mention under its canonical name and type (CANONICAL_NAMES_PATH)."""
+        names = self._aids.canonical_names
+        if names is None:
+            return ref
+        canonical = names.apply(ref)
+        if canonical is not ref:
+            counts.converted["canonical_name"] += 1
+        return canonical
+
+    def _canonical_triple(self, triple: Triple, counts: _Counts) -> Triple:
+        head, tail = self._canonical(triple.head, counts), self._canonical(
+            triple.tail, counts
+        )
+        if head is triple.head and tail is triple.tail:
+            return triple
+        return triple.model_copy(update={"head": head, "tail": tail})
 
     def _types_enabled(self, *refs: EntityRef) -> bool:
         """Whether every entity has a type this deployment allows (ENTITY_TYPES)."""

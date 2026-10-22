@@ -1,0 +1,15 @@
+# Canonical names (CANONICAL_NAMES_PATH): one name and type per entity.
+#
+# An extracted mention matching a name or alias (case, spacing and punctuation
+# folded, any type) is rewritten to that name and type before entity resolution,
+# so a name the extractor types inconsistently becomes one node.
+# `nexo entities merge` appends here. Keep a deployment's own file in local/
+# (git-ignored), e.g. CANONICAL_NAMES_PATH=local/canonical-names.yaml.
+
+entities:
+  - name: Acme Holdings
+    type: Organization
+    aliases: [Acme, AHI, Acme Holdings Inc.]
+  - name: Gamma Clinics
+    type: Organization
+    aliases: [Gamma]

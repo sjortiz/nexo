@@ -24,6 +24,7 @@ from nexo.agents.tools import (
     build_investigation_tools,
 )
 from nexo.mcp_server import _INDEX_DOCUMENTS, build_mcp_server
+from nexo.storage.entity_merge import merge_entities
 from nexo.storage.schemas import (
     Attribute,
     DocumentMetadata,
@@ -504,3 +505,31 @@ def test_attributes_ride_on_mentions_and_leave_with_the_document(store):
     ]
     store.replace_source(DocumentMetadata(source_id="shops"), _chunks("shops", C1), [])
     assert not stored()  # the mention, and the entity it alone supported, are gone
+
+
+def test_merge_moves_mentions_and_relations_onto_one_entity(store):
+    """Merging keeps every mention and edge on the target and deletes the source."""
+    acme_org, acme_concept = _resolved("Acme"), _resolved("Acme", "Concept")
+    beta, gamma = _resolved("Beta"), _resolved("Gamma")
+    store.replace_source(
+        DocumentMetadata(source_id="a"),
+        _chunks("a", C1, C2),
+        [
+            _row(C1, "a", (acme_org, "ACQUIRED", beta)),
+            _row(C2, "a", (gamma, "SUPPLIES", acme_concept)),
+            _row(C2, "a", (acme_concept, "ACQUIRED", beta)),
+        ],
+    )
+    with store.session(write=True) as session:
+        result = session.execute_write(merge_entities, acme_org.key, [acme_concept.key])
+    assert result["merged"] == [acme_concept.key]
+    with store.session(write=False) as session:
+        keys = [r["k"] for r in session.run("MATCH (e:Entity) RETURN e.key AS k")]
+        edges = session.run(
+            "MATCH (a:Entity)-[r]->(b:Entity) WHERE type(r) <> 'MENTIONED_IN' "
+            "RETURN a.key AS a, type(r) AS t, b.key AS b, r.chunk_ids AS c"
+        ).data()
+    assert acme_concept.key not in keys
+    by_type = {(e["a"], e["t"], e["b"]): sorted(e["c"]) for e in edges}
+    assert by_type[(acme_org.key, "ACQUIRED", beta.key)] == sorted([C1, C2])
+    assert (gamma.key, "SUPPLIES", acme_org.key) in by_type
