@@ -793,6 +793,19 @@ def _add_document_commands(sub: argparse._SubParsersAction) -> None:
     delete.set_defaults(handler=_delete)
 
 
+def _enter_mcp_directory(
+    args: argparse.Namespace, parser: argparse.ArgumentParser
+) -> None:
+    """`nexo mcp --directory`: serve from that checkout, with its settings."""
+    if args.directory is None:
+        return
+    try:
+        os.chdir(args.directory.expanduser().resolve(strict=True))
+    except OSError as exc:
+        parser.error(str(exc))
+    get_settings.cache_clear()
+
+
 def main(argv: list[str] | None = None) -> int:
     """Parse the command line, run the chosen subcommand and return its exit code."""
     parser = argparse.ArgumentParser(prog="nexo")
@@ -883,15 +896,10 @@ def main(argv: list[str] | None = None) -> int:
     _add_entity_commands(sub)
 
     args = parser.parse_args(argv)
+    if args.command == "mcp" and args.mcp_action:
+        return args.handler(args)
     if args.command == "mcp":
-        if args.mcp_action:
-            return args.handler(args)
-        if args.directory is not None:
-            try:
-                os.chdir(args.directory.expanduser().resolve(strict=True))
-            except OSError as exc:
-                parser.error(str(exc))
-            get_settings.cache_clear()
+        _enter_mcp_directory(args, parser)
     # Logs go to stderr: stdout is the command's JSON, or the protocol for MCP over stdio.
     configure_logging(get_settings())
     # setup renders before it reads; everything else would run on stale settings.
