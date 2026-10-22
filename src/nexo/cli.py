@@ -7,6 +7,7 @@ import json
 import logging
 import os
 import sys
+import webbrowser
 from collections.abc import Iterator
 from contextlib import ExitStack, contextmanager, suppress
 from datetime import date
@@ -60,7 +61,7 @@ from nexo.service import (
 )
 from nexo.storage.convert import ConversionError, to_markdown
 from nexo.storage.entity_merge import find_duplicates, merge_entities
-from nexo.graph_view import export
+from nexo.graph_view import export, live_server
 from nexo.storage.canonical_names import CanonicalNames
 from nexo.storage.entity_types import EntityTypes
 from nexo.storage.exclusions import IngestExclusions
@@ -464,6 +465,22 @@ def _graph(args: argparse.Namespace) -> int:
 def _visualize(args: argparse.Namespace) -> int:
     """The knowledge graph as an interactive HTML page (entities, relations, documents)."""
 
+    if args.live:
+        try:
+            check_loopback(args.host)
+        except ValueError as exc:
+            log.error("%s", exc)
+            return 2
+        server = live_server(args.host, args.port, args.interval)
+        host, port = server.server_address[:2]
+        url = f"http://{host}:{port}/"
+        log.warning(
+            "live graph (no authentication) at %s, every %ss", url, args.interval
+        )
+        if args.open:
+            webbrowser.open(url)
+        _serve(server)
+        return 0
     counts = export(Path(args.out), open_browser=args.open)
     _emit({"out": args.out, **counts}, "wrote the graph page to %s", args.out)
     return 0
@@ -536,6 +553,25 @@ def _access(args: argparse.Namespace) -> int:
         len(report),
     )
     return 0
+
+
+def _add_visualize_command(sub: argparse._SubParsersAction) -> None:
+    """`nexo visualize`: the graph as a page, written once or served live."""
+    visualize = sub.add_parser(
+        "visualize",
+        help="the knowledge graph as an interactive HTML page (embeds graph data)",
+    )
+    visualize.add_argument("--out", default="graph.html")
+    visualize.add_argument("--open", action="store_true", help="open it in the browser")
+    visualize.add_argument(
+        "--live", action="store_true", help="serve it on loopback and keep it updated"
+    )
+    visualize.add_argument("--host", default="127.0.0.1")
+    visualize.add_argument("--port", type=int, default=8767)
+    visualize.add_argument(
+        "--interval", type=float, default=5.0, help="seconds between updates (live)"
+    )
+    visualize.set_defaults(handler=_visualize)
 
 
 def _add_access_command(sub: argparse._SubParsersAction) -> None:
@@ -852,13 +888,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     graph.set_defaults(handler=_graph)
 
-    visualize = sub.add_parser(
-        "visualize",
-        help="the knowledge graph as an interactive HTML page (embeds graph data)",
-    )
-    visualize.add_argument("--out", default="graph.html")
-    visualize.add_argument("--open", action="store_true", help="open it in the browser")
-    visualize.set_defaults(handler=_visualize)
+    _add_visualize_command(sub)
 
     models = sub.add_parser("models", help="show the model and server each role uses")
     models.add_argument(
