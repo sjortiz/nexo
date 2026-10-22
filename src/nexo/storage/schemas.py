@@ -137,6 +137,11 @@ class ChunkRecord(BaseModel):
         default=None,
         description="Declared level before detection raised it; None on older chunks",
     )
+    sensitivity_reasons: list[str] = Field(
+        default_factory=list,
+        description="Categories the detector found (PHONE, EMAIL, ...): why the level is "
+        "above the declared one; empty when it is the declared level",
+    )
     ingested_at: datetime
     schema_version: str = SCHEMA_VERSION
 

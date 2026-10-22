@@ -98,6 +98,7 @@ _RECORD_FIELDS = (
     "effective_date",
     "sensitivity",
     "declared_sensitivity",
+    "sensitivity_reasons",
     "ingested_at",
     "schema_version",
 )

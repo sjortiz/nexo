@@ -25,6 +25,8 @@ from strands.models import Model
 from strands.types.agent import Limits
 from strands.types.exceptions import MaxTokensReachedException, ModelThrottledException
 
+from nexo.agents.query_expansion import Expander
+from nexo.storage.vector_store import fuse
 from nexo.agents.models import AGENT_NAME, AgentBudget, AgentOutput, InvestigationScope
 from nexo.agents.redaction import ChunkRedactor
 from nexo.agents.tools import InvestigationContext, build_investigation_tools
@@ -69,6 +71,9 @@ not confirm in fetched text is a lead, not a finding - label it unverified.
 - Respect edge qualifiers: certainty "possible" is a hypothesis and "negated" means ruled out.
 - Names vary; look entities up by name and aliases, and match relationships in both directions
   unless direction matters to the question.
+- A lookup (a fact, number, price, policy) may be worded differently in the documents: before you \
+conclude they do not cover it, run search_chunks with at least two phrasings, the question's words \
+and the terms a document would use (synonyms, the business term, related terms).
 - Absence from the graph is not evidence of absence: extraction can miss entities and relations
   that the text states. When an entity or path is not in the graph, call search_chunks with the
   entity names before you conclude anything, then read the passages for the missing link.
@@ -153,10 +158,12 @@ class Investigator:
         settings: Any = None,
         schema_text: str | None = None,
         detector: SensitiveDataDetector | None = None,
+        expander: Expander | None = None,
     ) -> None:
         """The budget comes from `settings` when not given; without a detector nothing is
         masked and chunks above clearance stay withheld."""
         self._redactor = ChunkRedactor(detector or NoopDetector())
+        self._expander = expander
         self._model = model
         self._graph = graph
         self._chunks = chunks
@@ -193,9 +200,18 @@ class Investigator:
         """Vector entry points for vector/hybrid intents (multi-retriever RAG)."""
         if scope.strategy == "graph" or self._budget.seed_chunks == 0:
             return []
-        return self._redactor.search(
-            self._chunks, query, self._budget.seed_chunks, scope.chunk_filter
-        )
+        k = self._budget.seed_chunks
+        queries = [query, *(self._expander(query) if self._expander else [])]
+        results = [
+            self._redactor.search(self._chunks, q, k, scope.chunk_filter)
+            for q in queries
+        ]
+        if len(results) == 1:
+            return results[0]
+        # The question and its rewrites, fused (Reciprocal Rank Fusion).
+        by_id = {c.chunk_id: c for found in results for c in found}
+        ranked = fuse([[c.chunk_id for c in found] for found in results])
+        return [by_id[chunk_id] for chunk_id in ranked[:k]]
 
     async def ainvestigate(
         self,

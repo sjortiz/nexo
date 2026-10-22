@@ -434,6 +434,18 @@ class KnowledgeGraphIngestor:
                         "text": text,
                         "sensitivity": level,
                         "declared_sensitivity": chunk.sensitivity,
+                        # Why the level is above the declared one (none when redacted).
+                        "sensitivity_reasons": (
+                            sorted(
+                                {
+                                    d.category
+                                    for d in detections
+                                    if d.sensitivity.rank > chunk.sensitivity.rank
+                                }
+                            )
+                            if level.rank > chunk.sensitivity.rank
+                            else []
+                        ),
                         "chunk_id": ChunkRecord.make_id(
                             chunk.source_id, chunk.ordinal, text
                         ),

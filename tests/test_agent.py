@@ -754,6 +754,29 @@ def test_hybrid_strategy_seeds_vector_hits_into_prompt(settings, chunk_store):
     assert "diagnostic kits" in json.dumps(client.requests[0]["messages"])
 
 
+def test_expanded_queries_add_seed_passages_worded_differently(settings, chunk_store):
+    """A rewrite in the documents' words seeds the passage the question's words miss."""
+    settings.seed_chunks = 2
+    asked = make_chunk("kb", 0, "Vacation photos from the spring offsite.")
+    answer = make_chunk("kb", 1, "Staff accrue 20 days of paid leave a year.")
+    chunk_store.upsert([asked, answer], [asked.text, answer.text])
+    client = ScriptedClient(
+        [_completion({"content": f"20 days [chunk:{answer.chunk_id}]."}, "stop")]
+    )
+    investigator = Investigator(
+        model=OpenAIModel(client=client, model_id="m", stream=False),
+        graph=FakeGraph(),
+        chunks=chunk_store,
+        settings=settings,
+        expander=lambda question: ["paid leave days per year"],
+    )
+    output = investigator.investigate(
+        "How many vacation days do I get?", scope=InvestigationScope(strategy="hybrid")
+    )
+    assert answer.chunk_id in output.seed_chunk_ids
+    assert len(output.seed_chunk_ids) <= 2
+
+
 # --- text search when the graph lacks the entity -----------------------------
 
 
