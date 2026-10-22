@@ -10,6 +10,12 @@ sources:
   - id: resolution
     resource: ../../src/nexo/storage/resolution.py
     title: EntityResolver
+  - id: canonical
+    resource: ../../src/nexo/storage/canonical_names.py
+    title: Canonical names
+  - id: merge
+    resource: ../../src/nexo/storage/entity_merge.py
+    title: Entity merge
   - id: cookbook
     resource: ../references/anthropic-claude-cookbook.md
     title: Claude Cookbook, knowledge graph guide
@@ -40,6 +46,20 @@ are not enough.[^cookbook]
    answer a key it was shown, or null. The prompt says unsure means null: a wrong merge corrupts the
    graph, a missed merge only loses a link.[^resolution]
 
+# Canonical names and merging
+
+Resolution never merges across types, so a name the extractor types inconsistently (a team as
+Organization in one chunk and Concept in another) becomes several entities. Two tools fix that:
+
+- `CANONICAL_NAMES_PATH` (YAML/JSON, example `deploy/canonical-names.example.yaml`; keep a deployment's
+  own in git-ignored `local/`): each entry has a name, a type and aliases. An extracted mention matching
+  any of them, whatever its type, is rewritten to the canonical name and type before resolution; its
+  wording is kept as an alias. Counted as `converted.canonical_name` in the ingest report.[^canonical]
+- `nexo entities duplicates` lists names stored under more than one type, with mentions, relations
+  and documents per entity. `nexo entities merge --into <key> <key>...` moves every mention and relation
+  onto the kept entity, deletes the others, recomputes aliases and ranks, and records the merge in
+  `CANONICAL_NAMES_PATH` so a re-ingest does not split it again.[^merge]
+
 # Guarantees
 
 - Never merges across entity types, even if the catalog returns other types.
@@ -60,5 +80,7 @@ These behaviors, including the cases that must not merge, are covered by tests.[
 | `llm` (default) | + model arbitration for the rest. |
 
 [^resolution]: EntityResolver
+[^canonical]: Canonical names
+[^merge]: Entity merge
 [^cookbook]: Claude Cookbook, knowledge graph guide
 [^tests]: Resolution tests

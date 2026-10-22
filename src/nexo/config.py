@@ -190,6 +190,10 @@ class Settings(BaseSettings):
     # YAML/JSON: which built-in entity types to extract and the deployment's own
     # types (deploy/entity-types.example.yaml). Unset = every built-in type.
     entity_types_path: Path | None = None
+    # YAML/JSON: one canonical name and type per entity, with its aliases, applied to
+    # extracted mentions before resolution (deploy/canonical-names.example.yaml).
+    # `nexo entities merge` appends to it. Unset = names as extracted.
+    canonical_names_path: Path | None = None
 
     # --- Sensitive data (PII/PHI) ---------------------------------------------
     # comprehend_medical sends chunk text to Amazon Comprehend Medical

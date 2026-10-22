@@ -95,6 +95,7 @@ hosts ([Local on Apple Silicon](local-apple-silicon.md)).
 | `GLOSSARY_PATH` | unset | JSON object of acronym → expansion. |
 | *(convention)* | `local/` | Deployment- and client-specific files (`ENTITY_TYPES_PATH`, `INGEST_EXCLUSIONS_PATH`, `ONTOLOGY_PATH`, `GLOSSARY_PATH`) belong in `local/` or `*.local.yaml`, which `.gitignore` excludes. |
 | `INGEST_EXCLUSIONS_PATH` | unset | YAML/JSON [ingest exclusions](../components/ingest-exclusions.md): content kept out of the `document`, `search` or `extraction` stage. |
+| `CANONICAL_NAMES_PATH` | unset | YAML/JSON: one canonical name and type per entity with its aliases, applied to extracted mentions before resolution; `nexo entities merge` appends to it. See [entity resolution](../components/entity-resolution.md#canonical-names-and-merging). |
 | `ENTITY_TYPES_PATH` | unset | YAML/JSON: which built-in [entity types](../components/triple-extraction.md#entity-types) to extract and the deployment's own; unset = every built-in type. |
 | `AMOUNT_ENTITIES` | `convert` | A triple that made an amount an entity: `convert` (to an attribute of the other entity), `drop` or `keep`. |
 
