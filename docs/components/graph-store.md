@@ -74,7 +74,8 @@ by type and sized by degree, a thick border on entities that bridge two or more 
 relation evidence and entity attributes on hover. `nexo visualize --live` (or `make visualize LIVE=1`)
 serves the page on `127.0.0.1:8767` instead (loopback only, no authentication) and re-reads the graph
 every `--interval` seconds (default 5), applying only what changed, so you can watch an ingest fill
-it in. The page embeds graph data, so it is git-ignored
+it in. Every page has a Pause layout button; `--freeze` (`FREEZE=1`) stops the layout once it has
+settled, so nodes stay put while you read or while live updates arrive. The page embeds graph data, so it is git-ignored
 and should be handled like the source documents; only the vis-network library is fetched from cdnjs.
 
 # Failure handling

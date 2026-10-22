@@ -112,8 +112,8 @@ review-inbox: ## Serve the Agent Inbox adapter on 127.0.0.1 (opt-in; start the p
 graph: ## Print the LangGraph workflow as Mermaid
 	$(RUN)nexo graph
 
-visualize: ## Write the knowledge graph as an interactive page: make visualize [OUT=graph.html] [OPEN=1]; LIVE=1 serves it and keeps it updated
-	$(RUN)nexo visualize $(if $(LIVE),--live,--out "$(or $(OUT),graph.html)") $(if $(OPEN),--open)
+visualize: ## Write the knowledge graph as an interactive page: make visualize [OUT=graph.html] [OPEN=1]; LIVE=1 serves it and keeps it updated; FREEZE=1 stops the layout once it settles
+	$(RUN)nexo visualize $(if $(LIVE),--live,--out "$(or $(OUT),graph.html)") $(if $(OPEN),--open) $(if $(FREEZE),--freeze)
 
 app: ## Run the nexo CLI in a container: make app ARGS="models --check"
 	$(NEXO_SETUP) compose run --rm nexo $(ARGS)

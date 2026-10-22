@@ -69,14 +69,14 @@ def test_cli_visualize_writes_the_page(monkeypatch, tmp_path, capsys):
     """`nexo visualize --out` exports and reports what the page contains."""
     seen = {}
 
-    def fake_export(out, *, open_browser):
-        seen.update(out=out, open_browser=open_browser)
+    def fake_export(out, *, open_browser, freeze):
+        seen.update(out=out, open_browser=open_browser, freeze=freeze)
         return {"documents": 2, "entities": 2, "relations": 1}
 
     monkeypatch.setattr(cli, "export", fake_export)
     out = tmp_path / "g.html"
     assert cli.main(["visualize", "--out", str(out), "--open"]) == 0
-    assert seen == {"out": out, "open_browser": True}
+    assert seen == {"out": out, "open_browser": True, "freeze": False}
     assert json.loads(capsys.readouterr().out)["entities"] == 2
 
 
@@ -115,3 +115,13 @@ def test_live_server_serves_page_and_data(monkeypatch):
 def test_cli_live_refuses_non_loopback_hosts():
     """Live mode has no authentication, so it binds loopback only."""
     assert cli.main(["visualize", "--live", "--host", "0.0.0.0"]) == 2
+
+
+def test_pause_button_and_freeze():
+    """Every page can pause its layout; --freeze stops it once it settles."""
+    assert "toggleLayout" in render(GRAPH) and "Pause layout" in render(GRAPH)
+    assert "stabilizationIterationsDone" not in render(GRAPH)
+    assert "stabilizationIterationsDone" in render(GRAPH, freeze=True)
+    assert "stabilizationIterationsDone" in render(
+        GRAPH, live_interval_s=5, freeze=True
+    )

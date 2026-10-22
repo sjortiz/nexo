@@ -471,7 +471,7 @@ def _visualize(args: argparse.Namespace) -> int:
         except ValueError as exc:
             log.error("%s", exc)
             return 2
-        server = live_server(args.host, args.port, args.interval)
+        server = live_server(args.host, args.port, args.interval, freeze=args.freeze)
         host, port = server.server_address[:2]
         url = f"http://{host}:{port}/"
         log.warning(
@@ -481,7 +481,7 @@ def _visualize(args: argparse.Namespace) -> int:
             webbrowser.open(url)
         _serve(server)
         return 0
-    counts = export(Path(args.out), open_browser=args.open)
+    counts = export(Path(args.out), open_browser=args.open, freeze=args.freeze)
     _emit({"out": args.out, **counts}, "wrote the graph page to %s", args.out)
     return 0
 
@@ -565,6 +565,11 @@ def _add_visualize_command(sub: argparse._SubParsersAction) -> None:
     visualize.add_argument("--open", action="store_true", help="open it in the browser")
     visualize.add_argument(
         "--live", action="store_true", help="serve it on loopback and keep it updated"
+    )
+    visualize.add_argument(
+        "--freeze",
+        action="store_true",
+        help="stop the layout once it settles (the page's button restarts it)",
     )
     visualize.add_argument("--host", default="127.0.0.1")
     visualize.add_argument("--port", type=int, default=8767)
