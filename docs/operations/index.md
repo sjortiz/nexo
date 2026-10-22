@@ -8,6 +8,7 @@
 * [Local on Apple Silicon](local-apple-silicon.md) - Ollama on one or two Macs, model roles split across machines.
 * [Local on Linux](local-linux.md) - Ollama on a GPU or CPU, Podman with host networking or native; Linux as the model machine for a Mac.
 * [Use from Claude Code](claude-code.md) - The nexo MCP server and the nexo-knowledge skill.
+* [Access levels](access-levels.md) - How a chunk gets its level, why, and what each clearance sees (`nexo access`).
 * [Human review](human-review.md) - How a reviewer reads the packet and approves or rejects.
 * [Review in Agent Inbox](agent-inbox.md) - The opt-in Agent Inbox page, its adapter and licence note.
 * [Deleting a source](delete.md) - `nexo delete` for operators on the allowlist, and its audit record.

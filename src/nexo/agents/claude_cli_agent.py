@@ -25,6 +25,7 @@ from pathlib import Path
 from typing import Any
 
 from nexo.agents.models import AgentOutput, InvestigationScope, ToolCallSummary
+from nexo.agents.query_expansion import Expander
 from nexo.storage.vector_store import ChunkStore
 
 AGENT_NAME = "claude-cli-investigator"
@@ -68,12 +69,14 @@ class ClaudeCliInvestigator:
         timeout_s: float,
         binary: str = "claude",
         nexo_command: list[str] | None = None,
+        expander: Expander | None = None,
     ) -> None:
         self._model = model
         self._chunks = chunks
         self._timeout_s = timeout_s
         self._binary = binary
         self._nexo = nexo_command or [_nexo_executable(), "mcp"]
+        self._expander = expander
 
     def investigate(
         self,
@@ -92,7 +95,9 @@ class ClaudeCliInvestigator:
             try:
                 done = subprocess.run(
                     self.command(config),
-                    input=_prompt(query, scope),
+                    input=_prompt(
+                        query, scope, self._expander(query) if self._expander else []
+                    ),
                     capture_output=True,
                     text=True,
                     timeout=self._timeout_s,
@@ -246,8 +251,13 @@ def _json(content: Any) -> dict[str, Any]:
     return value if isinstance(value, dict) else {}
 
 
-def _prompt(query: str, scope: InvestigationScope) -> str:
+def _prompt(query: str, scope: InvestigationScope, phrasings: list[str]) -> str:
     parts = [f"Question: {query}"]
+    if phrasings:
+        listed = "; ".join(phrasings)
+        parts.append(
+            f"Other phrasings worth searching (the documents may use these words): {listed}"
+        )
     restrict = scope.chunk_filter.model_dump(
         exclude_defaults=True, exclude={"max_sensitivity"}, mode="json"
     )

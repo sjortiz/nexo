@@ -212,6 +212,9 @@ class Settings(BaseSettings):
     agent_max_tool_calls: int = Field(default=16, ge=1)
     agent_timeout_s: float = 300.0
     agent_max_chunks_per_call: int = Field(default=10, ge=1)
+    # Alternative search queries the router model writes for the seed search, so
+    # passages worded differently from the question are found; 0 disables.
+    query_expansions: int = Field(default=2, ge=0, le=8)
     seed_chunks: int = Field(
         default=5,
         ge=0,

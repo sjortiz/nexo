@@ -24,6 +24,7 @@ from langgraph.graph.state import CompiledStateGraph
 from langgraph.types import Command
 from pydantic import BaseModel, ValidationError
 
+from nexo.agents.query_expansion import build_expander
 from nexo.agents.claude_cli_agent import ClaudeCliInvestigator
 from nexo.claude_cli import SCHEME as CLAUDE_CLI
 from nexo.agents.investigator import Investigator
@@ -476,9 +477,19 @@ def build_investigator(
     nexo MCP tools instead of Strands on an OpenAI-compatible server.
     """
     endpoint = settings.endpoint("agent")
+    expander = (
+        build_expander(
+            build_chat_model(settings, role="router"), settings.query_expansions
+        )
+        if settings.query_expansions
+        else None
+    )
     if endpoint.base_url.startswith(CLAUDE_CLI):
         return ClaudeCliInvestigator(
-            model=endpoint.model, chunks=chunk_store, timeout_s=settings.agent_timeout_s
+            model=endpoint.model,
+            chunks=chunk_store,
+            timeout_s=settings.agent_timeout_s,
+            expander=expander,
         )
     return Investigator(
         model=build_strands_model(settings),
@@ -487,6 +498,7 @@ def build_investigator(
         budget=AgentBudget.from_settings(settings),
         schema_text=graph_store.describe_schema(),
         detector=detector_from_settings(settings),
+        expander=expander,
     )
 
 

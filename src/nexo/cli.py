@@ -18,6 +18,7 @@ from pydantic import BaseModel, ValidationError
 
 from nexo.agents.investigator import Investigator
 from nexo.agents.models import AgentOutput, InvestigationScope
+from nexo.access_report import access_report
 from nexo.agents.redaction import ChunkRedactor
 from nexo.config import explain, get_settings, render_drift
 from nexo.evaluation import (
@@ -513,6 +514,35 @@ def _chunks_import(args: argparse.Namespace) -> int:
     return 0
 
 
+def _access(args: argparse.Namespace) -> int:
+    """Each document's access levels, why, and what each clearance sees."""
+    settings = get_settings()
+    with GraphStore.from_settings(settings, read_only=True) as graph:
+        chunks = chunk_store_from_settings(settings, graph)
+        report = access_report(
+            graph,
+            chunks,
+            ChunkRedactor(detector_from_settings(settings)),
+            source=args.source,
+        )
+    _emit(
+        {"documents": report},
+        "access levels for %d document(s); see docs/operations/access-levels.md",
+        len(report),
+    )
+    return 0
+
+
+def _add_access_command(sub: argparse._SubParsersAction) -> None:
+    """`nexo access`: per document, chunk levels, why, and each clearance's view."""
+    access = sub.add_parser(
+        "access",
+        help="per document: chunk access levels, why, and what each clearance sees",
+    )
+    access.add_argument("--source", help="one document's source id (default: all)")
+    access.set_defaults(handler=_access)
+
+
 def _add_chunk_commands(sub: argparse._SubParsersAction) -> None:
     """`nexo chunks status|import`: the chunk store in Neo4j (ADR-0018)."""
     chunks = sub.add_parser("chunks", help="the chunk store in Neo4j: status, import")
@@ -798,6 +828,7 @@ def main(argv: list[str] | None = None) -> int:
 
     add_setup_parser(sub)
     _add_chunk_commands(sub)
+    _add_access_command(sub)
 
     args = parser.parse_args(argv)
     # Logs go to stderr: stdout is the command's JSON, or the protocol for MCP over stdio.
